@@ -1,0 +1,43 @@
+# Rust build artifacts
+# Cargo.lock is intentionally tracked for binary crates
+/target/
+*.swp
+*.swo
+*~
+.DS_Store
+.vscode/
+.idea/
+
+# WASM build output
+/crates/tock-core/pkg/
+
+# Node.js (web app)
+/apps/web/node_modules/
+/apps/web/.next/
+/apps/web/out/
+/apps/web/dist/
+
+# iOS / macOS / watchOS
+/apps/ios/build/
+/apps/ios/DerivedData/
+*.xcuserdata
+*.xcuserstate
+xcuserdata/
+
+# UniFFI generated bindings (regenerated on build)
+/bindings/swift/generated/
+
+# Tock vault and database files (local dev artifacts)
+*.tock
+*.tockvault
+*.db
+*.db-wal
+*.db-shm
+
+# Environment & secrets
+.env
+.env.local
+.env.*.local
+
+# OS junk
+Thumbs.db

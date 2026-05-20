@@ -1,0 +1,12 @@
+{
+  "config": {
+    "line-length": false
+  },
+  "ignores": [
+    "target/**",
+    "node_modules/**",
+    "pkg/**",
+    "apps/web/.next/**",
+    "apps/ios/build/**"
+  ]
+}
