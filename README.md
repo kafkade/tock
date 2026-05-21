@@ -14,7 +14,7 @@ nothing is shippable yet. See
 ```text
 tock/
 ├── Cargo.toml                  # workspace
-├── rust-toolchain.toml         # pinned 1.85.0
+├── rust-toolchain.toml         # pinned 1.88.0
 ├── deny.toml                   # cargo-deny config
 ├── dist-workspace.toml         # cargo-dist config
 ├── flake.nix                   # Nix dev shell

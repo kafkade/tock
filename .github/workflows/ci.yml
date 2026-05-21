@@ -12,7 +12,7 @@ env:
   # Pin the toolchain explicitly in env so every job (including ones that
   # don't read rust-toolchain.toml via dtolnay/rust-toolchain) stays in
   # lockstep with the repo pin.
-  RUST_TOOLCHAIN: "1.85.0"
+  RUST_TOOLCHAIN: "1.88.0"
 
 jobs:
   check:

@@ -78,9 +78,10 @@ impl core::fmt::Debug for LocalDevice {
 }
 
 fn hex_short(b: &[u8]) -> String {
+    use std::fmt::Write as _;
     let mut s = String::with_capacity(b.len() * 2);
     for c in b.iter().take(8) {
-        s.push_str(&format!("{c:02x}"));
+        let _ = write!(&mut s, "{c:02x}");
     }
     if b.len() > 8 {
         s.push('…');

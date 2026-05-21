@@ -42,12 +42,13 @@ pub const ALL: &[Migration] = &[
 /// Compute the sha-256 hex digest of `sql`.
 #[must_use]
 pub fn checksum(sql: &str) -> String {
+    use std::fmt::Write as _;
     let mut h = Sha256::new();
     h.update(sql.as_bytes());
     let out = h.finalize();
     let mut s = String::with_capacity(out.len() * 2);
     for b in out {
-        s.push_str(&format!("{b:02x}"));
+        let _ = write!(&mut s, "{b:02x}");
     }
     s
 }
