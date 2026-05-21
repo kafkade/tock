@@ -30,3 +30,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Device registry: each vault registers its local device's Ed25519 verifying key under a random 16-byte device id; event verification rejects events signed by unregistered devices
 - Vault open/init returns `InvalidVaultOrCredentials` for both wrong passwords and tampered headers so the cause is indistinguishable to a caller; missing-file remains distinct
 - `tracing`-based structured logging with vault-data redaction: span instrumentation on vault init/open and event append; deny-list of sensitive field names; human-readable and JSON output formats selectable via `TOCK_LOG_FORMAT` environment variable
+- Task management CLI: `tock add`, `tock mod`, `tock done`, `tock cancel`, `tock delete`, `tock ls`, `tock show` commands with sigil syntax for tags (`#tag`), priority (`!H/M/L`), and deadline (`due:YYYY-MM-DD`). Human-readable table and JSON output formats
+- Project and area management: `tock project add/ls/archive`, `tock area add/ls` with per-project headings
+- Flat tag system with `#tag` sigil syntax: `tock tag ls`, `tock tag rename`. Tags are automatically created on first use and applied via the N:N `entity_tags` join table
+- Domain types for tasks, projects, areas, headings, and tags in `tock-core` with SID (short ID) allocation per entity kind
+- SQLite repository layer in `tock-storage` with typed CRUD: `task_repo`, `project_repo`, `area_repo`, `heading_repo`, `tag_repo`, `sid_repo`
+- Natural language date parser: `tomorrow`, `next friday`, `in 3 days`, `eow` (end of week), `eom` (end of month), ISO dates (`YYYY-MM-DD`), and weekday names. Used automatically when setting deadlines via `due:tomorrow`
+- Filter language with `status:X`, `tag:X`, `priority:X`, `project:X`, virtual tags `+TODAY`, `+OVERDUE`, `+EVENING`, logical `NOT`, and implicit `AND` for multiple filter terms
+- Six built-in views: `tock view inbox`, `tock view today`, `tock view upcoming`, `tock view anytime`, `tock view someday`, `tock view logbook`. List available views with `tock views`
+- Output formatters: `--format table` (default), `--format compact` (one-liner per task), `--format json`. Per-command `--json` shorthand
+- Shell completion generation: `tock completions bash|zsh|fish|elvish|powershell` prints completions to stdout
+- JSON import/export for testing and backup: `tock export json` (to stdout or `--out file.json`) and `tock import json --file tasks.json`

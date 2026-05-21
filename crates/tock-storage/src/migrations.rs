@@ -37,6 +37,11 @@ pub const ALL: &[Migration] = &[
         name: "event_log",
         sql: include_str!("migrations/0002_event_log.sql"),
     },
+    Migration {
+        version: 3,
+        name: "domain_tables",
+        sql: include_str!("migrations/0003_domain_tables.sql"),
+    },
 ];
 
 /// Compute the sha-256 hex digest of `sql`.

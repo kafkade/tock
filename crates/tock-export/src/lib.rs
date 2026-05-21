@@ -1,16 +1,5 @@
 //! # tock-export
 //!
-//! Exporters from the tock vault to JSON, CSV, hledger timeclock, iCal,
-//! and Markdown.
-//!
-//! See `docs/architecture.md` §9 (import/export & interoperability).
-//!
-//! Foundation-phase placeholder.
+//! Export tock data to portable formats. Phase 1 supports JSON.
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn smoke() {
-        assert_eq!(2 + 2, 4);
-    }
-}
+pub mod json;

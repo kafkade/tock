@@ -21,6 +21,8 @@
 /// Version string of the tock-core library, matching the crate version.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+#[cfg(feature = "vault")]
+pub mod domain;
 pub mod error;
 
 #[cfg(feature = "vault")]
