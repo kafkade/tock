@@ -11,9 +11,10 @@ use std::path::PathBuf;
 use std::process;
 
 use clap::{CommandFactory, Parser};
-use commands::Commands;
+use commands::{Commands, time::TimeCommand};
 use display::{OutputFormat, format_task_detail, format_tasks};
 use rusqlite::Connection;
+use time::format_description::well_known::Rfc3339;
 
 /// tock — unified personal productivity engine.
 #[derive(Debug, Parser)]
@@ -79,6 +80,7 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         Commands::Project(args) => run_project_cmd(conn, &args.command),
         Commands::Area(args) => run_area_cmd(conn, &args.command),
         Commands::Tag(args) => run_tag_cmd(conn, &args.command),
+        Commands::Time(args) => run_time_cmd(conn, &args.command),
         Commands::View { name, json } => run_view_cmd(conn, name, *json, &cli.format),
         Commands::Views => {
             let today_str = today_string();
@@ -173,6 +175,290 @@ fn run_task_cmd(
         _ => {}
     }
     Ok(())
+}
+
+fn run_time_cmd(
+    conn: &Connection,
+    cmd: &commands::time::TimeCommand,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match cmd {
+        TimeCommand::Start { words } => run_time_start(conn, words),
+        TimeCommand::Stop => run_time_stop(conn),
+        TimeCommand::Resume => run_time_resume(conn),
+        TimeCommand::Current => run_time_current(conn),
+        TimeCommand::Blocks { period, json } => run_time_blocks(conn, period, *json),
+        TimeCommand::Report { period, json } => run_time_report(conn, period, *json),
+    }
+}
+
+fn run_time_start(conn: &Connection, words: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    let (title, task_id) = resolve_time_start_input(conn, words)?;
+
+    if let Some(running) = tock_storage::repo::time_block_repo::get_current(conn)? {
+        tock_storage::repo::time_block_repo::stop(conn, running.sid)?;
+        println!("Stopped #{} — {}", running.sid, running.title);
+    }
+
+    let new_block = tock_core::domain::time_block::NewTimeBlock {
+        title,
+        task_id,
+        project_id: None,
+        notes: None,
+        source: tock_core::domain::time_block::BlockSource::Timer,
+    };
+    let block = tock_storage::repo::time_block_repo::insert(conn, &new_block)?;
+    println!(
+        "Started #{} — {} ({})",
+        block.sid,
+        block.title,
+        format_time(block.start_ts)
+    );
+    Ok(())
+}
+
+fn run_time_stop(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(running) = tock_storage::repo::time_block_repo::get_current(conn)? {
+        let block = tock_storage::repo::time_block_repo::stop(conn, running.sid)?;
+        let duration = block.duration().map_or_else(String::new, format_duration);
+        println!("Stopped #{} — {} ({})", block.sid, block.title, duration);
+    } else {
+        println!("No timer running");
+    }
+    Ok(())
+}
+
+fn run_time_resume(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
+    let block = tock_storage::repo::time_block_repo::resume(conn)?;
+    println!("Resumed #{} — {}", block.sid, block.title);
+    Ok(())
+}
+
+fn run_time_current(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(block) = tock_storage::repo::time_block_repo::get_current(conn)? {
+        let elapsed = time::OffsetDateTime::now_utc() - block.start_ts;
+        println!(
+            "#{} — {} (running {})",
+            block.sid,
+            block.title,
+            format_duration(elapsed)
+        );
+    } else {
+        println!("No timer running");
+    }
+    Ok(())
+}
+
+fn run_time_blocks(
+    conn: &Connection,
+    period: &str,
+    json: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (from, to) = period_range(period);
+    let blocks = tock_storage::repo::time_block_repo::list_range(conn, &from, &to)?;
+    if json {
+        let payload: Result<Vec<serde_json::Value>, time::error::Format> = blocks
+            .iter()
+            .map(|block| {
+                Ok(serde_json::json!({
+                    "sid": block.sid,
+                    "title": &block.title,
+                    "start": format_timestamp_full(block.start_ts)?,
+                    "duration": block
+                        .duration()
+                        .map_or_else(|| String::from("running"), format_duration),
+                }))
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&payload?)?);
+    } else {
+        println!(
+            "{:>4}  {:<30}  {:<20}  {:>8}",
+            "SID", "Title", "Started", "Duration"
+        );
+        for block in &blocks {
+            let duration = block
+                .duration()
+                .map_or_else(|| String::from("running"), format_duration);
+            println!(
+                "{:>4}  {:<30}  {:<20}  {:>8}",
+                block.sid,
+                truncate_str(&block.title, 30),
+                format_time(block.start_ts),
+                duration
+            );
+        }
+        println!("\n{} block(s)", blocks.len());
+    }
+    Ok(())
+}
+
+fn run_time_report(
+    conn: &Connection,
+    period: &str,
+    json: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (from, to) = period_range(period);
+    let blocks = tock_storage::repo::time_block_repo::list_range(conn, &from, &to)?;
+    let mut by_title = std::collections::BTreeMap::<String, i64>::new();
+    let mut total_secs = 0_i64;
+    for block in &blocks {
+        if let Some(duration) = block.duration() {
+            let seconds = duration.whole_seconds();
+            *by_title.entry(block.title.clone()).or_default() += seconds;
+            total_secs += seconds;
+        }
+    }
+
+    if json {
+        let entries: Vec<_> = by_title
+            .iter()
+            .map(|(title, seconds)| {
+                serde_json::json!({
+                    "title": title,
+                    "duration": format_duration_secs(*seconds),
+                })
+            })
+            .collect();
+        let payload = serde_json::json!({
+            "period": period,
+            "total": format_duration_secs(total_secs),
+            "entries": entries,
+        });
+        println!("{}", serde_json::to_string_pretty(&payload)?);
+    } else {
+        println!("Time report: {period}");
+        println!("{:<40}  {:>10}", "Title", "Duration");
+        println!("{}", "-".repeat(52));
+        for (title, seconds) in &by_title {
+            println!(
+                "{:<40}  {:>10}",
+                truncate_str(title, 40),
+                format_duration_secs(*seconds)
+            );
+        }
+        println!("{}", "-".repeat(52));
+        println!("{:<40}  {:>10}", "Total", format_duration_secs(total_secs));
+    }
+    Ok(())
+}
+
+fn resolve_time_start_input(
+    conn: &Connection,
+    words: &[String],
+) -> Result<(String, Option<uuid::Uuid>), Box<dyn std::error::Error>> {
+    let Some(first) = words.first() else {
+        return Ok((String::from("Untitled"), None));
+    };
+
+    if let Ok(sid) = first.parse::<u32>() {
+        if let Some(task) = tock_storage::repo::task_repo::get_by_sid(conn, sid)? {
+            return Ok((task.title.clone(), Some(task.id)));
+        }
+    }
+
+    let new_task = commands::add::parse_add_input(words);
+    let task = tock_storage::repo::task_repo::insert(conn, &new_task)?;
+    println!("Created task #{} — {}", task.sid, task.title);
+    Ok((task.title.clone(), Some(task.id)))
+}
+
+fn format_time(t: time::OffsetDateTime) -> String {
+    format!("{:02}:{:02}:{:02}", t.hour(), t.minute(), t.second())
+}
+
+fn format_timestamp_full(t: time::OffsetDateTime) -> Result<String, time::error::Format> {
+    t.format(&Rfc3339)
+}
+
+fn format_duration(duration: time::Duration) -> String {
+    format_duration_secs(duration.whole_seconds())
+}
+
+fn format_duration_secs(total_secs: i64) -> String {
+    let sign = if total_secs < 0 { "-" } else { "" };
+    let abs = total_secs.unsigned_abs();
+    let hours = abs / 3_600;
+    let minutes = (abs % 3_600) / 60;
+    let seconds = abs % 60;
+    format!("{sign}{hours}:{minutes:02}:{seconds:02}")
+}
+
+fn truncate_str(s: &str, max: usize) -> String {
+    if max == 0 {
+        return String::new();
+    }
+
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+
+    let mut truncated = s.chars().take(max - 1).collect::<String>();
+    truncated.push('…');
+    truncated
+}
+
+fn period_range(period: &str) -> (String, String) {
+    let now = time::OffsetDateTime::now_utc();
+    let today = now.date();
+    match period {
+        "today" => {
+            let tomorrow = today + time::Duration::days(1);
+            (
+                format!(
+                    "{:04}-{:02}-{:02}T00:00:00Z",
+                    today.year(),
+                    u8::from(today.month()),
+                    today.day()
+                ),
+                format!(
+                    "{:04}-{:02}-{:02}T00:00:00Z",
+                    tomorrow.year(),
+                    u8::from(tomorrow.month()),
+                    tomorrow.day()
+                ),
+            )
+        }
+        "week" => {
+            let weekday_num = today.weekday().number_days_from_monday();
+            let monday = today - time::Duration::days(i64::from(weekday_num));
+            let next_monday = monday + time::Duration::days(7);
+            (
+                format!(
+                    "{:04}-{:02}-{:02}T00:00:00Z",
+                    monday.year(),
+                    u8::from(monday.month()),
+                    monday.day()
+                ),
+                format!(
+                    "{:04}-{:02}-{:02}T00:00:00Z",
+                    next_monday.year(),
+                    u8::from(next_monday.month()),
+                    next_monday.day()
+                ),
+            )
+        }
+        "month" => {
+            let from = format!(
+                "{:04}-{:02}-01T00:00:00Z",
+                today.year(),
+                u8::from(today.month())
+            );
+            let to = if today.month() == time::Month::December {
+                format!("{:04}-01-01T00:00:00Z", today.year() + 1)
+            } else {
+                format!(
+                    "{:04}-{:02}-01T00:00:00Z",
+                    today.year(),
+                    u8::from(today.month()) + 1
+                )
+            };
+            (from, to)
+        }
+        _ => (
+            String::from("2000-01-01T00:00:00Z"),
+            String::from("2100-01-01T00:00:00Z"),
+        ),
+    }
 }
 
 fn run_project_cmd(

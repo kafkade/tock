@@ -13,6 +13,7 @@ pub mod project_repo;
 pub mod sid_repo;
 pub mod tag_repo;
 pub mod task_repo;
+pub mod time_block_repo;
 
 pub(crate) const fn invalid_encoding() -> Error {
     Error::Core(CoreError::InvalidEncoding)

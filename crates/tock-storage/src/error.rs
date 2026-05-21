@@ -18,6 +18,10 @@ pub enum Error {
     #[error("vault file not found")]
     NotFound,
 
+    /// Requested operation is invalid for the current entity state.
+    #[error("invalid state: {0}")]
+    InvalidState(&'static str),
+
     /// Vault header was missing, malformed, didn't authenticate, or
     /// the wrong password was supplied. The three causes are
     /// intentionally indistinguishable to a caller.

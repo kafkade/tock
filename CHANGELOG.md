@@ -41,3 +41,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Output formatters: `--format table` (default), `--format compact` (one-liner per task), `--format json`. Per-command `--json` shorthand
 - Shell completion generation: `tock completions bash|zsh|fish|elvish|powershell` prints completions to stdout
 - JSON import/export for testing and backup: `tock export json` (to stdout or `--out file.json`) and `tock import json --file tasks.json`
+- Time tracking: `tock time start/stop/resume/current` commands with automatic task creation on `start` when given a description instead of a task SID
+- Time block listing: `tock time blocks today|week|month|all` with table and JSON output
+- Time reports: `tock time report today|week|month` with per-title aggregation and totals
