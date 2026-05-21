@@ -1136,7 +1136,7 @@ dependencies = [
 
 [[package]]
 name = "tock-cli"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "clap",
  "clap_complete",
@@ -1158,7 +1158,7 @@ dependencies = [
 
 [[package]]
 name = "tock-core"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "proptest",
  "serde",
@@ -1172,7 +1172,7 @@ dependencies = [
 
 [[package]]
 name = "tock-crypto"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "aes-gcm",
  "argon2",
@@ -1190,7 +1190,7 @@ dependencies = [
 
 [[package]]
 name = "tock-export"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "rusqlite",
  "serde",
@@ -1201,7 +1201,7 @@ dependencies = [
 
 [[package]]
 name = "tock-import"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "rusqlite",
  "serde",
@@ -1212,21 +1212,21 @@ dependencies = [
 
 [[package]]
 name = "tock-parse"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "time",
 ]
 
 [[package]]
 name = "tock-server"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "tock-sync",
 ]
 
 [[package]]
 name = "tock-storage"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "rusqlite",
  "sha2",
@@ -1243,7 +1243,7 @@ dependencies = [
 
 [[package]]
 name = "tock-sync"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "tock-core",
  "tock-storage",
@@ -1251,7 +1251,7 @@ dependencies = [
 
 [[package]]
 name = "tock-uniffi"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "tock-core",
 ]
@@ -1634,7 +1634,7 @@ dependencies = [
 
 [[package]]
 name = "xtask"
-version = "0.0.0"
+version = "0.1.0"
 
 [[package]]
 name = "zerocopy"
