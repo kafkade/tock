@@ -12,9 +12,13 @@ members = ["cargo:."]
 [dist]
 # Pin cargo-dist version so CI/local stay in sync.
 cargo-dist-version = "0.22.1"
-# Which CI to generate workflows for (we are NOT currently using the
-# generated workflow — `release.yml` is hand-maintained).
+# Which CI to generate workflows for. We are NOT currently using the
+# generated workflow — `.github/workflows/release.yml` is hand-maintained.
+# `allow-dirty = ["ci"]` tells `cargo dist plan` to skip the up-to-date
+# check on the CI workflow file so the plan job succeeds without us
+# running `cargo dist init` and replacing release.yml.
 ci = "github"
+allow-dirty = ["ci"]
 # CLI installers we want to support.
 installers = ["shell", "powershell"]
 # Targets to build for. Mirrors the matrix in release.yml so the two

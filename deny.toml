@@ -39,10 +39,10 @@ allow = [
     "Unicode-3.0",
     "MPL-2.0",
     "Zlib",
-    # AGPL-3.0 applies to tock-server itself. Allowing it here lets
-    # the workspace check include tock-server without separate config.
-    # (Use bare `AGPL-3.0` so older cargo-deny versions parse it.)
-    "AGPL-3.0",
+    # AGPL-3.0-only applies to tock-server itself. The license MUST be
+    # the explicit SPDX identifier (cargo-deny ≥ 0.19 rejects the bare
+    # `AGPL-3.0` form for GNU-family licenses).
+    "AGPL-3.0-only",
 ]
 confidence-threshold = 0.9
 exceptions = []
