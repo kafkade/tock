@@ -17,7 +17,7 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   # Pin to the same toolchain as rust-toolchain.toml and CI.
-  RUST_TOOLCHAIN: "1.85.0"
+  RUST_TOOLCHAIN: "1.88.0"
 
 # TODO(distribution): macOS code signing + notarization land once the
 # Apple Developer secrets exist (see docs/distribution/README.md).

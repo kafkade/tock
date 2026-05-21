@@ -25,5 +25,10 @@ subtle = { workspace = true }
 rand_core = { workspace = true }
 thiserror = { workspace = true }
 
+# On wasm32, OS RNG is provided by the browser via `crypto.getRandomValues`.
+# The `js` feature wires that up; native targets ignore this entry.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.2", features = ["js"] }
+
 [dev-dependencies]
 proptest = { workspace = true }

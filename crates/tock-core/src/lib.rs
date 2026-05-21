@@ -8,13 +8,28 @@
 //! See `docs/architecture.md` §4 and ADR-001 for the rationale and the
 //! invariants that must be preserved.
 //!
-//! This is a foundation-phase placeholder: real domain types land in
-//! later issues.
-
-#![cfg_attr(not(feature = "std"), no_std)]
+//! ## Feature flags
+//!
+//! - `std` (default): enables standard-library features. The crate
+//!   currently always requires `std`; the flag exists for forward
+//!   compatibility.
+//! - `core`: pure-data surface (no crypto, no vault types). Used by
+//!   the WASM CI smoke build to keep the bundle small.
+//! - `vault` (default): vault header, key hierarchy, event types, and
+//!   the [`event`] / [`vault`] modules. Depends on `tock-crypto`.
 
 /// Version string of the tock-core library, matching the crate version.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+pub mod error;
+
+#[cfg(feature = "vault")]
+pub mod event;
+
+#[cfg(feature = "vault")]
+pub mod vault;
+
+pub use error::Error;
 
 #[cfg(test)]
 mod tests {

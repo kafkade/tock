@@ -14,18 +14,34 @@ readme = "README.md"
 # Always-loaded surface (must stay under the 2 MB compressed WASM budget;
 # enforced in a later phase). Kept feature-flagged from the start so the
 # WASM CI build can target `--no-default-features --features core`.
-default = ["std"]
+default = ["std", "vault"]
 std = []
+# Pure-data surface (no crypto, no vault types). Used by the WASM CI
+# smoke test. Excludes uuid/time/zeroize/serde/sha2 because uuid v7 on
+# wasm32 requires a randomness backend feature that the vault build
+# pulls in transitively.
 core = []
+# Vault + event types (depend on tock-crypto, uuid, time, zeroize,
+# serde, sha2). Default-on; the WASM smoke build omits this so the
+# `core` slice stays small.
+vault = ["dep:tock-crypto", "dep:uuid", "dep:time", "dep:zeroize", "dep:serde", "dep:sha2"]
 # Reserved feature flags for lazy-loaded modules (architecture §4.3.3).
 sync = []
 import-export = []
-serde = []
+serde = ["dep:serde"]
 schemars = []
 
 [lints]
 workspace = true
 
 [dependencies]
+thiserror = { workspace = true }
+tock-crypto = { workspace = true, optional = true }
+uuid = { workspace = true, optional = true }
+time = { workspace = true, optional = true }
+zeroize = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
 
 [dev-dependencies]
+proptest = { workspace = true }

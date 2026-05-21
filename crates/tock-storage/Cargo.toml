@@ -1,6 +1,6 @@
 [package]
 name = "tock-storage"
-description = "SQLite storage adapter for tock (rusqlite + sqlcipher, app-layer encryption)."
+description = "SQLite storage adapter for tock (rusqlite, app-layer AEAD encryption)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,15 +11,25 @@ authors.workspace = true
 readme = "README.md"
 
 [features]
+# Phase 0 uses plain `rusqlite-bundled` (no SQLCipher). Sensitive data
+# is encrypted at the application layer via tock-crypto AEAD; the
+# `storage_layout` field in the vault header records this dev-only
+# format so a future SQLCipher migration can detect and upgrade it.
 default = ["sqlite-bundled"]
-# Bundled SQLCipher + vendored OpenSSL (matches architecture §4.3.3).
 sqlite-bundled = []
-sqlite-system = []
 
 [lints]
 workspace = true
 
 [dependencies]
 tock-core = { workspace = true }
+tock-crypto = { workspace = true }
+rusqlite = { workspace = true }
+uuid = { workspace = true }
+time = { workspace = true }
+zeroize = { workspace = true }
+thiserror = { workspace = true }
+sha2 = { workspace = true }
 
 [dev-dependencies]
+tempfile = { workspace = true }
