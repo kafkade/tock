@@ -51,3 +51,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Focus session history per task: `tock focus history <task-sid>` shows all focus sessions and time blocks linked to a task
 - Time block editing: `tock time edit <sid> --title "..." --start "..." --end "..." --task <sid> --billable true` to correct or update blocks after the fact
 - Completing a task (`tock done`) auto-stops any active focus session or running timer linked to that task
+- Habit tracking: `tock habit add/ls/show/log/mod/archive/status` with identity statements ("I am a reader"), cue/craving/response/reward fields, and Fibonacci-scaled leveling (Spark → Embodied)
+- Habit stacking: `--stack-after <sid>` links habits in a chain so completing one nudges the next
+- Habit cadences: daily, weekly target (N×/week), specific days (Mon/Wed/Fri), and every-N-days patterns with human-readable display
+- Streak tracking with grace days: `tock habit skip/freeze` preserves streaks; `tock habit streaks <sid>` shows current and best streak history
+- Habit backfill logging: `tock habit backfill <sid> <date>` for catching up on missed days with automatic streak recalculation

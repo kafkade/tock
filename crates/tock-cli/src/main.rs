@@ -12,11 +12,12 @@ use std::path::PathBuf;
 use std::process;
 
 use clap::{CommandFactory, Parser};
-use commands::{Commands, focus::FocusCommand, time::TimeCommand};
+use commands::{Commands, focus::FocusCommand, habit::HabitCommand, time::TimeCommand};
 use display::{OutputFormat, format_task_detail, format_tasks};
 use notify::notify;
 use rusqlite::Connection;
 use time::format_description::well_known::Rfc3339;
+use tock_core::domain::cadence::ParsedCadence;
 
 /// tock — unified personal productivity engine.
 #[derive(Debug, Parser)]
@@ -84,6 +85,7 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         Commands::Tag(args) => run_tag_cmd(conn, &args.command),
         Commands::Time(args) => run_time_cmd(conn, &args.command),
         Commands::Focus(args) => run_focus_cmd(conn, &args.command),
+        Commands::Habit(args) => run_habit_cmd(conn, &args.command),
         Commands::View { name, json } => run_view_cmd(conn, name, *json, &cli.format),
         Commands::Views => {
             let today_str = today_string();
@@ -191,6 +193,384 @@ fn run_task_cmd(
         }
         _ => {}
     }
+    Ok(())
+}
+
+fn run_habit_cmd(conn: &Connection, cmd: &HabitCommand) -> Result<(), Box<dyn std::error::Error>> {
+    match cmd {
+        HabitCommand::Add {
+            title,
+            identity,
+            cue,
+            response,
+            reward,
+            direction,
+            cadence,
+            minimum,
+            stack_after,
+            stack_delay,
+        } => run_habit_add(
+            conn,
+            title,
+            identity.as_deref(),
+            cue.as_deref(),
+            response.as_deref(),
+            reward.as_deref(),
+            direction,
+            cadence,
+            minimum,
+            *stack_after,
+            *stack_delay,
+        ),
+        HabitCommand::List { all } => run_habit_list(conn, *all),
+        HabitCommand::Show { sid } => run_habit_show(conn, *sid),
+        HabitCommand::Log {
+            sid,
+            amount,
+            notes,
+            slip,
+        } => run_habit_log(conn, *sid, amount, notes.as_deref(), *slip),
+        HabitCommand::Skip { sid, date, reason } => {
+            run_habit_skip(conn, *sid, date.as_deref(), reason.as_deref())
+        }
+        HabitCommand::Freeze { sid, date } => run_habit_freeze(conn, *sid, date.as_deref()),
+        HabitCommand::Backfill { sid, date, amount } => {
+            run_habit_backfill(conn, *sid, date, amount)
+        }
+        HabitCommand::Streaks { sid } => run_habit_streaks(conn, *sid),
+        HabitCommand::Modify {
+            sid,
+            title,
+            identity,
+            cue,
+            response,
+            reward,
+            stack_after,
+        } => run_habit_modify(
+            conn,
+            *sid,
+            title.as_deref(),
+            identity.as_deref(),
+            cue.as_deref(),
+            response.as_deref(),
+            reward.as_deref(),
+            *stack_after,
+        ),
+        HabitCommand::Archive { sid } => run_habit_archive(conn, *sid),
+        HabitCommand::Status => run_habit_status(conn),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_habit_add(
+    conn: &Connection,
+    title: &str,
+    identity: Option<&str>,
+    cue: Option<&str>,
+    response: Option<&str>,
+    reward: Option<&str>,
+    direction: &str,
+    cadence: &str,
+    minimum: &str,
+    stack_after: Option<u32>,
+    stack_delay: u32,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let new_habit = tock_core::domain::habit::NewHabit {
+        title: title.to_owned(),
+        identity: identity.map(str::to_owned),
+        cue: cue.map(str::to_owned),
+        craving: None,
+        response: response.map(str::to_owned),
+        reward: reward.map(str::to_owned),
+        direction: parse_habit_direction_arg(direction)?,
+        cadence: cadence.to_owned(),
+        minimum: minimum.to_owned(),
+        stack_after,
+        stack_delay_s: stack_delay,
+        area_id: None,
+        project_id: None,
+    };
+    let habit = tock_storage::repo::habit_repo::insert(conn, &new_habit)?;
+    println!("Created habit #{} — {}", habit.sid, habit.title);
+    Ok(())
+}
+
+fn run_habit_list(conn: &Connection, all: bool) -> Result<(), Box<dyn std::error::Error>> {
+    let habits = tock_storage::repo::habit_repo::list(conn, all)?;
+    println!(
+        "{:>4}  {:<7}  {:<12}  {:>8}  {:<28}  Identity",
+        "SID", "Dir", "Level", "Streak", "Title"
+    );
+    for habit in &habits {
+        println!(
+            "{:>4}  {:<7}  {:<12}  {:>8}  {:<28}  {}",
+            habit.sid,
+            habit.direction.as_str(),
+            format!("L{} ({})", habit.level, habit.level_name()),
+            format!("{}d", habit.streak_current),
+            truncate_str(&habit.title, 28),
+            truncate_str(habit.identity.as_deref().unwrap_or("—"), 40)
+        );
+    }
+    println!("\n{} habit(s)", habits.len());
+    Ok(())
+}
+
+fn run_habit_show(conn: &Connection, sid: u32) -> Result<(), Box<dyn std::error::Error>> {
+    let Some(habit) = tock_storage::repo::habit_repo::get_by_sid(conn, sid)? else {
+        eprintln!("habit #{sid} not found");
+        return Ok(());
+    };
+    let all_habits = tock_storage::repo::habit_repo::list(conn, true)?;
+    let sid_by_id: std::collections::HashMap<_, _> = all_habits
+        .iter()
+        .map(|candidate| (candidate.id, candidate.sid))
+        .collect();
+    let entries = tock_storage::repo::habit_repo::get_entries(conn, habit.sid)?;
+    let stacked = tock_storage::repo::habit_repo::get_stacked_habits(conn, habit.id)?;
+    let parent = habit.stack_after.and_then(|parent_id| {
+        all_habits
+            .iter()
+            .find(|candidate| candidate.id == parent_id)
+            .map(|candidate| format!("#{} — {}", candidate.sid, candidate.title))
+    });
+    let archived = match habit.archived_at {
+        Some(timestamp) => format_timestamp_full(timestamp)?,
+        None => String::from("—"),
+    };
+
+    println!("#{} — {}", habit.sid, habit.title);
+    println!("Direction: {}", habit.direction.as_str());
+    println!("Identity: {}", habit.identity.as_deref().unwrap_or("—"));
+    println!("Cue: {}", habit.cue.as_deref().unwrap_or("—"));
+    println!("Craving: {}", habit.craving.as_deref().unwrap_or("—"));
+    println!("Response: {}", habit.response.as_deref().unwrap_or("—"));
+    println!("Reward: {}", habit.reward.as_deref().unwrap_or("—"));
+    println!("Cadence: {}", habit_cadence_display(&habit.cadence));
+    println!("Minimum: {}", habit.minimum);
+    println!("Level: L{} ({})", habit.level, habit.level_name());
+    println!("XP: {}", format_habit_xp(habit.level, habit.xp));
+    println!(
+        "Streaks: current {}d / best {}d",
+        habit.streak_current, habit.streak_best
+    );
+    println!(
+        "Stacking: {}",
+        parent.map_or_else(
+            || String::from("none"),
+            |label| {
+                if habit.stack_delay_s == 0 {
+                    label
+                } else {
+                    format!("{label} + {}", format_stack_delay(habit.stack_delay_s))
+                }
+            }
+        )
+    );
+    println!(
+        "Area: {}",
+        habit
+            .area_id
+            .map_or_else(|| String::from("—"), |id| id.to_string())
+    );
+    println!(
+        "Project: {}",
+        habit
+            .project_id
+            .map_or_else(|| String::from("—"), |id| id.to_string())
+    );
+    println!("Created: {}", format_timestamp_full(habit.created_at)?);
+    println!("Modified: {}", format_timestamp_full(habit.modified_at)?);
+    println!("Archived: {archived}");
+    println!(
+        "Entries: {} (next: {})",
+        entries.len(),
+        next_due_text(&habit, &entries, &sid_by_id)
+    );
+    if stacked.is_empty() {
+        println!("Stacked children: none");
+    } else {
+        println!("Stacked children:");
+        for child in &stacked {
+            if child.stack_delay_s == 0 {
+                println!("  #{} — {}", child.sid, child.title);
+            } else {
+                println!(
+                    "  #{} — {} (+{})",
+                    child.sid,
+                    child.title,
+                    format_stack_delay(child.stack_delay_s)
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+fn run_habit_log(
+    conn: &Connection,
+    sid: u32,
+    amount: &str,
+    notes: Option<&str>,
+    slip: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let entry = tock_storage::repo::habit_repo::log_entry(conn, sid, amount, notes, slip)?;
+    let habit = tock_storage::repo::habit_repo::get_by_sid(conn, sid)?
+        .ok_or_else(|| std::io::Error::other(format!("habit #{sid} not found after logging")))?;
+    let outcome = if entry.slip {
+        "Logged slip"
+    } else {
+        "Logged habit"
+    };
+    println!(
+        "{} #{} — streak {}d, {}",
+        outcome,
+        habit.sid,
+        habit.streak_current,
+        format_habit_xp(habit.level, habit.xp)
+    );
+    Ok(())
+}
+
+fn run_habit_skip(
+    conn: &Connection,
+    sid: u32,
+    date: Option<&str>,
+    reason: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let skip_date = date.map_or_else(today_string, str::to_owned);
+    tock_storage::repo::habit_repo::add_skip(conn, sid, &skip_date, "skip", reason)?;
+    let habit = tock_storage::repo::habit_repo::get_by_sid(conn, sid)?
+        .ok_or_else(|| std::io::Error::other(format!("habit #{sid} not found after skip")))?;
+    println!(
+        "Skipped habit #{} on {} — streak {}d",
+        habit.sid, skip_date, habit.streak_current
+    );
+    Ok(())
+}
+
+fn run_habit_freeze(
+    conn: &Connection,
+    sid: u32,
+    date: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let freeze_date = date.map_or_else(today_string, str::to_owned);
+    tock_storage::repo::habit_repo::add_skip(conn, sid, &freeze_date, "freeze", None)?;
+    let habit = tock_storage::repo::habit_repo::get_by_sid(conn, sid)?
+        .ok_or_else(|| std::io::Error::other(format!("habit #{sid} not found after freeze")))?;
+    println!(
+        "Froze habit #{} on {} — streak {}d",
+        habit.sid, freeze_date, habit.streak_current
+    );
+    Ok(())
+}
+
+fn run_habit_backfill(
+    conn: &Connection,
+    sid: u32,
+    date: &str,
+    amount: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let _ = tock_storage::repo::habit_repo::log_backfill(conn, sid, date, amount, None)?;
+    let habit = tock_storage::repo::habit_repo::get_by_sid(conn, sid)?
+        .ok_or_else(|| std::io::Error::other(format!("habit #{sid} not found after backfill")))?;
+    println!(
+        "Backfilled habit #{} on {} — streak {}d, {}",
+        habit.sid,
+        date,
+        habit.streak_current,
+        format_habit_xp(habit.level, habit.xp)
+    );
+    Ok(())
+}
+
+fn run_habit_streaks(conn: &Connection, sid: u32) -> Result<(), Box<dyn std::error::Error>> {
+    let Some(habit) = tock_storage::repo::habit_repo::get_by_sid(conn, sid)? else {
+        eprintln!("habit #{sid} not found");
+        return Ok(());
+    };
+    let entries = tock_storage::repo::habit_repo::get_entries(conn, sid)?;
+
+    println!("#{} — {}", habit.sid, habit.title);
+    println!("Current streak: {}d", habit.streak_current);
+    println!("Best streak: {}d", habit.streak_best);
+    if entries.is_empty() {
+        println!("Recent entries: none");
+        return Ok(());
+    }
+
+    println!("Recent entries:");
+    for entry in entries.iter().take(10) {
+        let date = entry.occurred_at.date();
+        println!(
+            "  {:04}-{:02}-{:02}{}",
+            date.year(),
+            u8::from(date.month()),
+            date.day(),
+            if entry.slip { " (slip)" } else { "" }
+        );
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_habit_modify(
+    conn: &Connection,
+    sid: u32,
+    title: Option<&str>,
+    identity: Option<&str>,
+    cue: Option<&str>,
+    response: Option<&str>,
+    reward: Option<&str>,
+    stack_after: Option<u32>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let patch = tock_core::domain::habit::HabitPatch {
+        title: title.map(str::to_owned),
+        identity: match identity {
+            Some(text) if text.trim().is_empty() => Some(None),
+            Some(text) => Some(Some(text.to_owned())),
+            None => None,
+        },
+        cue: match cue {
+            Some(text) if text.trim().is_empty() => Some(None),
+            Some(text) => Some(Some(text.to_owned())),
+            None => None,
+        },
+        craving: None,
+        response: match response {
+            Some(text) if text.trim().is_empty() => Some(None),
+            Some(text) => Some(Some(text.to_owned())),
+            None => None,
+        },
+        reward: match reward {
+            Some(text) if text.trim().is_empty() => Some(None),
+            Some(text) => Some(Some(text.to_owned())),
+            None => None,
+        },
+        stack_after: stack_after.map(|value| if value == 0 { None } else { Some(value) }),
+        stack_delay_s: None,
+    };
+    let habit = tock_storage::repo::habit_repo::update(conn, sid, &patch)?;
+    println!("Modified habit #{} — {}", habit.sid, habit.title);
+    Ok(())
+}
+
+fn run_habit_archive(conn: &Connection, sid: u32) -> Result<(), Box<dyn std::error::Error>> {
+    tock_storage::repo::habit_repo::archive(conn, sid)?;
+    println!("Archived habit #{sid}");
+    Ok(())
+}
+
+fn run_habit_status(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
+    let habits = tock_storage::repo::habit_repo::list(conn, false)?;
+    if habits.is_empty() {
+        println!("No active habits");
+        return Ok(());
+    }
+    for habit in &habits {
+        println!("{}", format_habit_status_line(habit));
+    }
+    println!("\n{} habit(s)", habits.len());
     Ok(())
 }
 
@@ -915,6 +1295,166 @@ fn run_view_cmd(
         print_task_listing(&rendered, filtered.len(), format);
     }
     Ok(())
+}
+
+fn parse_habit_direction_arg(
+    direction: &str,
+) -> Result<tock_core::domain::habit::HabitDirection, std::io::Error> {
+    tock_core::domain::habit::HabitDirection::from_str_opt(direction).ok_or_else(|| {
+        std::io::Error::other(format!(
+            "invalid habit direction '{direction}' (expected 'build' or 'break')"
+        ))
+    })
+}
+
+fn format_habit_status_line(habit: &tock_core::domain::habit::Habit) -> String {
+    format!(
+        "{} {}  L{} ({})  streak {}d  best {}d  {}",
+        habit_icon(habit.direction),
+        habit.title,
+        habit.level,
+        habit.level_name(),
+        habit.streak_current,
+        habit.streak_best,
+        habit_cadence_display(&habit.cadence)
+    )
+}
+
+const fn habit_icon(direction: tock_core::domain::habit::HabitDirection) -> &'static str {
+    match direction {
+        tock_core::domain::habit::HabitDirection::Build => "📖",
+        tock_core::domain::habit::HabitDirection::Break => "🛡",
+    }
+}
+
+fn format_habit_xp(level: u32, xp: u32) -> String {
+    let (_, next) = habit_level_window(level, xp);
+    format!("{xp}/{next} XP")
+}
+
+fn habit_level_window(level: u32, xp: u32) -> (u32, u32) {
+    const LEVEL_THRESHOLDS: [u32; 7] = [0, 5, 13, 34, 89, 233, 610];
+    let current_index = usize::try_from(level.saturating_sub(1))
+        .unwrap_or(LEVEL_THRESHOLDS.len() - 1)
+        .min(LEVEL_THRESHOLDS.len() - 1);
+    let start = LEVEL_THRESHOLDS[current_index];
+    let end = LEVEL_THRESHOLDS
+        .get(current_index + 1)
+        .copied()
+        .unwrap_or_else(|| xp.max(start));
+    (start, end)
+}
+
+fn format_stack_delay(delay_s: u32) -> String {
+    if delay_s >= 3_600 && delay_s.is_multiple_of(3_600) {
+        format!("{}h", delay_s / 3_600)
+    } else if delay_s >= 60 && delay_s.is_multiple_of(60) {
+        format!("{}m", delay_s / 60)
+    } else {
+        format!("{delay_s}s")
+    }
+}
+
+fn next_due_text(
+    habit: &tock_core::domain::habit::Habit,
+    entries: &[tock_core::domain::habit::HabitEntry],
+    sid_by_id: &std::collections::HashMap<uuid::Uuid, u32>,
+) -> String {
+    if let Some(parent_id) = habit.stack_after {
+        let parent = sid_by_id.get(&parent_id).map_or_else(
+            || String::from("stacked habit"),
+            |sid| format!("after #{sid}"),
+        );
+        return if habit.stack_delay_s == 0 {
+            parent
+        } else {
+            format!("{parent} + {}", format_stack_delay(habit.stack_delay_s))
+        };
+    }
+
+    let today = time::OffsetDateTime::now_utc().date();
+    let done_today = entries
+        .iter()
+        .any(|entry| entry.occurred_at.date() == today);
+    match ParsedCadence::from_json(&habit.cadence) {
+        Some(ParsedCadence::Daily) => {
+            if done_today {
+                String::from("tomorrow")
+            } else {
+                String::from("today")
+            }
+        }
+        Some(ParsedCadence::WeeklyTarget { times_per_week }) => {
+            let week_start =
+                today - time::Duration::days(i64::from(today.weekday().number_days_from_monday()));
+            let week_end = week_start + time::Duration::days(7);
+            let count = entries
+                .iter()
+                .filter(|entry| {
+                    let date = entry.occurred_at.date();
+                    !entry.slip && date >= week_start && date < week_end
+                })
+                .count();
+            if count >= usize::from(times_per_week) {
+                String::from("next week")
+            } else {
+                String::from("this week")
+            }
+        }
+        Some(ParsedCadence::SpecificDays { days }) => {
+            if !done_today && days.contains(&today.weekday()) {
+                return String::from("today");
+            }
+            for offset in 1_i64..=7 {
+                let date = today + time::Duration::days(offset);
+                if days.contains(&date.weekday()) {
+                    return format_due_date(date, today);
+                }
+            }
+            String::from("scheduled")
+        }
+        Some(ParsedCadence::EveryNDays { n }) => {
+            let Some(last) = entries
+                .iter()
+                .find(|entry| !entry.slip)
+                .map(|entry| entry.occurred_at.date())
+            else {
+                return String::from("today");
+            };
+            let due = last + time::Duration::days(i64::from(n));
+            if due <= today {
+                String::from("today")
+            } else {
+                format_due_date(due, today)
+            }
+        }
+        None => {
+            if done_today {
+                String::from("logged today")
+            } else {
+                String::from("by cadence")
+            }
+        }
+    }
+}
+
+fn format_due_date(date: time::Date, today: time::Date) -> String {
+    if date == today {
+        String::from("today")
+    } else if date == today + time::Duration::days(1) {
+        String::from("tomorrow")
+    } else {
+        format!(
+            "{:04}-{:02}-{:02}",
+            date.year(),
+            u8::from(date.month()),
+            date.day()
+        )
+    }
+}
+
+fn habit_cadence_display(raw: &str) -> String {
+    ParsedCadence::from_json(raw).map_or_else(|| raw.to_owned(), |cadence| cadence.display())
 }
 
 fn selected_output_format(global_format: &str, json: bool) -> OutputFormat {

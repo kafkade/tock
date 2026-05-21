@@ -3,6 +3,7 @@
 pub mod add;
 pub mod done;
 pub mod focus;
+pub mod habit;
 pub mod list;
 pub mod modify;
 pub mod project;
@@ -84,6 +85,8 @@ pub enum Commands {
     Time(time::TimeArgs),
     /// Focus timer.
     Focus(focus::FocusArgs),
+    /// Habit tracking.
+    Habit(habit::HabitArgs),
     /// List available views.
     Views,
     /// Generate shell completion scripts.

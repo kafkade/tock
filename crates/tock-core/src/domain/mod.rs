@@ -5,7 +5,9 @@
 //! habits and richer planning features land.
 
 pub mod area;
+pub mod cadence;
 pub mod focus;
+pub mod habit;
 pub mod heading;
 pub mod project;
 pub mod sid;
