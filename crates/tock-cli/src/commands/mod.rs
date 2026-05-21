@@ -6,6 +6,7 @@ pub mod list;
 pub mod modify;
 pub mod project;
 pub mod tag;
+pub mod time;
 pub mod views;
 
 use clap::Subcommand;
@@ -78,6 +79,8 @@ pub enum Commands {
         #[arg(long)]
         json: bool,
     },
+    /// Time tracking.
+    Time(time::TimeArgs),
     /// List available views.
     Views,
     /// Generate shell completion scripts.
