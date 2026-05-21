@@ -5,14 +5,16 @@
 
 mod commands;
 mod display;
+mod notify;
 mod tracing_setup;
 
 use std::path::PathBuf;
 use std::process;
 
 use clap::{CommandFactory, Parser};
-use commands::{Commands, time::TimeCommand};
+use commands::{Commands, focus::FocusCommand, time::TimeCommand};
 use display::{OutputFormat, format_task_detail, format_tasks};
+use notify::notify;
 use rusqlite::Connection;
 use time::format_description::well_known::Rfc3339;
 
@@ -81,6 +83,7 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         Commands::Area(args) => run_area_cmd(conn, &args.command),
         Commands::Tag(args) => run_tag_cmd(conn, &args.command),
         Commands::Time(args) => run_time_cmd(conn, &args.command),
+        Commands::Focus(args) => run_focus_cmd(conn, &args.command),
         Commands::View { name, json } => run_view_cmd(conn, name, *json, &cli.format),
         Commands::Views => {
             let today_str = today_string();
@@ -175,6 +178,245 @@ fn run_task_cmd(
         _ => {}
     }
     Ok(())
+}
+
+fn run_focus_cmd(
+    conn: &Connection,
+    cmd: &commands::focus::FocusCommand,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match cmd {
+        FocusCommand::Start {
+            task,
+            cycles,
+            work,
+            short_break,
+            long_break,
+        } => run_focus_start(conn, *task, *cycles, *work, *short_break, *long_break),
+        FocusCommand::Done => run_focus_done(conn),
+        FocusCommand::SkipBreak => run_focus_skip_break(conn),
+        FocusCommand::Pause => run_focus_pause(conn),
+        FocusCommand::Resume => run_focus_resume(conn),
+        FocusCommand::Stop => run_focus_stop(conn),
+        FocusCommand::Status => run_focus_status(conn),
+        FocusCommand::Stats { period } => run_focus_stats(conn, period),
+    }
+}
+
+fn run_focus_start(
+    conn: &Connection,
+    task: Option<u32>,
+    cycles: u32,
+    work: u32,
+    short_break: u32,
+    long_break: u32,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(active) = tock_storage::repo::focus_repo::get_active(conn)? {
+        eprintln!(
+            "Focus session #{} is already active ({})",
+            active.sid,
+            active.state.as_str()
+        );
+        return Ok(());
+    }
+
+    let task_id = if let Some(sid) = task {
+        tock_storage::repo::task_repo::get_by_sid(conn, sid)?.map(|task| task.id)
+    } else {
+        None
+    };
+    let default_config = tock_core::domain::focus::FocusConfig::default();
+    let new = tock_core::domain::focus::NewFocusSession {
+        task_id,
+        project_id: None,
+        planned_cycles: cycles,
+        config: tock_core::domain::focus::FocusConfig {
+            work_minutes: work,
+            short_break_minutes: short_break,
+            long_break_minutes: long_break,
+            cycles_before_long_break: default_config.cycles_before_long_break,
+        },
+    };
+    let session = tock_storage::repo::focus_repo::insert(conn, &new)?;
+    notify(
+        "Focus started",
+        &format!("🍅 Work for {} minutes", session.config.work_minutes),
+    );
+    println!(
+        "🍅 Focus #{} started — {} min work × {} cycles",
+        session.sid, session.config.work_minutes, session.planned_cycles
+    );
+    Ok(())
+}
+
+fn run_focus_done(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
+    let Some(active) = tock_storage::repo::focus_repo::get_active(conn)? else {
+        println!("No active focus session");
+        return Ok(());
+    };
+
+    let session = tock_storage::repo::focus_repo::complete_cycle(conn, active.sid)?;
+    log_focus_time_block(conn, &active)?;
+    if session.state.is_terminal() {
+        notify(
+            "Focus complete!",
+            &format!("🎉 {} cycles done", session.completed_cycles),
+        );
+        println!(
+            "🎉 Focus #{} complete! {} cycles",
+            session.sid, session.completed_cycles
+        );
+        return Ok(());
+    }
+
+    let break_mins = if session.state == tock_core::domain::focus::FocusState::LongBreak {
+        session.config.long_break_minutes
+    } else {
+        session.config.short_break_minutes
+    };
+    notify("Pomodoro done!", &format!("Take a {break_mins} min break"));
+    println!(
+        "✅ Cycle {}/{} done — {} min {} break",
+        session.completed_cycles,
+        session.planned_cycles,
+        break_mins,
+        session.state.as_str()
+    );
+    Ok(())
+}
+
+fn run_focus_skip_break(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
+    let Some(active) = tock_storage::repo::focus_repo::get_active(conn)? else {
+        println!("No active focus session");
+        return Ok(());
+    };
+
+    let session = tock_storage::repo::focus_repo::start_work(conn, active.sid)?;
+    println!(
+        "⏩ Skipped break — working (cycle {})",
+        session.completed_cycles + 1
+    );
+    Ok(())
+}
+
+fn run_focus_pause(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
+    let Some(active) = tock_storage::repo::focus_repo::get_active(conn)? else {
+        println!("No active focus session");
+        return Ok(());
+    };
+
+    let session = tock_storage::repo::focus_repo::pause(conn, active.sid)?;
+    println!("⏸ Focus #{} paused", session.sid);
+    Ok(())
+}
+
+fn run_focus_resume(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
+    let Some(active) = tock_storage::repo::focus_repo::get_active(conn)? else {
+        println!("No active focus session");
+        return Ok(());
+    };
+
+    let session = tock_storage::repo::focus_repo::resume(conn, active.sid)?;
+    println!("▶ Focus #{} resumed", session.sid);
+    Ok(())
+}
+
+fn run_focus_stop(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
+    let Some(active) = tock_storage::repo::focus_repo::get_active(conn)? else {
+        println!("No active focus session");
+        return Ok(());
+    };
+
+    let session = tock_storage::repo::focus_repo::abort(conn, active.sid)?;
+    println!(
+        "⏹ Focus #{} aborted after {} cycles",
+        session.sid, session.completed_cycles
+    );
+    Ok(())
+}
+
+fn run_focus_status(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
+    let Some(session) = tock_storage::repo::focus_repo::get_active(conn)? else {
+        println!("No active focus session");
+        return Ok(());
+    };
+
+    let elapsed = time::OffsetDateTime::now_utc() - session.started_at;
+    println!(
+        "🍅 Focus #{} — {} ({}/{})",
+        session.sid,
+        session.state.as_str(),
+        session.completed_cycles,
+        session.planned_cycles
+    );
+    println!("   Elapsed: {}", format_duration(elapsed));
+    println!(
+        "   Config: {} work / {} short / {} long",
+        session.config.work_minutes,
+        session.config.short_break_minutes,
+        session.config.long_break_minutes
+    );
+    Ok(())
+}
+
+fn run_focus_stats(conn: &Connection, period: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let (from, to) = period_range(period);
+    let sessions = tock_storage::repo::focus_repo::list_range(conn, &from, &to)?;
+    let total_cycles: u32 = sessions
+        .iter()
+        .map(|session| session.completed_cycles)
+        .sum();
+    let completed = sessions
+        .iter()
+        .filter(|session| session.state == tock_core::domain::focus::FocusState::Completed)
+        .count();
+    let aborted = sessions
+        .iter()
+        .filter(|session| session.state == tock_core::domain::focus::FocusState::Aborted)
+        .count();
+    let total_work_mins: u32 = sessions
+        .iter()
+        .map(|session| session.completed_cycles * session.config.work_minutes)
+        .sum();
+    println!("Focus stats: {period}");
+    println!("  Completed: {total_cycles} cycles ({completed} sessions)");
+    println!("  Aborted:   {aborted} sessions");
+    println!(
+        "  Focus time: {}h {}m",
+        total_work_mins / 60,
+        total_work_mins % 60
+    );
+    Ok(())
+}
+
+fn log_focus_time_block(
+    conn: &Connection,
+    session: &tock_core::domain::focus::FocusSession,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let end_ts = time::OffsetDateTime::now_utc();
+    let start_ts = end_ts - time::Duration::minutes(i64::from(session.config.work_minutes));
+    let title = focus_time_block_title(conn, session)?;
+    let block = tock_core::domain::time_block::NewTimeBlock {
+        title,
+        task_id: session.task_id,
+        project_id: session.project_id,
+        notes: None,
+        source: tock_core::domain::time_block::BlockSource::Pomodoro,
+    };
+    let _ = tock_storage::repo::time_block_repo::insert_completed(conn, &block, start_ts, end_ts)?;
+    Ok(())
+}
+
+fn focus_time_block_title(
+    conn: &Connection,
+    session: &tock_core::domain::focus::FocusSession,
+) -> Result<String, Box<dyn std::error::Error>> {
+    if let Some(task_id) = session.task_id
+        && let Some(task) = tock_storage::repo::task_repo::get_by_id(conn, task_id)?
+    {
+        return Ok(task.title);
+    }
+
+    Ok(format!("Focus #{}", session.sid))
 }
 
 fn run_time_cmd(
