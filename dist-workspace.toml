@@ -17,6 +17,11 @@ members = ["cargo:."]
 cargo-dist-version = "0.22.1"
 # Which CI to generate workflows for.
 ci = "github"
+# We manage the release.yml PR trigger ourselves (removed it to avoid
+# spurious runs on every PR). allow-dirty tells dist-plan not to fail
+# because the checked-in workflow differs from what `generate-ci` would
+# produce.
+allow-dirty = ["ci"]
 # CLI installers we want to support.
 installers = ["shell", "powershell"]
 # Targets to build for. Mirrors the matrix in release.yml.

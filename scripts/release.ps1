@@ -190,6 +190,9 @@ Write-Host "`n📦 Preparing release $Tag" -ForegroundColor Cyan
 # 1. Bump Cargo.toml workspace version
 $cargoToml = Get-Content Cargo.toml -Raw
 $cargoToml = $cargoToml -replace '(?m)^version = "[^"]*"', "version = `"$Version`""
+# Also bump inter-crate workspace dependency versions (path deps carry a
+# version field for cargo-deny compatibility).
+$cargoToml = $cargoToml -replace '(path = "crates/tock-[^"]*",\s*version = ")[^"]*"', "`${1}$Version`""
 Set-Content Cargo.toml -Value $cargoToml -NoNewline
 Write-Host "  ✓ Cargo.toml → $Version" -ForegroundColor Green
 
