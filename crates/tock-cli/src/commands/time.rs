@@ -43,4 +43,27 @@ pub enum TimeCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Edit a time block.
+    Edit {
+        /// Time block SID.
+        sid: u32,
+        /// New title.
+        #[arg(long)]
+        title: Option<String>,
+        /// New notes.
+        #[arg(long)]
+        notes: Option<String>,
+        /// New start time (ISO 8601).
+        #[arg(long)]
+        start: Option<String>,
+        /// New end time (ISO 8601).
+        #[arg(long)]
+        end: Option<String>,
+        /// Link to task SID.
+        #[arg(long)]
+        task: Option<u32>,
+        /// Mark as billable.
+        #[arg(long)]
+        billable: Option<bool>,
+    },
 }

@@ -48,3 +48,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Time reports: `tock time report today|week|month` with per-title aggregation and totals
 - Pomodoro focus timer: `tock focus start/done/skip-break/pause/resume/stop/status/stats` with configurable work, short-break, and long-break intervals. Completed cycles are logged as time blocks automatically
 - Cross-platform notifications on focus events (work done, break done, session complete). Currently stderr-based; upgradeable to desktop notifications via `notify-rust`
+- Focus session history per task: `tock focus history <task-sid>` shows all focus sessions and time blocks linked to a task
+- Time block editing: `tock time edit <sid> --title "..." --start "..." --end "..." --task <sid> --billable true` to correct or update blocks after the fact
+- Completing a task (`tock done`) auto-stops any active focus session or running timer linked to that task

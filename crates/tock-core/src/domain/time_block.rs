@@ -98,3 +98,20 @@ pub struct NewTimeBlock {
     /// How the block was created.
     pub source: BlockSource,
 }
+
+/// Fields that can be patched on an existing time block.
+#[derive(Clone, Debug, Default)]
+pub struct TimeBlockPatch {
+    /// New title.
+    pub title: Option<String>,
+    /// New notes (`Some(None)` clears, `None` leaves unchanged).
+    pub notes: Option<Option<String>>,
+    /// New start timestamp (ISO 8601 string).
+    pub start: Option<String>,
+    /// New end timestamp (`Some(None)` reopens the block).
+    pub end: Option<Option<String>>,
+    /// New linked task.
+    pub task_id: Option<Option<Uuid>>,
+    /// New billable flag.
+    pub billable: Option<bool>,
+}
