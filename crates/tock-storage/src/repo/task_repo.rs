@@ -1,0 +1,335 @@
+//! Repository functions for tasks.
+
+use rusqlite::{Connection, Row, params};
+use time::OffsetDateTime;
+use uuid::Uuid;
+
+use super::{
+    bool_to_int, format_timestamp, parse_bool, parse_optional_timestamp, parse_optional_uuid_blob,
+    parse_timestamp, parse_u32, parse_uuid_blob, uuid_to_blob,
+};
+use crate::Error;
+use crate::repo::{sid_repo, tag_repo};
+use tock_core::domain::sid::SidKind;
+use tock_core::domain::task::{NewTask, Priority, Task, TaskPatch, TaskStatus};
+
+const ENTITY_KIND: &str = "task";
+const SELECT_TASK_SQL: &str = "SELECT id, sid, title, notes, status, area_id, project_id, heading_id, start_date, deadline, priority, evening, urgency_cache, created_at, modified_at, done_at, cancelled_at, deleted_at FROM tasks";
+
+/// Insert a new task row, attach its tags, and return the stored task.
+///
+/// # Errors
+/// Returns [`crate::Error::Sqlite`] on database failures and
+/// [`crate::Error::Core`] if stored UUID or timestamp data is invalid.
+pub fn insert(conn: &Connection, input: &NewTask) -> Result<Task, Error> {
+    let id = Uuid::now_v7();
+    let sid = sid_repo::next_sid(conn, SidKind::Task)?;
+    let created_at = OffsetDateTime::now_utc();
+    let created_at_text = format_timestamp(created_at)?;
+    let status = input.status.unwrap_or(TaskStatus::Inbox);
+    let (done_at, cancelled_at) = status_timestamps(None, None, status, created_at);
+
+    conn.execute(
+        "INSERT INTO tasks (
+             id, sid, title, notes, status, area_id, project_id, heading_id,
+             start_date, deadline, scheduled_for, evening, priority, udas,
+             urgency_cache, created_at, modified_at, done_at, cancelled_at, deleted_at
+         )
+         VALUES (
+             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8,
+             ?9, ?10, NULL, ?11, ?12, '{}',
+             0.0, ?13, ?14, ?15, ?16, NULL
+         )",
+        params![
+            uuid_to_blob(id),
+            i64::from(sid),
+            input.title,
+            input.notes,
+            status.as_str(),
+            input.area_id.map(uuid_to_blob),
+            input.project_id.map(uuid_to_blob),
+            input.heading_id.map(uuid_to_blob),
+            input.start_date,
+            input.deadline,
+            bool_to_int(input.evening),
+            input.priority.map(priority_to_storage),
+            created_at_text,
+            created_at_text,
+            done_at.map(format_timestamp).transpose()?,
+            cancelled_at.map(format_timestamp).transpose()?,
+        ],
+    )?;
+
+    for tag_name in &input.tags {
+        tag_repo::tag_entity(conn, id, ENTITY_KIND, tag_name)?;
+    }
+
+    get_by_id(conn, id)?.ok_or(Error::NotFound)
+}
+
+/// Fetch a task by SID, including its tags.
+///
+/// # Errors
+/// Returns [`crate::Error::Sqlite`] on query failures and
+/// [`crate::Error::Core`] if stored UUID or timestamp data is invalid.
+pub fn get_by_sid(conn: &Connection, sid: u32) -> Result<Option<Task>, Error> {
+    fetch_task(conn, "sid = ?1", params![i64::from(sid)])
+}
+
+/// Fetch a task by UUID, including its tags.
+///
+/// # Errors
+/// Returns [`crate::Error::Sqlite`] on query failures and
+/// [`crate::Error::Core`] if stored UUID or timestamp data is invalid.
+pub fn get_by_id(conn: &Connection, id: Uuid) -> Result<Option<Task>, Error> {
+    fetch_task(conn, "id = ?1", params![uuid_to_blob(id)])
+}
+
+/// List tasks ordered by urgency descending then SID ascending.
+///
+/// Soft-deleted tasks are excluded unless `include_deleted` is `true`.
+///
+/// # Errors
+/// Returns [`crate::Error::Sqlite`] on query failures and
+/// [`crate::Error::Core`] if stored UUID or timestamp data is invalid.
+pub fn list(conn: &Connection, include_deleted: bool) -> Result<Vec<Task>, Error> {
+    let sql = if include_deleted {
+        format!("{SELECT_TASK_SQL} ORDER BY urgency_cache DESC, sid ASC")
+    } else {
+        format!("{SELECT_TASK_SQL} WHERE deleted_at IS NULL ORDER BY urgency_cache DESC, sid ASC")
+    };
+
+    let mut tasks = Vec::new();
+    {
+        let mut stmt = conn.prepare(&sql)?;
+        let mut rows = stmt.query(params![])?;
+        while let Some(row) = rows.next()? {
+            tasks.push(read_task_row(row)?);
+        }
+    }
+
+    for task in &mut tasks {
+        task.tags = tag_repo::tags_for_entity(conn, task.id, ENTITY_KIND)?;
+    }
+
+    Ok(tasks)
+}
+
+/// Apply a patch to an existing task and return the updated row.
+///
+/// # Errors
+/// Returns [`crate::Error::Sqlite`] on write failures,
+/// [`crate::Error::NotFound`] if the task does not exist, and
+/// [`crate::Error::Core`] if stored UUID or timestamp data is invalid.
+pub fn update(conn: &Connection, sid: u32, patch: &TaskPatch) -> Result<Task, Error> {
+    let existing = get_by_sid(conn, sid)?.ok_or(Error::NotFound)?;
+    let now = OffsetDateTime::now_utc();
+    let now_text = format_timestamp(now)?;
+
+    let title = patch
+        .title
+        .clone()
+        .unwrap_or_else(|| existing.title.clone());
+    let notes = patch
+        .notes
+        .clone()
+        .unwrap_or_else(|| existing.notes.clone());
+    let status = patch.status.unwrap_or(existing.status);
+    let area_id = patch.area_id.unwrap_or(existing.area_id);
+    let project_id = patch.project_id.unwrap_or(existing.project_id);
+    let heading_id = patch.heading_id.unwrap_or(existing.heading_id);
+    let start_date = patch
+        .start_date
+        .clone()
+        .unwrap_or_else(|| existing.start_date.clone());
+    let deadline = patch
+        .deadline
+        .clone()
+        .unwrap_or_else(|| existing.deadline.clone());
+    let priority = patch.priority.unwrap_or(existing.priority);
+    let evening = patch.evening.unwrap_or(existing.evening);
+    let (done_at, cancelled_at) = if patch.status.is_some() {
+        status_timestamps(existing.done_at, existing.cancelled_at, status, now)
+    } else {
+        (existing.done_at, existing.cancelled_at)
+    };
+
+    conn.execute(
+        "UPDATE tasks
+         SET title = ?1,
+             notes = ?2,
+             status = ?3,
+             area_id = ?4,
+             project_id = ?5,
+             heading_id = ?6,
+             start_date = ?7,
+             deadline = ?8,
+             priority = ?9,
+             evening = ?10,
+             modified_at = ?11,
+             done_at = ?12,
+             cancelled_at = ?13
+         WHERE sid = ?14",
+        params![
+            title,
+            notes,
+            status.as_str(),
+            area_id.map(uuid_to_blob),
+            project_id.map(uuid_to_blob),
+            heading_id.map(uuid_to_blob),
+            start_date,
+            deadline,
+            priority.map(priority_to_storage),
+            bool_to_int(evening),
+            now_text,
+            done_at.map(format_timestamp).transpose()?,
+            cancelled_at.map(format_timestamp).transpose()?,
+            i64::from(sid),
+        ],
+    )?;
+
+    for tag_name in &patch.add_tags {
+        tag_repo::tag_entity(conn, existing.id, ENTITY_KIND, tag_name)?;
+    }
+    for tag_name in &patch.remove_tags {
+        tag_repo::untag_entity(conn, existing.id, ENTITY_KIND, tag_name)?;
+    }
+
+    get_by_sid(conn, sid)?.ok_or(Error::NotFound)
+}
+
+/// Change a task's status and return the updated row.
+///
+/// # Errors
+/// Returns [`crate::Error::Sqlite`] on write failures,
+/// [`crate::Error::NotFound`] if the task does not exist, and
+/// [`crate::Error::Core`] if stored UUID or timestamp data is invalid.
+pub fn set_status(conn: &Connection, sid: u32, status: TaskStatus) -> Result<Task, Error> {
+    let existing = get_by_sid(conn, sid)?.ok_or(Error::NotFound)?;
+    let now = OffsetDateTime::now_utc();
+    let now_text = format_timestamp(now)?;
+    let (done_at, cancelled_at) =
+        status_timestamps(existing.done_at, existing.cancelled_at, status, now);
+
+    conn.execute(
+        "UPDATE tasks
+         SET status = ?1,
+             modified_at = ?2,
+             done_at = ?3,
+             cancelled_at = ?4
+         WHERE sid = ?5",
+        params![
+            status.as_str(),
+            now_text,
+            done_at.map(format_timestamp).transpose()?,
+            cancelled_at.map(format_timestamp).transpose()?,
+            i64::from(sid),
+        ],
+    )?;
+
+    get_by_sid(conn, sid)?.ok_or(Error::NotFound)
+}
+
+/// Soft-delete a task by setting `deleted_at`.
+///
+/// # Errors
+/// Returns [`crate::Error::Sqlite`] on write failures,
+/// [`crate::Error::NotFound`] if the task does not exist, and
+/// [`crate::Error::Core`] if the timestamp cannot be formatted.
+pub fn soft_delete(conn: &Connection, sid: u32) -> Result<(), Error> {
+    let now_text = format_timestamp(OffsetDateTime::now_utc())?;
+    let rows_affected = conn.execute(
+        "UPDATE tasks SET deleted_at = ?1, modified_at = ?2 WHERE sid = ?3",
+        params![now_text, now_text, i64::from(sid)],
+    )?;
+
+    if rows_affected == 0 {
+        return Err(Error::NotFound);
+    }
+
+    Ok(())
+}
+
+fn fetch_task<P>(conn: &Connection, filter: &str, params: P) -> Result<Option<Task>, Error>
+where
+    P: rusqlite::Params,
+{
+    let sql = format!("{SELECT_TASK_SQL} WHERE {filter}");
+    let mut stmt = conn.prepare(&sql)?;
+    let mut rows = stmt.query(params)?;
+    if let Some(row) = rows.next()? {
+        let mut task = read_task_row(row)?;
+        task.tags = tag_repo::tags_for_entity(conn, task.id, ENTITY_KIND)?;
+        return Ok(Some(task));
+    }
+    Ok(None)
+}
+
+fn read_task_row(row: &Row<'_>) -> Result<Task, Error> {
+    let id_bytes: Vec<u8> = row.get("id")?;
+    let sid_value: i64 = row.get("sid")?;
+    let status_raw: String = row.get("status")?;
+    let priority_raw: Option<String> = row.get("priority")?;
+    let evening_raw: i64 = row.get("evening")?;
+
+    Ok(Task {
+        id: parse_uuid_blob(&id_bytes)?,
+        sid: parse_u32(sid_value)?,
+        title: row.get("title")?,
+        notes: row.get("notes")?,
+        status: parse_task_status(&status_raw)?,
+        area_id: parse_optional_uuid_blob(row.get::<_, Option<Vec<u8>>>("area_id")?.as_deref())?,
+        project_id: parse_optional_uuid_blob(
+            row.get::<_, Option<Vec<u8>>>("project_id")?.as_deref(),
+        )?,
+        heading_id: parse_optional_uuid_blob(
+            row.get::<_, Option<Vec<u8>>>("heading_id")?.as_deref(),
+        )?,
+        start_date: row.get("start_date")?,
+        deadline: row.get("deadline")?,
+        priority: priority_raw.as_deref().map(parse_priority).transpose()?,
+        evening: parse_bool(evening_raw)?,
+        tags: Vec::new(),
+        urgency: row.get("urgency_cache")?,
+        created_at: parse_timestamp(&row.get::<_, String>("created_at")?)?,
+        modified_at: parse_timestamp(&row.get::<_, String>("modified_at")?)?,
+        done_at: parse_optional_timestamp(row.get::<_, Option<String>>("done_at")?.as_deref())?,
+        cancelled_at: parse_optional_timestamp(
+            row.get::<_, Option<String>>("cancelled_at")?.as_deref(),
+        )?,
+        deleted_at: parse_optional_timestamp(
+            row.get::<_, Option<String>>("deleted_at")?.as_deref(),
+        )?,
+    })
+}
+
+fn parse_task_status(raw: &str) -> Result<TaskStatus, Error> {
+    TaskStatus::from_str_opt(raw).ok_or_else(super::invalid_encoding)
+}
+
+fn parse_priority(raw: &str) -> Result<Priority, Error> {
+    Priority::from_str_opt(raw).ok_or_else(super::invalid_encoding)
+}
+
+fn priority_to_storage(priority: Priority) -> String {
+    priority.as_char().to_string()
+}
+
+fn status_timestamps(
+    current_done_at: Option<OffsetDateTime>,
+    current_cancelled_at: Option<OffsetDateTime>,
+    next_status: TaskStatus,
+    now: OffsetDateTime,
+) -> (Option<OffsetDateTime>, Option<OffsetDateTime>) {
+    let done_at = if next_status == TaskStatus::Done {
+        current_done_at.or(Some(now))
+    } else {
+        None
+    };
+    let cancelled_at = if next_status == TaskStatus::Cancelled {
+        current_cancelled_at.or(Some(now))
+    } else {
+        None
+    };
+    (done_at, cancelled_at)
+}
