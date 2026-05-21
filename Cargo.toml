@@ -47,6 +47,22 @@ tock-sync = { path = "crates/tock-sync", version = "0.0.0" }
 tock-import = { path = "crates/tock-import", version = "0.0.0" }
 tock-export = { path = "crates/tock-export", version = "0.0.0" }
 
+# Crypto primitives (used by tock-crypto). All audited RustCrypto crates.
+# See docs/adr/ADR-002-end-to-end-encryption.md.
+aes-gcm = "0.10"
+argon2 = "0.5"
+hkdf = "0.12"
+sha2 = "0.10"
+x25519-dalek = { version = "2", default-features = false, features = ["static_secrets", "zeroize"] }
+ed25519-dalek = { version = "2", default-features = false, features = ["rand_core", "zeroize"] }
+zeroize = { version = "1.8", features = ["derive"] }
+subtle = "2.6"
+rand_core = { version = "0.6", features = ["getrandom"] }
+thiserror = "1"
+
+# Test-only utilities.
+proptest = "1"
+
 # Mandatory lint set per docs/architecture.md §4.1.1. Members opt in with
 # `[lints] workspace = true`. `tock-uniffi` overrides `unsafe_code` because
 # UniFFI-generated code requires `unsafe` blocks; that crate isolates all
