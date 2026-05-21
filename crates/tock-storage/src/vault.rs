@@ -180,20 +180,25 @@ impl OpenVault {
 /// - [`Error::Sqlite`] / [`Error::MigrationChecksumMismatch`] on
 ///   schema-runtime failures.
 pub fn open(path: &Path, password: &[u8]) -> Result<OpenVault, Error> {
+    let _span = tracing::info_span!("vault::open", path = %path.display()).entered();
     if !path.exists() {
+        tracing::warn!("vault file does not exist");
         return Err(Error::NotFound);
     }
     let mut conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
     migrations::migrate(&mut conn)?;
     let meta = load_meta(&conn)?;
     let header = VaultHeader::from_meta(&meta).map_err(map_core_err)?;
+    tracing::debug!(vault_id = %header.vault_id, format_version = header.format_version, "header parsed");
     let mk = KeyHierarchy::derive_master_key(password, &header)
         .map_err(|_| Error::InvalidVaultOrCredentials)?;
     let mek =
         KeyHierarchy::derive_mek(&mk, &header).map_err(|_| Error::InvalidVaultOrCredentials)?;
     let vk =
         KeyHierarchy::unwrap_vk(&mek, &header).map_err(|_| Error::InvalidVaultOrCredentials)?;
+    tracing::debug!("vault key unwrapped successfully");
     let device = load_local_device(&conn, &vk)?;
+    tracing::info!(vault_id = %header.vault_id, "vault opened");
 
     Ok(OpenVault {
         conn,
@@ -214,6 +219,7 @@ pub fn open(path: &Path, password: &[u8]) -> Result<OpenVault, Error> {
 /// - [`Error::Io`] if `path` already exists.
 /// - [`Error::Sqlite`] / [`Error::Crypto`] on the usual failure modes.
 pub fn init(path: &Path, password: &[u8]) -> Result<OpenVault, Error> {
+    let _span = tracing::info_span!("vault::init", path = %path.display()).entered();
     if path.exists() {
         return Err(Error::Io(std::io::Error::new(
             std::io::ErrorKind::AlreadyExists,
@@ -222,6 +228,7 @@ pub fn init(path: &Path, password: &[u8]) -> Result<OpenVault, Error> {
     }
     let mut conn = Connection::open(path)?;
     migrations::migrate(&mut conn)?;
+    tracing::debug!("migrations applied");
 
     // Build header with random salts, generate VK, wrap it.
     let mut kdf_salt = [0_u8; 16];
@@ -261,6 +268,7 @@ pub fn init(path: &Path, password: &[u8]) -> Result<OpenVault, Error> {
     let verifying = signing_key.verifying_key();
     save_local_device(&conn, &vk, &device_id, &signing_key)?;
     register_device(&conn, &device_id, &verifying, Some("local"))?;
+    tracing::info!(vault_id = %header.vault_id, "vault initialized");
 
     Ok(OpenVault {
         conn,

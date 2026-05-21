@@ -5,13 +5,13 @@ phase: configuration is in place; not all channels are live yet.
 
 ## Channels
 
-| Channel         | Config                                                  | Status                                                                                                                            |
-|-----------------|---------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------|
-| GitHub Releases | [`release.yml`](../../.github/workflows/release.yml)    | **Live** — hand-rolled matrix build for Linux/macOS/Windows.                                                                      |
-| `cargo-dist`    | [`dist-workspace.toml`](../../dist-workspace.toml)      | **Config only** — validated in CI via `cargo dist plan`. Will replace `release.yml` once macOS signing + tap repo are in place.   |
-| Homebrew tap    | [`homebrew/tock.rb`](homebrew/tock.rb)                  | **Template only** — needs `kafkade/homebrew-tap` repo to be created.                                                              |
-| Nix flake       | [`../../flake.nix`](../../flake.nix)                    | **Dev shell live**; runnable `packages.default` deferred until tock-cli has real implementation.                                  |
-| crates.io       | n/a                                                     | **Deferred** — wired in `release.yml` (commented) for a future PR.                                                                |
+| Channel         | Config                                               | Status                                                                    |
+|-----------------|------------------------------------------------------|---------------------------------------------------------------------------|
+| GitHub Releases | [`release.yml`](../../.github/workflows/release.yml) | **Live** — cargo-dist for Linux, macOS, Windows; shell + PS installers.   |
+| `cargo-dist`    | [`dist-workspace.toml`](../../dist-workspace.toml)   | **Active** — drives `release.yml` and validated in CI via `dist plan`.    |
+| Homebrew tap    | [`homebrew/tock.rb`](homebrew/tock.rb)               | **Template only** — needs `kafkade/homebrew-tap` repo.                    |
+| Nix flake       | [`../../flake.nix`](../../flake.nix)                 | **Dev shell live**; package definition deferred.                          |
+| crates.io       | n/a                                                  | **Deferred** — future PR.                                                 |
 
 ## macOS code signing & notarization
 
