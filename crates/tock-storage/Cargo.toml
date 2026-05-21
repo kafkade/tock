@@ -1,0 +1,25 @@
+[package]
+name = "tock-storage"
+description = "SQLite storage adapter for tock (rusqlite + sqlcipher, app-layer encryption)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+readme = "README.md"
+
+[features]
+default = ["sqlite-bundled"]
+# Bundled SQLCipher + vendored OpenSSL (matches architecture §4.3.3).
+sqlite-bundled = []
+sqlite-system = []
+
+[lints]
+workspace = true
+
+[dependencies]
+tock-core = { workspace = true }
+
+[dev-dependencies]

@@ -1,0 +1,74 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/tock-core",
+    "crates/tock-crypto",
+    "crates/tock-parse",
+    "crates/tock-storage",
+    "crates/tock-sync",
+    "crates/tock-import",
+    "crates/tock-export",
+    "crates/tock-cli",
+    "crates/tock-server",
+    "crates/tock-uniffi",
+    "xtask",
+]
+default-members = [
+    "crates/tock-core",
+    "crates/tock-crypto",
+    "crates/tock-parse",
+    "crates/tock-storage",
+    "crates/tock-sync",
+    "crates/tock-import",
+    "crates/tock-export",
+    "crates/tock-cli",
+    "crates/tock-server",
+    "crates/tock-uniffi",
+]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.85"
+license = "Apache-2.0"
+repository = "https://github.com/kafkade/tock"
+homepage = "https://github.com/kafkade/tock"
+authors = ["The tock authors"]
+
+# Shared dependency versions. Members opt in via `dep = { workspace = true }`.
+# Kept intentionally small for the foundation phase; expand as real
+# implementation lands.
+[workspace.dependencies]
+tock-core = { path = "crates/tock-core", version = "0.0.0" }
+tock-crypto = { path = "crates/tock-crypto", version = "0.0.0" }
+tock-parse = { path = "crates/tock-parse", version = "0.0.0" }
+tock-storage = { path = "crates/tock-storage", version = "0.0.0" }
+tock-sync = { path = "crates/tock-sync", version = "0.0.0" }
+tock-import = { path = "crates/tock-import", version = "0.0.0" }
+tock-export = { path = "crates/tock-export", version = "0.0.0" }
+
+# Mandatory lint set per docs/architecture.md §4.1.1. Members opt in with
+# `[lints] workspace = true`. `tock-uniffi` overrides `unsafe_code` because
+# UniFFI-generated code requires `unsafe` blocks; that crate isolates all
+# unsafe FFI behind its boundary.
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+rust_2024_compatibility = { level = "warn", priority = -1 }
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+
+[profile.dev]
+# Faster incremental rebuilds during foundation work.
+debug = "line-tables-only"

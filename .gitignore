@@ -41,3 +41,16 @@ xcuserdata/
 
 # OS junk
 Thumbs.db
+
+# Nix
+result
+result-*
+.direnv/
+
+# cargo-dist generated artifacts
+/dist/
+
+# Coverage output
+codecov.json
+*.profraw
+*.profdata

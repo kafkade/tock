@@ -1,0 +1,37 @@
+# cargo-dist configuration for tock.
+#
+# Drives `cargo dist` release artifacts (CLI installers + tarballs/zips).
+# Foundation-phase: config exists and is validated in CI via
+# `cargo dist plan`, but the release workflow still uses the hand-written
+# `.github/workflows/release.yml` until secrets and Homebrew tap are in
+# place. See docs/distribution/README.md for the migration path.
+
+[workspace]
+members = ["cargo:."]
+
+[dist]
+# Pin cargo-dist version so CI/local stay in sync.
+cargo-dist-version = "0.22.1"
+# Which CI to generate workflows for (we are NOT currently using the
+# generated workflow — `release.yml` is hand-maintained).
+ci = "github"
+# CLI installers we want to support.
+installers = ["shell", "powershell"]
+# Targets to build for. Mirrors the matrix in release.yml so the two
+# stay in sync.
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+]
+# Publish the tock-cli crate as the user-facing binary.
+publish-jobs = []
+pr-run-mode = "plan"
+# macOS signing/notarization is wired but only triggers when the secrets
+# are present; missing secrets must not fail the workflow.
+macos-sign = false
+# Bins to ship (just the CLI for now; tock-server has its own release path).
+[dist.binaries]
+"tock-cli" = ["tock"]

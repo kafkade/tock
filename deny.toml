@@ -1,0 +1,68 @@
+# cargo-deny configuration for tock.
+#
+# Run locally:    cargo deny check
+# In CI:          .github/workflows/ci.yml `deny` job.
+#
+# Architecture reference: docs/architecture.md §4.4 (build targets + CI/CD).
+
+[graph]
+# Check every target by default; keep the matrix small so CI stays fast.
+targets = [
+    { triple = "x86_64-unknown-linux-gnu" },
+    { triple = "aarch64-unknown-linux-gnu" },
+    { triple = "x86_64-apple-darwin" },
+    { triple = "aarch64-apple-darwin" },
+    { triple = "x86_64-pc-windows-msvc" },
+    { triple = "wasm32-unknown-unknown" },
+]
+all-features = false
+no-default-features = false
+
+[advisories]
+db-path = "~/.cargo/advisory-db"
+db-urls = ["https://github.com/rustsec/advisory-db"]
+yanked = "deny"
+ignore = []
+
+[licenses]
+# SPDX identifiers. Keep this list tight; new licenses require an explicit
+# decision recorded in CHANGELOG.
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "CC0-1.0",
+    "Unicode-DFS-2016",
+    "Unicode-3.0",
+    "MPL-2.0",
+    "Zlib",
+    # AGPL-3.0 applies to tock-server itself. Allowing it here lets
+    # the workspace check include tock-server without separate config.
+    # (Use bare `AGPL-3.0` so older cargo-deny versions parse it.)
+    "AGPL-3.0",
+]
+confidence-threshold = 0.9
+exceptions = []
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+highlight = "all"
+workspace-default-features = "allow"
+external-default-features = "allow"
+allow = []
+deny = [
+    # Discourage adding accidental I/O / async runtime deps inside pure crates.
+    # (Hard enforcement lives in the future `xtask check-purity` job.)
+]
+skip = []
+skip-tree = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

@@ -1,0 +1,33 @@
+[package]
+name = "tock-cli"
+description = "Command-line interface for tock — unified task / habit / time / focus engine."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+readme = "README.md"
+
+[features]
+# Match architecture §4.3.3.
+default = ["tui", "completion"]
+tui = []
+completion = []
+
+[[bin]]
+name = "tock"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+tock-core = { workspace = true }
+tock-storage = { workspace = true }
+tock-sync = { workspace = true }
+tock-import = { workspace = true }
+tock-export = { workspace = true }
+
+[dev-dependencies]

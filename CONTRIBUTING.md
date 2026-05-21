@@ -9,8 +9,10 @@ This project follows the [Contributor Covenant Code of Conduct](CODE_OF_CONDUCT.
 
 ## Prerequisites
 
-- **Rust 1.85+** — install via [rustup](https://rustup.rs/)
+- **Rust 1.85.0** — pinned in [`rust-toolchain.toml`](rust-toolchain.toml); install via [rustup](https://rustup.rs/) and `rustup` will pick it up automatically.
 - **wasm-pack** (optional) — for WASM builds: `cargo install wasm-pack`
+- **cargo-deny** (optional, runs in CI) — `cargo install cargo-deny`
+- **Nix** (optional) — `nix develop` provides the full toolchain via `flake.nix`.
 
 ## Building from Source
 
@@ -57,6 +59,9 @@ cargo fmt
 
 # Linting (clippy)
 cargo clippy --workspace --all-targets -- -D warnings
+
+# License + advisory audit (matches CI's `deny` job)
+cargo deny check
 
 # All checks run in CI on every pull request
 ```

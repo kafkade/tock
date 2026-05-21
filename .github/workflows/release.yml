@@ -16,6 +16,13 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # Pin to the same toolchain as rust-toolchain.toml and CI.
+  RUST_TOOLCHAIN: "1.85.0"
+
+# TODO(distribution): macOS code signing + notarization land once the
+# Apple Developer secrets exist (see docs/distribution/README.md).
+# Once enabled, this workflow can be regenerated from
+# `dist-workspace.toml` via `cargo dist init`.
 
 jobs:
   build:
@@ -39,8 +46,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           targets: ${{ matrix.target }}
 
       - uses: Swatinem/rust-cache@v2
@@ -114,7 +122,9 @@ jobs:
   #   if: github.event_name == 'workflow_dispatch' && inputs.publish_crates
   #   steps:
   #     - uses: actions/checkout@v4
-  #     - uses: dtolnay/rust-toolchain@stable
+  #     - uses: dtolnay/rust-toolchain@master
+  #       with:
+  #         toolchain: ${{ env.RUST_TOOLCHAIN }}
   #
   #     - name: Dry run
   #       run: cargo publish -p tock-core --dry-run
