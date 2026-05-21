@@ -1,0 +1,20 @@
+[package]
+name = "tock-sync"
+description = "Event-sourced synchronization layer for tock: log, conflict resolution, transport trait."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+readme = "README.md"
+
+[lints]
+workspace = true
+
+[dependencies]
+tock-core = { workspace = true }
+tock-storage = { workspace = true }
+
+[dev-dependencies]

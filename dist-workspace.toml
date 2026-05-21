@@ -1,0 +1,34 @@
+# cargo-dist configuration for tock.
+#
+# Drives `cargo dist` release artifacts (CLI installers + tarballs/zips).
+# Foundation-phase: config exists and is validated in CI via
+# `cargo dist plan`, but the release workflow still uses the hand-written
+# `.github/workflows/release.yml`. `allow-dirty = ["ci"]` skips the
+# "release.yml is out of date" check so `cargo dist plan` succeeds
+# without us regenerating that workflow.
+#
+# See docs/distribution/README.md for the migration path.
+
+[workspace]
+members = ["cargo:."]
+
+[dist]
+# Pin cargo-dist version so CI/local stay in sync.
+cargo-dist-version = "0.22.1"
+# Which CI to generate workflows for (we are NOT currently using the
+# generated workflow).
+ci = "github"
+# Skip the up-to-date check on the hand-written release workflow.
+allow-dirty = ["ci"]
+# CLI installers we want to support.
+installers = ["shell", "powershell"]
+# Targets to build for. Mirrors the matrix in release.yml.
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+]
+# Run `cargo dist plan` (not full build) for PR validation.
+pr-run-mode = "plan"

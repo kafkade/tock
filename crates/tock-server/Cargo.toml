@@ -1,0 +1,30 @@
+[package]
+name = "tock-server"
+description = "Optional sync server for tock (AGPL-3.0). Stores only end-to-end-encrypted blobs."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+# Server is AGPL-3.0-only — see crate-local LICENSE.
+license = "AGPL-3.0-only"
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+readme = "README.md"
+
+# tock-server has its own distribution path (Docker image, hand-built
+# release artifacts) and uses a different license. Exclude it from
+# cargo-dist so the CLI release plan doesn't accidentally ship it.
+[package.metadata.dist]
+dist = false
+
+[[bin]]
+name = "tock-server"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+tock-sync = { workspace = true }
+
+[dev-dependencies]

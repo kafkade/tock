@@ -1,0 +1,5 @@
+# Workspace cargo config.
+
+[alias]
+# Run xtask without typing `cargo run -p xtask --`.
+xtask = "run --quiet --package xtask --"

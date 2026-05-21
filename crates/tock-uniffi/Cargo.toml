@@ -1,0 +1,43 @@
+[package]
+name = "tock-uniffi"
+description = "UniFFI scaffolding crate exposing tock to Swift (iOS / iPadOS / macOS / watchOS)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+readme = "README.md"
+
+[lib]
+# Future builds will add `crate-type = ["staticlib", "cdylib"]` for
+# xcframework packaging; left as the default `rlib` until UniFFI lands.
+name = "tock_uniffi"
+
+[lints]
+# UniFFI-generated code uses `#[no_mangle] pub extern "C"` and `unsafe`
+# blocks. Override the workspace `unsafe_code = "forbid"` for this crate
+# only — all other crates keep the forbid. See ADR-005.
+#
+# Cargo does not allow mixing `[lints] workspace = true` with per-table
+# overrides, so this crate redeclares the full workspace lint set with
+# `unsafe_code = "allow"` substituted in.
+
+[lints.rust]
+unsafe_code = "allow"
+missing_docs = "warn"
+rust_2024_compatibility = { level = "warn", priority = -1 }
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+
+[dependencies]
+tock-core = { workspace = true }
+
+[dev-dependencies]

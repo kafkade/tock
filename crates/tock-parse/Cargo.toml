@@ -1,0 +1,18 @@
+[package]
+name = "tock-parse"
+description = "Query language parser and natural-language date parser for tock."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+readme = "README.md"
+
+[lints]
+workspace = true
+
+[dependencies]
+
+[dev-dependencies]

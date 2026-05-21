@@ -9,6 +9,10 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -Dwarnings
+  # Pin the toolchain explicitly in env so every job (including ones that
+  # don't read rust-toolchain.toml via dtolnay/rust-toolchain) stays in
+  # lockstep with the repo pin.
+  RUST_TOOLCHAIN: "1.85.0"
 
 jobs:
   check:
@@ -16,7 +20,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
       - uses: Swatinem/rust-cache@v2
       - run: cargo check --workspace --all-features
 
@@ -29,7 +35,9 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace --all-features
 
@@ -38,8 +46,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --workspace --all-features --all-targets -- -D warnings
@@ -49,8 +58,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: rustfmt
       - run: cargo fmt --all -- --check
 
@@ -59,11 +69,67 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
       - run: cargo build -p tock-core --target wasm32-unknown-unknown --no-default-features --features core
+
+  deny:
+    name: cargo-deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+          arguments: --all-features
+
+  dist-plan:
+    name: cargo-dist plan (validate config)
+    runs-on: ubuntu-latest
+    # Linux-only; cargo-dist is platform-independent for the plan step.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - name: Install cargo-dist
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-dist@0.22.1
+      - name: Validate dist-workspace.toml
+        run: cargo dist plan
+
+  # Non-gating job (deliberately omitted from the `ci` aggregator's needs
+  # for now). Once it has proven stable, add it to `ci.needs` and update
+  # branch protection in kafkade/github-infra:repo_tock.tf accordingly.
+  coverage:
+    name: Code coverage (Linux)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+      - name: Generate coverage (codecov format)
+        run: cargo llvm-cov --workspace --all-features --codecov --output-path codecov.json
+      - name: Upload to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: codecov.json
+          token: ${{ secrets.CODECOV_TOKEN }}
+          # Forks (no token) must not fail this gate; the job itself is
+          # already `continue-on-error: true`.
+          fail_ci_if_error: false
 
   # --- Future: iOS build ---
   # ios:
@@ -71,8 +137,9 @@ jobs:
   #   runs-on: macos-latest
   #   steps:
   #     - uses: actions/checkout@v4
-  #     - uses: dtolnay/rust-toolchain@stable
+  #     - uses: dtolnay/rust-toolchain@master
   #       with:
+  #         toolchain: ${{ env.RUST_TOOLCHAIN }}
   #         targets: aarch64-apple-ios,aarch64-apple-ios-sim
   #     - uses: Swatinem/rust-cache@v2
   #     - name: Build UniFFI bindings
@@ -88,8 +155,9 @@ jobs:
   #   runs-on: ubuntu-latest
   #   steps:
   #     - uses: actions/checkout@v4
-  #     - uses: dtolnay/rust-toolchain@stable
+  #     - uses: dtolnay/rust-toolchain@master
   #       with:
+  #         toolchain: ${{ env.RUST_TOOLCHAIN }}
   #         targets: wasm32-unknown-unknown
   #     - name: Install wasm-pack
   #       run: cargo install wasm-pack
@@ -100,12 +168,12 @@ jobs:
   #     - name: Build web app
   #       run: cd apps/web && npm run build
 
-  # Summary gate — single required status check for branch protection / auto-merge
+  # Summary gate — single required status check for branch protection / auto-merge.
+  # `coverage` is intentionally not in `needs` yet (see job comment).
   ci:
     name: CI
     if: always()
-    needs: [check, test, clippy, fmt, wasm]
-    # When iOS/web jobs are enabled, add them: needs: [check, test, clippy, fmt, wasm, ios, web]
+    needs: [check, test, clippy, fmt, wasm, deny, dist-plan]
     runs-on: ubuntu-latest
     steps:
       - name: Fail if any dependency failed
