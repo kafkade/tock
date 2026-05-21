@@ -29,5 +29,7 @@ tock-storage = { workspace = true }
 tock-sync = { workspace = true }
 tock-import = { workspace = true }
 tock-export = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 
 [dev-dependencies]

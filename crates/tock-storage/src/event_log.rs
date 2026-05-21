@@ -76,6 +76,13 @@ impl<'a> EventLog<'a> {
         let device = self.vault.local_device();
         let device_id = DeviceId::from_bytes(device.device_id);
         let next_lamport = self.next_local_lamport()?;
+        let _span = tracing::info_span!(
+            "event_log::append",
+            entity_kind = entity_kind.as_str(),
+            entity_id = %entity_id,
+            lamport = next_lamport,
+        )
+        .entered();
 
         let id = Uuid::now_v7();
         let now = OffsetDateTime::now_utc();
@@ -106,6 +113,7 @@ impl<'a> EventLog<'a> {
         let signed = sign(event, &device.signing_key);
 
         insert_signed_event(self.vault.connection(), &signed)?;
+        tracing::debug!(event_id = %signed.event.id, "event appended");
         Ok(signed)
     }
 
