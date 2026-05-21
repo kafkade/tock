@@ -141,6 +141,20 @@ fn run_task_cmd(
                     *sid,
                     commands::done::done_status(),
                 )?;
+                // Auto-stop any active focus session linked to this task.
+                if let Some(active) = tock_storage::repo::focus_repo::get_active(conn)? {
+                    if active.task_id == Some(task.id) {
+                        let _ = tock_storage::repo::focus_repo::abort(conn, active.sid);
+                        println!("  (auto-stopped focus session #{})", active.sid);
+                    }
+                }
+                // Auto-stop any running time block linked to this task.
+                if let Some(running) = tock_storage::repo::time_block_repo::get_current(conn)? {
+                    if running.task_id == Some(task.id) {
+                        let _ = tock_storage::repo::time_block_repo::stop(conn, running.sid);
+                        println!("  (auto-stopped timer #{})", running.sid);
+                    }
+                }
                 println!("Completed task #{} — {}", task.sid, task.title);
             }
         }
@@ -199,6 +213,7 @@ fn run_focus_cmd(
         FocusCommand::Stop => run_focus_stop(conn),
         FocusCommand::Status => run_focus_status(conn),
         FocusCommand::Stats { period } => run_focus_stats(conn, period),
+        FocusCommand::History { task } => run_focus_history(conn, *task),
     }
 }
 
@@ -388,6 +403,39 @@ fn run_focus_stats(conn: &Connection, period: &str) -> Result<(), Box<dyn std::e
     Ok(())
 }
 
+fn run_focus_history(conn: &Connection, task_sid: u32) -> Result<(), Box<dyn std::error::Error>> {
+    let task =
+        tock_storage::repo::task_repo::get_by_sid(conn, task_sid)?.ok_or("task not found")?;
+    let sessions = tock_storage::repo::focus_repo::list_for_task(conn, task.id)?;
+    let blocks = tock_storage::repo::time_block_repo::list_for_task(conn, task.id)?;
+    println!("Focus history for task #{} — {}", task.sid, task.title);
+    println!("\n  Focus sessions ({}):", sessions.len());
+    for s in &sessions {
+        let cycles = format!("{}/{}", s.completed_cycles, s.planned_cycles);
+        println!(
+            "    #{:<4}  {:<10}  {:<7}  {}",
+            s.sid,
+            s.state.as_str(),
+            cycles,
+            format_time(s.started_at),
+        );
+    }
+    println!("\n  Time blocks ({}):", blocks.len());
+    for b in &blocks {
+        let dur = b
+            .duration()
+            .map_or_else(|| "running".to_string(), format_duration);
+        println!(
+            "    #{:<4}  {:<10}  {:<8}  {}",
+            b.sid,
+            b.source.as_str(),
+            dur,
+            format_time(b.start_ts),
+        );
+    }
+    Ok(())
+}
+
 fn log_focus_time_block(
     conn: &Connection,
     session: &tock_core::domain::focus::FocusSession,
@@ -430,6 +478,24 @@ fn run_time_cmd(
         TimeCommand::Current => run_time_current(conn),
         TimeCommand::Blocks { period, json } => run_time_blocks(conn, period, *json),
         TimeCommand::Report { period, json } => run_time_report(conn, period, *json),
+        TimeCommand::Edit {
+            sid,
+            title,
+            notes,
+            start,
+            end,
+            task,
+            billable,
+        } => run_time_edit(
+            conn,
+            *sid,
+            title.as_deref(),
+            notes.as_deref(),
+            start.as_deref(),
+            end.as_deref(),
+            *task,
+            *billable,
+        ),
     }
 }
 
@@ -701,6 +767,38 @@ fn period_range(period: &str) -> (String, String) {
             String::from("2100-01-01T00:00:00Z"),
         ),
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_time_edit(
+    conn: &Connection,
+    sid: u32,
+    title: Option<&str>,
+    notes: Option<&str>,
+    start: Option<&str>,
+    end: Option<&str>,
+    task: Option<u32>,
+    billable: Option<bool>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let task_id = match task {
+        Some(tsid) => {
+            let t =
+                tock_storage::repo::task_repo::get_by_sid(conn, tsid)?.ok_or("task not found")?;
+            Some(Some(t.id))
+        }
+        None => None,
+    };
+    let patch = tock_core::domain::time_block::TimeBlockPatch {
+        title: title.map(String::from),
+        notes: notes.map(|n| Some(n.to_string())),
+        start: start.map(String::from),
+        end: end.map(|e| Some(e.to_string())),
+        task_id,
+        billable,
+    };
+    let block = tock_storage::repo::time_block_repo::update(conn, sid, &patch)?;
+    println!("Updated block #{} — {}", block.sid, block.title);
+    Ok(())
 }
 
 fn run_project_cmd(

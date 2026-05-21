@@ -49,4 +49,9 @@ pub enum FocusCommand {
         #[arg(default_value = "today")]
         period: String,
     },
+    /// Show focus session history for a task.
+    History {
+        /// Task SID.
+        task: u32,
+    },
 }

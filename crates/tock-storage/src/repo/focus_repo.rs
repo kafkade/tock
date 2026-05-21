@@ -237,6 +237,22 @@ pub fn list_range(conn: &Connection, from: &str, to: &str) -> Result<Vec<FocusSe
     Ok(sessions)
 }
 
+/// List focus sessions linked to a specific task, ordered by start
+/// descending.
+///
+/// # Errors
+/// Returns [`crate::Error::Sqlite`] on query failures.
+pub fn list_for_task(conn: &Connection, task_id: Uuid) -> Result<Vec<FocusSession>, Error> {
+    let sql = format!("{SELECT_FOCUS_SESSION_SQL} WHERE task_id = ?1 ORDER BY started_at DESC");
+    let mut stmt = conn.prepare(&sql)?;
+    let mut rows = stmt.query(params![uuid_to_blob(task_id)])?;
+    let mut sessions = Vec::new();
+    while let Some(row) = rows.next()? {
+        sessions.push(read_focus_session_row(row)?);
+    }
+    Ok(sessions)
+}
+
 const fn validate_new_session(new: &NewFocusSession) -> Result<(), Error> {
     if new.planned_cycles == 0 {
         return Err(Error::InvalidState("focus planned cycles must be positive"));

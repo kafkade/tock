@@ -126,6 +126,103 @@ pub fn get_by_sid(conn: &Connection, sid: u32) -> Result<Option<TimeBlock>, Erro
     Ok(None)
 }
 
+/// Patch fields on an existing time block.
+///
+/// # Errors
+/// Returns [`crate::Error::NotFound`] if no block with the given SID
+/// exists.
+pub fn update(
+    conn: &Connection,
+    sid: u32,
+    patch: &tock_core::domain::time_block::TimeBlockPatch,
+) -> Result<TimeBlock, Error> {
+    let _existing = get_by_sid(conn, sid)?.ok_or(Error::NotFound)?;
+    let now = format_timestamp(OffsetDateTime::now_utc())?;
+
+    let mut sets = vec!["modified_at = ?1".to_string()];
+    let mut idx: usize = 2;
+
+    macro_rules! push_set {
+        ($field:expr) => {{
+            sets.push(format!("{} = ?{idx}", $field));
+            idx += 1;
+        }};
+    }
+
+    if patch.title.is_some() {
+        push_set!("title");
+    }
+    if patch.notes.is_some() {
+        push_set!("notes");
+    }
+    if patch.start.is_some() {
+        push_set!("start_ts");
+    }
+    if patch.end.is_some() {
+        push_set!("end_ts");
+    }
+    if patch.task_id.is_some() {
+        push_set!("task_id");
+    }
+    if patch.billable.is_some() {
+        push_set!("billable");
+    }
+
+    let sql = format!(
+        "UPDATE time_blocks SET {} WHERE sid = ?{idx}",
+        sets.join(", ")
+    );
+    let mut stmt = conn.prepare(&sql)?;
+
+    let mut bind_idx: usize = 1;
+    stmt.raw_bind_parameter(bind_idx, &now)?;
+    bind_idx += 1;
+
+    if let Some(ref t) = patch.title {
+        stmt.raw_bind_parameter(bind_idx, t.as_str())?;
+        bind_idx += 1;
+    }
+    if let Some(ref n) = patch.notes {
+        stmt.raw_bind_parameter(bind_idx, n.as_deref())?;
+        bind_idx += 1;
+    }
+    if let Some(ref s) = patch.start {
+        stmt.raw_bind_parameter(bind_idx, s.as_str())?;
+        bind_idx += 1;
+    }
+    if let Some(ref e) = patch.end {
+        stmt.raw_bind_parameter(bind_idx, e.as_deref())?;
+        bind_idx += 1;
+    }
+    if let Some(ref tid) = patch.task_id {
+        stmt.raw_bind_parameter(bind_idx, tid.map(uuid_to_blob))?;
+        bind_idx += 1;
+    }
+    if let Some(b) = patch.billable {
+        stmt.raw_bind_parameter(bind_idx, bool_to_int(b))?;
+        bind_idx += 1;
+    }
+    stmt.raw_bind_parameter(bind_idx, i64::from(sid))?;
+    stmt.raw_execute()?;
+
+    get_by_sid(conn, sid)?.ok_or(Error::NotFound)
+}
+
+/// List time blocks for a specific task, ordered by start descending.
+///
+/// # Errors
+/// Returns [`crate::Error::Sqlite`] on query failures.
+pub fn list_for_task(conn: &Connection, task_id: Uuid) -> Result<Vec<TimeBlock>, Error> {
+    let sql = format!("{SELECT_TIME_BLOCK_SQL} WHERE task_id = ?1 ORDER BY start_ts DESC");
+    let mut stmt = conn.prepare(&sql)?;
+    let mut rows = stmt.query(params![uuid_to_blob(task_id)])?;
+    let mut out = Vec::new();
+    while let Some(row) = rows.next()? {
+        out.push(read_time_block_row(row)?);
+    }
+    Ok(out)
+}
+
 /// List time blocks ordered by start timestamp descending.
 ///
 /// Running blocks are included only when `include_running` is `true`.
