@@ -40,6 +40,16 @@ impl SigningKey {
         Self(EdSigningKey::from_bytes(bytes))
     }
 
+    /// Return the 32-byte seed as a [`SecretBytes`].
+    ///
+    /// The returned secret is zeroized on drop. Use this only at
+    /// the boundary where you must persist or transmit the seed
+    /// (e.g. encrypting it into a vault); never log it.
+    #[must_use]
+    pub fn to_secret_bytes(&self) -> crate::secret::SecretBytes<32> {
+        crate::secret::SecretBytes::new(self.0.to_bytes())
+    }
+
     /// Derive the corresponding verifying (public) key.
     #[must_use]
     pub fn verifying_key(&self) -> VerifyingKey {

@@ -60,8 +60,16 @@ subtle = "2.6"
 rand_core = { version = "0.6", features = ["getrandom"] }
 thiserror = "1"
 
+# Domain & storage shared deps.
+uuid = { version = "1", features = ["v4", "v7", "serde"] }
+time = { version = "0.3", default-features = false, features = ["std", "macros", "formatting", "parsing", "serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.32", features = ["bundled", "blob", "uuid", "time"] }
+
 # Test-only utilities.
 proptest = "1"
+tempfile = "3"
 
 # Mandatory lint set per docs/architecture.md §4.1.1. Members opt in with
 # `[lints] workspace = true`. `tock-uniffi` overrides `unsafe_code` because
