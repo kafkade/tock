@@ -11,6 +11,12 @@ homepage.workspace = true
 authors.workspace = true
 readme = "README.md"
 
+# tock-server has its own distribution path (Docker image, hand-built
+# release artifacts) and uses a different license. Exclude it from
+# cargo-dist so the CLI release plan doesn't accidentally ship it.
+[package.metadata.dist]
+dist = false
+
 [[bin]]
 name = "tock-server"
 path = "src/main.rs"

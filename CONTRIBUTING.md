@@ -11,7 +11,7 @@ This project follows the [Contributor Covenant Code of Conduct](CODE_OF_CONDUCT.
 
 - **Rust 1.85.0** — pinned in [`rust-toolchain.toml`](rust-toolchain.toml); install via [rustup](https://rustup.rs/) and `rustup` will pick it up automatically.
 - **wasm-pack** (optional) — for WASM builds: `cargo install wasm-pack`
-- **cargo-deny** (optional, runs in CI) — `cargo install cargo-deny`
+- **cargo-deny** (optional, runs in CI) — install with `cargo install cargo-deny` (requires Rust 1.88+) or download a prebuilt binary from the [cargo-deny releases](https://github.com/EmbarkStudios/cargo-deny/releases) page. The repo's `deny.toml` uses SPDX expressions (e.g. `AGPL-3.0-only`) that require cargo-deny ≥ 0.19; older versions will fail to parse the config.
 - **Nix** (optional) — `nix develop` provides the full toolchain via `flake.nix`.
 
 ## Building from Source

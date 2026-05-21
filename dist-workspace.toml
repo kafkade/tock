@@ -3,8 +3,11 @@
 # Drives `cargo dist` release artifacts (CLI installers + tarballs/zips).
 # Foundation-phase: config exists and is validated in CI via
 # `cargo dist plan`, but the release workflow still uses the hand-written
-# `.github/workflows/release.yml` until secrets and Homebrew tap are in
-# place. See docs/distribution/README.md for the migration path.
+# `.github/workflows/release.yml`. `allow-dirty = ["ci"]` skips the
+# "release.yml is out of date" check so `cargo dist plan` succeeds
+# without us regenerating that workflow.
+#
+# See docs/distribution/README.md for the migration path.
 
 [workspace]
 members = ["cargo:."]
@@ -12,17 +15,14 @@ members = ["cargo:."]
 [dist]
 # Pin cargo-dist version so CI/local stay in sync.
 cargo-dist-version = "0.22.1"
-# Which CI to generate workflows for. We are NOT currently using the
-# generated workflow — `.github/workflows/release.yml` is hand-maintained.
-# `allow-dirty = ["ci"]` tells `cargo dist plan` to skip the up-to-date
-# check on the CI workflow file so the plan job succeeds without us
-# running `cargo dist init` and replacing release.yml.
+# Which CI to generate workflows for (we are NOT currently using the
+# generated workflow).
 ci = "github"
+# Skip the up-to-date check on the hand-written release workflow.
 allow-dirty = ["ci"]
 # CLI installers we want to support.
 installers = ["shell", "powershell"]
-# Targets to build for. Mirrors the matrix in release.yml so the two
-# stay in sync.
+# Targets to build for. Mirrors the matrix in release.yml.
 targets = [
     "x86_64-unknown-linux-gnu",
     "aarch64-unknown-linux-gnu",
@@ -30,12 +30,5 @@ targets = [
     "aarch64-apple-darwin",
     "x86_64-pc-windows-msvc",
 ]
-# Publish the tock-cli crate as the user-facing binary.
-publish-jobs = []
+# Run `cargo dist plan` (not full build) for PR validation.
 pr-run-mode = "plan"
-# macOS signing/notarization is wired but only triggers when the secrets
-# are present; missing secrets must not fail the workflow.
-macos-sign = false
-# Bins to ship (just the CLI for now; tock-server has its own release path).
-[dist.binaries]
-"tock-cli" = ["tock"]
