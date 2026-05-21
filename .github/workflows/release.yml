@@ -83,7 +83,7 @@ jobs:
           (Get-FileHash "tock-${{ matrix.target }}.zip" -Algorithm SHA256).Hash.ToLower() + "  tock-${{ matrix.target }}.zip" | Out-File -Encoding utf8 "tock-${{ matrix.target }}.zip.sha256"
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: tock-${{ matrix.target }}
           path: |
