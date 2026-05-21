@@ -1,21 +1,40 @@
 //! # tock-crypto
 //!
-//! Cryptographic primitives for tock: envelope encryption, key hierarchy,
-//! Argon2id KDF, SRP-6a verifier seeding, and recovery codes.
+//! Cryptographic primitives for tock. Pure computation, no I/O, no
+//! async, no `unsafe`. Built on audited [RustCrypto] and [dalek]
+//! crates.
 //!
-//! Pure computation only — no I/O. All key types implement [`Zeroize`]
-//! (added in a later phase) and `Debug` impls redact secret values.
+//! ## Modules
 //!
-//! See `docs/architecture.md` §5 and ADR-002 for the cryptographic design.
+//! - [`aead`]    — AES-256-GCM authenticated encryption.
+//! - [`kdf`]     — Argon2id password hashing and HKDF-SHA256 key derivation.
+//! - [`keyexchange`] — X25519 Diffie-Hellman.
+//! - [`signature`]   — Ed25519 signing and verification.
+//! - [`secret`]  — `SecretBytes<N>` wrapper with zeroize-on-drop,
+//!   constant-time equality, and redacted `Debug`.
+//! - [`random`]  — fallible OS RNG helper.
+//! - [`error`]   — crate-wide [`Error`] enum.
 //!
-//! Foundation-phase placeholder.
+//! All public functions that touch the OS RNG are fallible
+//! (`try_random` / `try_generate`) because the workspace forbids
+//! panicking code.
 //!
-//! [`Zeroize`]: https://docs.rs/zeroize
+//! See [ADR-002] and architecture §5 for the cryptographic design that
+//! drives the API shapes here.
+//!
+//! [RustCrypto]: https://github.com/RustCrypto
+//! [dalek]: https://github.com/dalek-cryptography
+//! [ADR-002]: https://github.com/kafkade/tock/blob/main/docs/adr/ADR-002-end-to-end-encryption.md
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn smoke() {
-        assert_eq!(2 + 2, 4);
-    }
-}
+#![forbid(unsafe_code)]
+
+pub mod aead;
+pub mod error;
+pub mod kdf;
+pub mod keyexchange;
+pub mod random;
+pub mod secret;
+pub mod signature;
+
+pub use error::Error;
+pub use secret::SecretBytes;
