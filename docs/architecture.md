@@ -2743,7 +2743,7 @@ Eight phases. Each ships a usable artifact to keep dogfooding pressure high. Est
 - Monorepo scaffolded (`crates/tock-core`, `-cli`, `-server`; `bindings/swift`; `apps/`).
 - Workspace `Cargo.toml`, `rust-toolchain.toml` pinned, `cargo deny`, `cargo clippy -D warnings`, `cargo fmt --check` in CI.
 - CI/CD: GitHub Actions for Linux/macOS/Windows, code coverage, release artifacts (cargo-dist), signed binaries for macOS, Homebrew tap, Nix flake.
-- Crypto primitives wrapped (XChaCha20-Poly1305, Argon2id, X25519, Ed25519) behind `crypto::` module with property tests.
+- Crypto primitives wrapped (AES-256-GCM, Argon2id, HKDF-SHA256, X25519, Ed25519) behind `tock-crypto` crate with property tests.
 - Vault: SQLite + sqlcipher OR SQLite + app-layer encryption (decision in part 1 §3); migration framework.
 - Event log skeleton (append-only, signed, deterministic IDs).
 - `tracing`-based logging with redaction filter for vault data.

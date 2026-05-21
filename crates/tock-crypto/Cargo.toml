@@ -1,6 +1,6 @@
 [package]
 name = "tock-crypto"
-description = "Cryptographic primitives for tock: key hierarchy, AEAD, KDF, recovery codes."
+description = "Cryptographic primitives for tock: AES-256-GCM, Argon2id, HKDF-SHA256, X25519, Ed25519."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -14,5 +14,16 @@ readme = "README.md"
 workspace = true
 
 [dependencies]
+aes-gcm = { workspace = true }
+argon2 = { workspace = true }
+hkdf = { workspace = true }
+sha2 = { workspace = true }
+x25519-dalek = { workspace = true }
+ed25519-dalek = { workspace = true }
+zeroize = { workspace = true }
+subtle = { workspace = true }
+rand_core = { workspace = true }
+thiserror = { workspace = true }
 
 [dev-dependencies]
+proptest = { workspace = true }
