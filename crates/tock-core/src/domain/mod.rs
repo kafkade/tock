@@ -1,10 +1,11 @@
 //! Domain types for tock's four unified domains.
 //!
-//! This module starts with the task management domain (Phase 1) and
-//! will grow to include habits, time blocks, and focus sessions in
-//! later phases.
+//! This module includes the task, time block, and focus session
+//! domains used by the current CLI phases, and will continue to grow as
+//! habits and richer planning features land.
 
 pub mod area;
+pub mod focus;
 pub mod heading;
 pub mod project;
 pub mod sid;

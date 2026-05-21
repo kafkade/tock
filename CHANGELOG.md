@@ -46,3 +46,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Time tracking: `tock time start/stop/resume/current` commands with automatic task creation on `start` when given a description instead of a task SID
 - Time block listing: `tock time blocks today|week|month|all` with table and JSON output
 - Time reports: `tock time report today|week|month` with per-title aggregation and totals
+- Pomodoro focus timer: `tock focus start/done/skip-break/pause/resume/stop/status/stats` with configurable work, short-break, and long-break intervals. Completed cycles are logged as time blocks automatically
+- Cross-platform notifications on focus events (work done, break done, session complete). Currently stderr-based; upgradeable to desktop notifications via `notify-rust`

@@ -31,6 +31,39 @@ pub fn insert(conn: &Connection, new: &NewTimeBlock) -> Result<TimeBlock, Error>
             source: new.source,
             billable: false,
         },
+        OffsetDateTime::now_utc(),
+        None,
+    )
+}
+
+/// Insert a closed time block with explicit timestamps and return it.
+///
+/// # Errors
+/// Returns [`crate::Error::InvalidState`] when `end_ts` precedes `start_ts`,
+/// [`crate::Error::Sqlite`] on write failures, and [`crate::Error::Core`] if
+/// stored UUID or timestamp data is invalid.
+pub fn insert_completed(
+    conn: &Connection,
+    new: &NewTimeBlock,
+    start_ts: OffsetDateTime,
+    end_ts: OffsetDateTime,
+) -> Result<TimeBlock, Error> {
+    if end_ts < start_ts {
+        return Err(Error::InvalidState("time block end precedes start"));
+    }
+
+    insert_block(
+        conn,
+        &InsertTimeBlockInput {
+            title: &new.title,
+            task_id: new.task_id,
+            project_id: new.project_id,
+            notes: new.notes.as_deref(),
+            source: new.source,
+            billable: false,
+        },
+        start_ts,
+        Some(end_ts),
     )
 }
 
@@ -164,6 +197,8 @@ pub fn resume(conn: &Connection) -> Result<TimeBlock, Error> {
             source: previous.source,
             billable: previous.billable,
         },
+        OffsetDateTime::now_utc(),
+        None,
     )
 }
 
@@ -194,30 +229,35 @@ struct InsertTimeBlockInput<'a> {
     billable: bool,
 }
 
-fn insert_block(conn: &Connection, input: &InsertTimeBlockInput<'_>) -> Result<TimeBlock, Error> {
+fn insert_block(
+    conn: &Connection,
+    input: &InsertTimeBlockInput<'_>,
+    start_ts: OffsetDateTime,
+    end_ts: Option<OffsetDateTime>,
+) -> Result<TimeBlock, Error> {
     let id = Uuid::now_v7();
     let sid = sid_repo::next_sid(conn, SidKind::Block)?;
-    let start_ts = OffsetDateTime::now_utc();
-    let start_ts_text = format_timestamp(start_ts)?;
+    let recorded_at = OffsetDateTime::now_utc();
 
     conn.execute(
         "INSERT INTO time_blocks (
              id, sid, title, start_ts, end_ts, project_id, task_id, notes,
              source, billable, created_at, modified_at
          )
-         VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
         params![
             uuid_to_blob(id),
             i64::from(sid),
             input.title,
-            start_ts_text,
+            format_timestamp(start_ts)?,
+            end_ts.map(format_timestamp).transpose()?,
             input.project_id.map(uuid_to_blob),
             input.task_id.map(uuid_to_blob),
             input.notes,
             input.source.as_str(),
             bool_to_int(input.billable),
-            format_timestamp(start_ts)?,
-            format_timestamp(start_ts)?,
+            format_timestamp(recorded_at)?,
+            format_timestamp(recorded_at)?,
         ],
     )?;
 

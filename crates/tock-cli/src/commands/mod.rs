@@ -2,6 +2,7 @@
 
 pub mod add;
 pub mod done;
+pub mod focus;
 pub mod list;
 pub mod modify;
 pub mod project;
@@ -81,6 +82,8 @@ pub enum Commands {
     },
     /// Time tracking.
     Time(time::TimeArgs),
+    /// Focus timer.
+    Focus(focus::FocusArgs),
     /// List available views.
     Views,
     /// Generate shell completion scripts.
