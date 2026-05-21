@@ -24,7 +24,7 @@ core = []
 # Vault + event types (depend on tock-crypto, uuid, time, zeroize,
 # serde, sha2). Default-on; the WASM smoke build omits this so the
 # `core` slice stays small.
-vault = ["dep:tock-crypto", "dep:uuid", "dep:time", "dep:zeroize", "dep:serde", "dep:sha2"]
+vault = ["dep:tock-crypto", "dep:uuid", "dep:time", "dep:zeroize", "dep:serde", "dep:serde_json", "dep:sha2"]
 # Reserved feature flags for lazy-loaded modules (architecture §4.3.3).
 sync = []
 import-export = []
@@ -42,6 +42,7 @@ time = { workspace = true, optional = true }
 zeroize = { workspace = true, optional = true }
 sha2 = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
 
 [dev-dependencies]
 proptest = { workspace = true }

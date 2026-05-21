@@ -9,6 +9,7 @@ use crate::Error;
 
 pub mod area_repo;
 pub mod focus_repo;
+pub mod habit_repo;
 pub mod heading_repo;
 pub mod project_repo;
 pub mod sid_repo;
