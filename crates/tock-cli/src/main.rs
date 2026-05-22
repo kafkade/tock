@@ -5,6 +5,7 @@
 
 mod commands;
 mod display;
+mod hooks;
 mod notify;
 mod tracing_setup;
 
@@ -13,13 +14,16 @@ use std::process;
 
 use clap::{CommandFactory, Parser};
 use commands::{
-    Commands, focus::FocusCommand, habit::HabitCommand, time::TimeCommand, uda::UdaCommand,
+    Commands, focus::FocusCommand, habit::HabitCommand, hooks_cmd::HooksCommand, time::TimeCommand,
+    uda::UdaCommand,
 };
 use display::{OutputFormat, format_task_detail, format_tasks};
 use notify::notify;
 use rusqlite::Connection;
 use time::format_description::well_known::Rfc3339;
 use tock_core::domain::cadence::ParsedCadence;
+use tock_core::domain::task::{NewTask, Task, TaskStatus};
+use uuid::Uuid;
 
 /// tock — unified personal productivity engine.
 #[derive(Debug, Parser)]
@@ -57,10 +61,17 @@ fn main() {
 }
 
 fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
-    if let Commands::Completions { shell } = &cli.command {
-        let mut cmd = Cli::command();
-        clap_complete::generate(*shell, &mut cmd, "tock", &mut std::io::stdout());
-        return Ok(());
+    match &cli.command {
+        Commands::Completions { shell } => {
+            let mut cmd = Cli::command();
+            clap_complete::generate(*shell, &mut cmd, "tock", &mut std::io::stdout());
+            return Ok(());
+        }
+        Commands::Hooks(args) => {
+            run_hooks_cmd(&args.command);
+            return Ok(());
+        }
+        _ => {}
     }
 
     let password = cli.password.as_deref().map_or(b"" as &[u8], str::as_bytes);
@@ -81,7 +92,8 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         | Commands::Cancel { .. }
         | Commands::Delete { .. }
         | Commands::List { .. }
-        | Commands::Show { .. } => run_task_cmd(conn, &cli.command, &cli.format),
+        | Commands::Show { .. }
+        | Commands::Urgency { .. } => run_task_cmd(conn, &cli.command, &cli.format),
         Commands::Project(args) => run_project_cmd(conn, &args.command),
         Commands::Area(args) => run_area_cmd(conn, &args.command),
         Commands::Tag(args) => run_tag_cmd(conn, &args.command),
@@ -120,6 +132,7 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
             Ok(())
         }
         Commands::Completions { .. } => unreachable!("completions handled before vault open"),
+        Commands::Hooks(_) => unreachable!("hooks handled before vault open"),
     }
 }
 
@@ -130,7 +143,13 @@ fn run_task_cmd(
 ) -> Result<(), Box<dyn std::error::Error>> {
     match cmd {
         Commands::Add { words } => {
-            let new_task = commands::add::parse_add_input(words);
+            let parsed_task = commands::add::parse_add_input(words);
+            let hook_input = new_task_to_hook_json(&parsed_task);
+            let Some(hooked_json) = hooks::run_hook(hooks::HookEvent::OnAdd, &hook_input) else {
+                println!("Add cancelled by hook");
+                return Ok(());
+            };
+            let new_task = new_task_from_hook_json(&parsed_task, &hooked_json)?;
             let task = tock_storage::repo::task_repo::insert(conn, &new_task)?;
             println!("Created task #{} — {}", task.sid, task.title);
         }
@@ -161,6 +180,7 @@ fn run_task_cmd(
                     }
                 }
                 println!("Completed task #{} — {}", task.sid, task.title);
+                let _ = hooks::run_hook(hooks::HookEvent::OnComplete, &task_to_hook_json(&task));
             }
         }
         Commands::Cancel { sids } => {
@@ -200,9 +220,43 @@ fn run_task_cmd(
                 eprintln!("task #{sid} not found");
             }
         }
+        Commands::Urgency { sid } => {
+            if let Some(task) = tock_storage::repo::task_repo::get_by_sid(conn, *sid)? {
+                let breakdown = explain_task_urgency(&task);
+                let total: f64 = breakdown
+                    .iter()
+                    .map(|(_, _, _, contribution)| contribution)
+                    .sum();
+                println!("Urgency for task #{} — {}", task.sid, task.title);
+                for (component, weight, factor, contribution) in breakdown {
+                    println!(
+                        "  {component:<12} weight={weight:>6.2} factor={factor:>6.2} contribution={contribution:>7.2}"
+                    );
+                }
+                println!("  {:<12} {:>30.2}", "total", total);
+            } else {
+                eprintln!("task #{sid} not found");
+            }
+        }
         _ => {}
     }
     Ok(())
+}
+
+fn run_hooks_cmd(cmd: &HooksCommand) {
+    match cmd {
+        HooksCommand::List => {
+            let installed = hooks::list_hooks();
+            if installed.is_empty() {
+                println!("No hooks installed");
+            } else {
+                for (event, path) in installed {
+                    println!("{:<16} {}", event.script_name(), path.display());
+                }
+            }
+        }
+        HooksCommand::Path => println!("{}", hooks::hooks_dir().display()),
+    }
 }
 
 fn run_habit_cmd(conn: &Connection, cmd: &HabitCommand) -> Result<(), Box<dyn std::error::Error>> {
@@ -1601,8 +1655,186 @@ fn print_task_listing(rendered: &str, count: usize, format: OutputFormat) {
     }
 }
 
-fn today_string() -> String {
+fn new_task_to_hook_json(task: &NewTask) -> String {
+    serde_json::json!({
+        "title": &task.title,
+        "notes": &task.notes,
+        "status": task.status.map(|status| status.as_str()),
+        "project_id": task.project_id.map(|id| id.to_string()),
+        "area_id": task.area_id.map(|id| id.to_string()),
+        "heading_id": task.heading_id.map(|id| id.to_string()),
+        "start_date": &task.start_date,
+        "deadline": &task.deadline,
+        "priority": task.priority.map(|priority| priority.as_char().to_string()),
+        "evening": task.evening,
+        "udas": &task.udas.0,
+        "tags": &task.tags,
+    })
+    .to_string()
+}
+
+fn new_task_from_hook_json(original: &NewTask, hook_json: &str) -> Result<NewTask, std::io::Error> {
+    let value: serde_json::Value = serde_json::from_str(hook_json)
+        .map_err(|error| hook_json_error(format!("invalid on-add hook JSON: {error}")))?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| hook_json_error("on-add hook JSON must be an object"))?;
+
+    let mut task = original.clone();
+    if let Some(title) = object.get("title") {
+        task.title = title
+            .as_str()
+            .map(str::to_owned)
+            .ok_or_else(|| hook_json_error("hook field 'title' must be a string"))?;
+    }
+    apply_optional_string_field(object, "notes", &mut task.notes)?;
+    if let Some(status) = object.get("status") {
+        task.status = match status {
+            serde_json::Value::Null => None,
+            serde_json::Value::String(raw) => Some(
+                TaskStatus::from_str_opt(raw)
+                    .ok_or_else(|| hook_json_error(format!("invalid task status '{raw}'")))?,
+            ),
+            _ => {
+                return Err(hook_json_error(
+                    "hook field 'status' must be a string or null",
+                ));
+            }
+        };
+    }
+    apply_optional_uuid_field(object, "project_id", &mut task.project_id)?;
+    apply_optional_uuid_field(object, "area_id", &mut task.area_id)?;
+    apply_optional_uuid_field(object, "heading_id", &mut task.heading_id)?;
+    apply_optional_string_field(object, "start_date", &mut task.start_date)?;
+    apply_optional_string_field(object, "deadline", &mut task.deadline)?;
+    if let Some(priority) = object.get("priority") {
+        task.priority = match priority {
+            serde_json::Value::Null => None,
+            serde_json::Value::String(raw) => Some(
+                tock_core::domain::task::Priority::from_str_opt(raw)
+                    .ok_or_else(|| hook_json_error(format!("invalid task priority '{raw}'")))?,
+            ),
+            _ => {
+                return Err(hook_json_error(
+                    "hook field 'priority' must be a string or null",
+                ));
+            }
+        };
+    }
+    if let Some(evening) = object.get("evening") {
+        task.evening = evening
+            .as_bool()
+            .ok_or_else(|| hook_json_error("hook field 'evening' must be a boolean"))?;
+    }
+    if let Some(udas) = object.get("udas") {
+        if udas.is_object() {
+            task.udas = tock_core::domain::uda::UdaValues::from_json(&udas.to_string());
+        } else {
+            return Err(hook_json_error("hook field 'udas' must be an object"));
+        }
+    }
+    if let Some(tags) = object.get("tags") {
+        let values = tags
+            .as_array()
+            .ok_or_else(|| hook_json_error("hook field 'tags' must be an array"))?;
+        task.tags = values
+            .iter()
+            .map(|value| {
+                value
+                    .as_str()
+                    .map(str::to_owned)
+                    .ok_or_else(|| hook_json_error("hook field 'tags' must contain only strings"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+    }
+
+    Ok(task)
+}
+
+fn task_to_hook_json(task: &Task) -> String {
+    serde_json::json!({
+        "sid": task.sid,
+        "title": &task.title,
+        "status": task.status.as_str(),
+        "priority": task.priority.map(|priority| priority.as_char().to_string()),
+        "deadline": &task.deadline,
+        "tags": &task.tags,
+    })
+    .to_string()
+}
+
+fn explain_task_urgency(task: &Task) -> Vec<(String, f64, f64, f64)> {
     let now = time::OffsetDateTime::now_utc();
+    let today = today_string_for(now);
+    let input = tock_core::domain::urgency::UrgencyInput {
+        priority: task.priority.map(|priority| priority.as_char()),
+        deadline: task.deadline.as_deref(),
+        start_date: task.start_date.as_deref(),
+        tags: &task.tags,
+        has_project: task.project_id.is_some(),
+        created_at_days_ago: task_age_days(task.created_at, now),
+        today: &today,
+    };
+    tock_core::domain::urgency::explain(
+        &input,
+        &tock_core::domain::urgency::UrgencyConfig::default(),
+    )
+}
+
+fn apply_optional_string_field(
+    object: &serde_json::Map<String, serde_json::Value>,
+    field: &str,
+    target: &mut Option<String>,
+) -> Result<(), std::io::Error> {
+    if let Some(value) = object.get(field) {
+        *target = match value {
+            serde_json::Value::Null => None,
+            serde_json::Value::String(raw) => Some(raw.clone()),
+            _ => {
+                return Err(hook_json_error(format!(
+                    "hook field '{field}' must be a string or null"
+                )));
+            }
+        };
+    }
+    Ok(())
+}
+
+fn apply_optional_uuid_field(
+    object: &serde_json::Map<String, serde_json::Value>,
+    field: &str,
+    target: &mut Option<Uuid>,
+) -> Result<(), std::io::Error> {
+    if let Some(value) = object.get(field) {
+        *target = match value {
+            serde_json::Value::Null => None,
+            serde_json::Value::String(raw) => Some(Uuid::parse_str(raw).map_err(|error| {
+                hook_json_error(format!("invalid UUID in hook field '{field}': {error}"))
+            })?),
+            _ => {
+                return Err(hook_json_error(format!(
+                    "hook field '{field}' must be a UUID string or null"
+                )));
+            }
+        };
+    }
+    Ok(())
+}
+
+fn hook_json_error(message: impl Into<String>) -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::InvalidData, message.into())
+}
+
+fn task_age_days(created_at: time::OffsetDateTime, now: time::OffsetDateTime) -> f64 {
+    let days = (now - created_at).whole_days().clamp(0, 365);
+    f64::from(u16::try_from(days).unwrap_or(365))
+}
+
+fn today_string() -> String {
+    today_string_for(time::OffsetDateTime::now_utc())
+}
+
+fn today_string_for(now: time::OffsetDateTime) -> String {
     format!(
         "{:04}-{:02}-{:02}",
         now.year(),
