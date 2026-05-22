@@ -97,6 +97,7 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         Commands::Project(args) => run_project_cmd(conn, &args.command),
         Commands::Area(args) => run_area_cmd(conn, &args.command),
         Commands::Tag(args) => run_tag_cmd(conn, &args.command),
+        Commands::Report(args) => run_report_cmd(conn, &args.command),
         Commands::Time(args) => run_time_cmd(conn, &args.command),
         Commands::Focus(args) => run_focus_cmd(conn, &args.command),
         Commands::Habit(args) => run_habit_cmd(conn, &args.command),
@@ -1441,6 +1442,83 @@ fn run_uda_cmd(conn: &Connection, cmd: &UdaCommand) -> Result<(), Box<dyn std::e
     Ok(())
 }
 
+fn run_report_cmd(
+    conn: &Connection,
+    cmd: &commands::report::ReportCommand,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match cmd {
+        commands::report::ReportCommand::Define {
+            name,
+            query,
+            sort,
+            columns,
+        } => {
+            let cols = columns
+                .split(',')
+                .map(str::trim)
+                .filter(|column| !column.is_empty())
+                .map(str::to_owned)
+                .collect();
+            let new = tock_core::domain::report::NewReport {
+                name: name.clone(),
+                query: query.clone(),
+                sort: sort.clone(),
+                columns: cols,
+            };
+            let report = tock_storage::repo::report_repo::insert(conn, &new)?;
+            println!("Defined report '{}' — query: {}", report.name, report.query);
+        }
+        commands::report::ReportCommand::List => {
+            let reports = tock_storage::repo::report_repo::list(conn)?;
+            if reports.is_empty() {
+                println!("No saved reports. Examples:");
+                println!("  tock report define overdue --query '+OVERDUE' --sort deadline");
+                println!(
+                    "  tock report define urgent  --query 'status:pending priority:H' --sort urgency"
+                );
+                println!(
+                    "  tock report define work    --query 'tag:work status:pending' --columns sid,title,deadline"
+                );
+            } else {
+                for report in &reports {
+                    let sort_info = report.sort.as_deref().unwrap_or("urgency");
+                    println!(
+                        "  {:<20}  query: {:<30}  sort: {}",
+                        report.name, report.query, sort_info
+                    );
+                }
+                println!("\n{} report(s)", reports.len());
+            }
+        }
+        commands::report::ReportCommand::Show { name, json } => {
+            let Some(report) = tock_storage::repo::report_repo::get_by_name(conn, name)? else {
+                eprintln!("report '{name}' not found");
+                return Ok(());
+            };
+            let today = today_string();
+            let query_args = report.query.split_whitespace().collect::<Vec<_>>();
+            let filter = tock_parse::filter::parse_filter(&query_args, &today);
+            let mut filtered: Vec<_> = tock_storage::repo::task_repo::list(conn, false)?
+                .into_iter()
+                .filter(|task| tock_parse::filter::matches(&filter, &TaskFilterable(task)))
+                .collect();
+            sort_report_tasks(&mut filtered, report.sort.as_deref());
+            if *json {
+                println!("{}", format_tasks(&filtered, OutputFormat::Json));
+            } else {
+                println!("── {} ──", report.name);
+                let rendered = format_report_tasks(&filtered, &report.columns);
+                print_task_listing(&rendered, filtered.len(), OutputFormat::Table);
+            }
+        }
+        commands::report::ReportCommand::Rm { name } => {
+            tock_storage::repo::report_repo::delete(conn, name)?;
+            println!("Deleted report '{name}'");
+        }
+    }
+    Ok(())
+}
+
 fn run_view_cmd(
     conn: &Connection,
     name: &str,
@@ -1476,6 +1554,168 @@ fn run_view_cmd(
         print_task_listing(&rendered, filtered.len(), format);
     }
     Ok(())
+}
+
+fn sort_report_tasks(tasks: &mut [Task], sort: Option<&str>) {
+    match sort.map(str::trim).filter(|field| !field.is_empty()) {
+        Some(field) if field.eq_ignore_ascii_case("deadline") => tasks.sort_by(|left, right| {
+            compare_optional_text(left.deadline.as_deref(), right.deadline.as_deref())
+                .then_with(|| left.sid.cmp(&right.sid))
+        }),
+        Some(field) if field.eq_ignore_ascii_case("created") => tasks.sort_by(|left, right| {
+            left.created_at
+                .cmp(&right.created_at)
+                .then_with(|| left.sid.cmp(&right.sid))
+        }),
+        Some(field) if field.eq_ignore_ascii_case("sid") => {
+            tasks.sort_by(|left, right| left.sid.cmp(&right.sid));
+        }
+        _ => tasks.sort_by(|left, right| {
+            right
+                .urgency
+                .partial_cmp(&left.urgency)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| left.sid.cmp(&right.sid))
+        }),
+    }
+}
+
+fn compare_optional_text(left: Option<&str>, right: Option<&str>) -> std::cmp::Ordering {
+    match (left, right) {
+        (Some(left), Some(right)) => left.cmp(right),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => std::cmp::Ordering::Equal,
+    }
+}
+
+fn format_report_tasks(tasks: &[Task], columns: &[String]) -> String {
+    let normalized_columns = normalized_report_columns(columns);
+    let widths = normalized_columns
+        .iter()
+        .map(|column| {
+            let header_width = report_column_label(column).chars().count();
+            let cell_width = tasks
+                .iter()
+                .map(|task| report_column_value(task, column).chars().count())
+                .max()
+                .unwrap_or(0);
+            std::cmp::max(
+                header_width,
+                std::cmp::min(cell_width, report_column_max_width(column)),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    let header = normalized_columns
+        .iter()
+        .zip(&widths)
+        .map(|(column, width)| format_report_cell(report_column_label(column), *width))
+        .collect::<Vec<_>>()
+        .join("  ");
+    let rows = tasks
+        .iter()
+        .map(|task| {
+            normalized_columns
+                .iter()
+                .zip(&widths)
+                .map(|(column, width)| {
+                    format_report_cell(&report_column_value(task, column), *width)
+                })
+                .collect::<Vec<_>>()
+                .join("  ")
+        })
+        .collect::<Vec<_>>();
+
+    let mut lines = Vec::with_capacity(rows.len().saturating_add(1));
+    lines.push(header);
+    lines.extend(rows);
+    lines.join("\n")
+}
+
+fn normalized_report_columns(columns: &[String]) -> Vec<String> {
+    let normalized = columns
+        .iter()
+        .map(|column| column.trim().to_ascii_lowercase())
+        .filter(|column| !column.is_empty())
+        .collect::<Vec<_>>();
+    if normalized.is_empty() {
+        vec![
+            String::from("sid"),
+            String::from("priority"),
+            String::from("status"),
+            String::from("title"),
+            String::from("deadline"),
+            String::from("tags"),
+        ]
+    } else {
+        normalized
+    }
+}
+
+fn report_column_label(column: &str) -> &'static str {
+    match column {
+        "sid" => "SID",
+        "priority" => "Priority",
+        "status" => "Status",
+        "title" => "Title",
+        "deadline" => "Deadline",
+        "tags" => "Tags",
+        "urgency" => "Urgency",
+        "created" | "created_at" => "Created",
+        "modified" | "modified_at" => "Modified",
+        "start" | "start_date" => "Start",
+        "evening" => "Evening",
+        _ => "Value",
+    }
+}
+
+fn report_column_max_width(column: &str) -> usize {
+    match column {
+        "sid" => 4,
+        "urgency" | "evening" => 7,
+        "priority" => 8,
+        "status" => 9,
+        "deadline" | "created" | "created_at" | "modified" | "modified_at" | "start"
+        | "start_date" => 12,
+        "tags" => 30,
+        "title" => 40,
+        _ => 20,
+    }
+}
+
+fn report_column_value(task: &Task, column: &str) -> String {
+    match column {
+        "sid" => task.sid.to_string(),
+        "priority" => task
+            .priority
+            .map_or_else(String::new, |priority| priority.as_char().to_string()),
+        "status" => task.status.as_str().to_owned(),
+        "title" => task.title.clone(),
+        "deadline" => task.deadline.clone().unwrap_or_default(),
+        "tags" => task
+            .tags
+            .iter()
+            .map(|tag| format!("#{tag}"))
+            .collect::<Vec<_>>()
+            .join(" "),
+        "urgency" => format!("{:.2}", task.urgency),
+        "created" | "created_at" => today_string_for(task.created_at),
+        "modified" | "modified_at" => today_string_for(task.modified_at),
+        "start" | "start_date" => task.start_date.clone().unwrap_or_default(),
+        "evening" => {
+            if task.evening {
+                String::from("yes")
+            } else {
+                String::new()
+            }
+        }
+        _ => String::new(),
+    }
+}
+
+fn format_report_cell(value: &str, width: usize) -> String {
+    format!("{:<width$}", truncate_str(value, width))
 }
 
 fn parse_habit_direction_arg(

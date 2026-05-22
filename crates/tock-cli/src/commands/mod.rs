@@ -7,6 +7,7 @@ pub mod habit;
 pub mod hooks_cmd;
 pub mod modify;
 pub mod project;
+pub mod report;
 pub mod tag;
 pub mod time;
 pub mod uda;
@@ -79,6 +80,8 @@ pub enum Commands {
     Area(project::AreaArgs),
     /// Tag management.
     Tag(tag::TagArgs),
+    /// Saved custom reports.
+    Report(report::ReportArgs),
     /// Show a built-in view (inbox, today, upcoming, anytime, someday, logbook).
     View {
         /// View name.

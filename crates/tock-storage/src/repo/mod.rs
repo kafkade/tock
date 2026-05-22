@@ -12,6 +12,7 @@ pub mod focus_repo;
 pub mod habit_repo;
 pub mod heading_repo;
 pub mod project_repo;
+pub mod report_repo;
 pub mod sid_repo;
 pub mod tag_repo;
 pub mod task_repo;

@@ -1,3 +1,4 @@
+<!-- markdownlint-disable MD024 -->
 # Changelog
 
 All notable changes to this project will be documented in this file.
@@ -6,6 +7,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+### Added
+
+- User-defined attributes (UDAs): `tock uda add effort --type number` to declare custom fields on tasks. Set values with `tock mod <sid> uda.effort:5`. Filter with `uda.effort:5` in list/view commands
+- Urgency scoring engine with configurable coefficients and `tock urgency <sid>` breakdown. Tasks auto-sorted by urgency in list views
+- Hook scripts API: external scripts at `~/.config/tock/hooks/` for lifecycle events (`on-add`, `on-complete`). Pre-hooks can modify or cancel operations. `tock hooks ls/path`
+- Custom report definitions: `tock report define/show/ls/rm` with saved filters, sorting, and column selection
+- Pomodoro focus timer: `tock focus start/done/skip-break/pause/resume/stop/status/stats` with configurable intervals and automatic time-block logging
+- Focus session history per task: `tock focus history <sid>` and auto-stop on `tock done`
+- Time block editing: `tock time edit <sid>` with `--title/--start/--end/--task/--billable` flags
+- Habit tracking: CRUD, identity statements, stacking, cadences (daily/weekly/specific-days), Fibonacci leveling, streak tracking with skip/freeze grace days, backfill logging, break-bad-habit mode, and per-habit reminders
+- Cross-platform notifications on focus events (stderr-based, upgradeable to desktop)
+- README rewritten with full feature documentation and install instructions
 
 ## [0.1.0] - 2026-05-21
 
@@ -46,18 +60,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Time tracking: `tock time start/stop/resume/current` commands with automatic task creation on `start` when given a description instead of a task SID
 - Time block listing: `tock time blocks today|week|month|all` with table and JSON output
 - Time reports: `tock time report today|week|month` with per-title aggregation and totals
-- Pomodoro focus timer: `tock focus start/done/skip-break/pause/resume/stop/status/stats` with configurable work, short-break, and long-break intervals. Completed cycles are logged as time blocks automatically
-- Cross-platform notifications on focus events (work done, break done, session complete). Currently stderr-based; upgradeable to desktop notifications via `notify-rust`
-- Focus session history per task: `tock focus history <task-sid>` shows all focus sessions and time blocks linked to a task
-- Time block editing: `tock time edit <sid> --title "..." --start "..." --end "..." --task <sid> --billable true` to correct or update blocks after the fact
-- Completing a task (`tock done`) auto-stops any active focus session or running timer linked to that task
-- Habit tracking: `tock habit add/ls/show/log/mod/archive/status` with identity statements ("I am a reader"), cue/craving/response/reward fields, and Fibonacci-scaled leveling (Spark → Embodied)
-- Habit stacking: `--stack-after <sid>` links habits in a chain so completing one nudges the next
-- Habit cadences: daily, weekly target (N×/week), specific days (Mon/Wed/Fri), and every-N-days patterns with human-readable display
-- Streak tracking with grace days: `tock habit skip/freeze` preserves streaks; `tock habit streaks <sid>` shows current and best streak history
-- Habit backfill logging: `tock habit backfill <sid> <date>` for catching up on missed days with automatic streak recalculation
-- Break-bad-habit mode: habits with `--direction break` show "days clean" instead of "streak", use 🚫 indicator, and have inverted scoring where NOT doing the habit maintains the streak. `tock habit slip <sid>` logs a slip for break habits
-- Habit reminders: `tock habit remind <sid> --at 07:00 [--days monday,wednesday]` to set time-based reminders. `--list` to view, `--clear` to remove all. Reminders stored per-habit as JSON
-- User-defined attributes (UDAs): `tock uda add effort --type number` to declare custom fields on tasks. Set values with `tock mod <sid> uda.effort:5`. Filter with `uda.effort:5` in list/view commands. UDAs are stored as JSON in the tasks table and preserved through import/export
-- Urgency scoring engine with configurable coefficients: deadline proximity, priority, age, tags, project, blocked/waiting penalties. Tasks are auto-sorted by urgency. `tock urgency <sid>` shows the breakdown
-- Hook scripts API: external scripts at `~/.config/tock/hooks/` run at lifecycle events (`on-add`, `on-complete`, etc.). Pre-hooks can modify JSON input or cancel operations. `tock hooks ls` and `tock hooks path` for management

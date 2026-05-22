@@ -63,6 +63,9 @@ cargo clippy --workspace --all-targets -- -D warnings
 # License + advisory audit (matches CI's `deny` job)
 cargo deny check
 
+# Run the full test suite
+cargo test --workspace
+
 # All checks run in CI on every pull request
 ```
 
