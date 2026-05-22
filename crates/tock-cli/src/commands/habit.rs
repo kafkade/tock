@@ -136,4 +136,29 @@ pub enum HabitCommand {
     },
     /// Show habit status overview.
     Status,
+    /// Log a slip for a break-bad-habit (convenience for `log --slip`).
+    Slip {
+        /// Habit SID.
+        sid: u32,
+        /// Notes about the slip.
+        #[arg(long)]
+        notes: Option<String>,
+    },
+    /// Add or manage reminders for a habit.
+    Remind {
+        /// Habit SID.
+        sid: u32,
+        /// Time of day (HH:MM, e.g. "07:00"). Adds a reminder.
+        #[arg(long)]
+        at: Option<String>,
+        /// Days this reminder applies to (comma-separated, e.g. "monday,wednesday").
+        #[arg(long)]
+        days: Option<String>,
+        /// Clear all reminders for this habit.
+        #[arg(long)]
+        clear: bool,
+        /// List current reminders.
+        #[arg(long)]
+        list: bool,
+    },
 }
