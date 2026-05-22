@@ -4,10 +4,90 @@
 > and focus timer fused into a single end-to-end encrypted, local-first
 > system.
 
-**Status:** Phase 0 — foundation. The repository scaffolding is in place;
-nothing is shippable yet. See
-[`docs/architecture.md`](docs/architecture.md) for the full design and
-[`docs/adr/`](docs/adr/) for accepted decisions.
+## Features
+
+### Task management
+
+```sh
+tock add "Buy groceries #errands !H due:tomorrow"
+tock ls                          # list tasks sorted by urgency
+tock show 1                      # task detail view
+tock mod 1 !M due:friday         # modify priority + deadline
+tock done 1 2 3                  # batch complete
+tock view today                  # built-in smart views
+tock urgency 1                   # explain urgency breakdown
+```
+
+Sigil syntax for inline metadata: `#tag`, `!H/M/L` (priority),
+`due:tomorrow` (natural language dates). Filter with `status:pending`,
+`tag:work`, `+TODAY`, `+OVERDUE`. Six built-in views: inbox, today,
+upcoming, anytime, someday, logbook.
+
+### Time tracking
+
+```sh
+tock time start "Review PR #code"   # auto-creates task + starts timer
+tock time start 1                   # start on existing task
+tock time stop                      # stop current block
+tock time resume                    # re-start most recent
+tock time blocks today              # list blocks
+tock time report week               # aggregated report
+tock time edit 1 --title "Updated"  # edit a block
+```
+
+### Focus timer (Pomodoro)
+
+```sh
+tock focus start --task 1 --cycles 4 --work 25
+tock focus done              # complete a cycle → auto-logs time block
+tock focus skip-break        # skip break, start working
+tock focus pause / resume / stop
+tock focus status            # show active session
+tock focus stats today       # completed cycles, focus time
+tock focus history 1         # per-task focus history
+```
+
+### Habit tracking
+
+```sh
+tock habit add "Read 10 pages" --identity "I am a reader" --cue "After dinner" --daily
+tock habit add "No social media" --direction break
+tock habit log 1                 # log completion
+tock habit slip 2                # log a break-habit slip
+tock habit skip 1 --reason flu   # skip without breaking streak
+tock habit status                # all habits with streaks + levels
+tock habit streaks 1             # streak history
+tock habit remind 1 --at 07:00   # set reminder
+```
+
+Identity statements, habit stacking (`--stack-after`), cadences (daily,
+N×/week, specific days), Fibonacci leveling (Spark → Embodied), and
+grace days (skip/freeze).
+
+### More
+
+- **Projects & areas** — `tock project add/ls/archive`, `tock area add/ls`
+- **Tags** — `#tag` sigils, `tock tag ls/rename`
+- **Custom reports** — `tock report define overdue --query '+OVERDUE' --sort deadline`
+- **User-defined attributes** — `tock uda add effort --type number`, filter with `uda.effort:5`
+- **Hook scripts** — external scripts at `~/.config/tock/hooks/` for lifecycle events
+- **Output formats** — `--format table|compact|json`, per-command `--json`
+- **Shell completions** — `tock completions bash|zsh|fish|elvish|powershell`
+- **JSON import/export** — `tock export json`, `tock import json --file backup.json`
+- **Encrypted vault** — password-protected, AES-256-GCM per-event AEAD, Ed25519 signed event log
+
+## Install
+
+Download the latest release from
+[GitHub Releases](https://github.com/kafkade/tock/releases), or build
+from source:
+
+```sh
+git clone https://github.com/kafkade/tock.git
+cd tock
+cargo build --release -p tock-cli
+# Binary at target/release/tock (or tock.exe on Windows)
+```
 
 ## Repository layout
 
@@ -19,28 +99,22 @@ tock/
 ├── dist-workspace.toml         # cargo-dist config
 ├── flake.nix                   # Nix dev shell
 ├── crates/
-│   ├── tock-core/              # PURE: zero I/O, zero net, zero async runtime
-│   ├── tock-crypto/            # PURE: key hierarchy, AEAD, KDF
-│   ├── tock-parse/             # PURE: filter DSL + natural-language parser
-│   ├── tock-storage/           # SQLite adapter (rusqlite + sqlcipher)
-│   ├── tock-sync/              # event log, conflict res, transport trait
-│   ├── tock-import/            # importers (Todoist, Things 3, Toggl, ...)
-│   ├── tock-export/            # exporters (JSON, CSV, iCal, hledger)
-│   ├── tock-cli/               # `tock` binary (clap + ratatui)
+│   ├── tock-core/              # PURE: domain model, urgency, crypto types
+│   ├── tock-crypto/            # PURE: AES-256-GCM, Argon2id, HKDF, Ed25519
+│   ├── tock-parse/             # PURE: filter DSL + natural-language dates
+│   ├── tock-storage/           # SQLite vault, repos, migrations
+│   ├── tock-cli/               # `tock` binary (clap CLI)
+│   ├── tock-import/            # JSON importer
+│   ├── tock-export/            # JSON exporter
+│   ├── tock-sync/              # event log, sync protocol (foundation)
 │   ├── tock-server/            # Axum sync server — AGPL-3.0-only
-│   └── tock-uniffi/            # UniFFI scaffolding crate (Apple bindings)
-├── bindings/
-│   └── swift/                  # generated Swift package (Phase 5)
-├── apps/
-│   ├── ios/                    # SwiftUI iPhone / iPad / watchOS (Phase 5)
-│   ├── macos/                  # SwiftUI macOS (Phase 5)
-│   └── web/                    # Next.js + WASM (Phase 6)
-├── xtask/                      # `cargo xtask` build orchestration
+│   └── tock-uniffi/            # UniFFI scaffolding (Apple bindings)
 ├── docs/
 │   ├── architecture.md
-│   ├── adr/
+│   ├── adr/                    # 10 Architecture Decision Records
 │   └── distribution/
 └── scripts/
+    └── release.ps1             # automated release script
 ```
 
 ## Licensing
@@ -55,23 +129,19 @@ Dual-licensed per [ADR-006](docs/adr/ADR-006-licensing-dual-license.md):
 See [CONTRIBUTING.md](CONTRIBUTING.md). All commits require a DCO
 sign-off (`git commit -s`).
 
-## Quickstart (development)
+## Development
 
 ```sh
-# Verify the workspace builds and tests pass
+# Build + test
 cargo build --workspace
 cargo test --workspace
 
-# Lint + format
+# Lint
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all -- --check
-
-# License + advisory audit
-cargo install cargo-deny  # one-time
 cargo deny check
 
-# WASM smoke build (used by CI)
-rustup target add wasm32-unknown-unknown
+# WASM smoke build (CI gate)
 cargo build -p tock-core --target wasm32-unknown-unknown --no-default-features --features core
 ```
 

@@ -62,6 +62,11 @@ pub const ALL: &[Migration] = &[
         name: "uda_definitions",
         sql: include_str!("migrations/0007_uda_definitions.sql"),
     },
+    Migration {
+        version: 8,
+        name: "saved_reports",
+        sql: include_str!("migrations/0008_saved_reports.sql"),
+    },
 ];
 
 /// Compute the sha-256 hex digest of `sql`.
