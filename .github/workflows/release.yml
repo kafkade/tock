@@ -112,9 +112,11 @@ jobs:
       - name: Create GitHub Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_NOTES: ${{ steps.extract.outputs.release_notes }}
         run: |
+          echo "$RELEASE_NOTES" > "$RUNNER_TEMP/release-notes.md"
           gh release create "${{ github.ref_name }}" \
             --title "${{ github.ref_name }}" \
-            --notes "${{ steps.extract.outputs.release_notes }}" \
+            --notes-file "$RUNNER_TEMP/release-notes.md" \
             ${{ steps.prerelease.outputs.flag }} \
             artifacts/*

@@ -74,6 +74,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt"]
 # CLI argument parsing.
 clap = { version = "4", features = ["derive", "env"] }
 clap_complete = "4"
+dirs = "6"
 
 # Test-only utilities.
 proptest = "1"

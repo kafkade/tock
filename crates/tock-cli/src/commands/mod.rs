@@ -4,6 +4,7 @@ pub mod add;
 pub mod done;
 pub mod focus;
 pub mod habit;
+pub mod hooks_cmd;
 pub mod modify;
 pub mod project;
 pub mod tag;
@@ -67,6 +68,11 @@ pub enum Commands {
         #[arg(long)]
         json: bool,
     },
+    /// Explain urgency score for a task.
+    Urgency {
+        /// Task SID.
+        sid: u32,
+    },
     /// Project management.
     Project(project::ProjectArgs),
     /// Area management.
@@ -87,6 +93,8 @@ pub enum Commands {
     Focus(focus::FocusArgs),
     /// Habit tracking.
     Habit(habit::HabitArgs),
+    /// Hook script management.
+    Hooks(hooks_cmd::HooksArgs),
     /// User-defined attribute management.
     Uda(uda::UdaArgs),
     /// List available views.

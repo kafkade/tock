@@ -13,6 +13,7 @@ use crate::repo::{sid_repo, tag_repo};
 use tock_core::domain::sid::SidKind;
 use tock_core::domain::task::{NewTask, Priority, Task, TaskPatch, TaskStatus};
 use tock_core::domain::uda::UdaValues;
+use tock_core::domain::urgency::{UrgencyConfig, UrgencyInput, calculate};
 
 const ENTITY_KIND: &str = "task";
 const SELECT_TASK_SQL: &str = "SELECT id, sid, title, notes, status, area_id, project_id, heading_id, start_date, deadline, priority, evening, udas, urgency_cache, created_at, modified_at, done_at, cancelled_at, deleted_at FROM tasks";
@@ -65,6 +66,7 @@ pub fn insert(conn: &Connection, input: &NewTask) -> Result<Task, Error> {
     for tag_name in &input.tags {
         tag_repo::tag_entity(conn, id, ENTITY_KIND, tag_name)?;
     }
+    let _ = recalculate_urgency(conn, sid)?;
 
     get_by_id(conn, id)?.ok_or(Error::NotFound)
 }
@@ -206,6 +208,7 @@ pub fn update(conn: &Connection, sid: u32, patch: &TaskPatch) -> Result<Task, Er
     for tag_name in &patch.remove_tags {
         tag_repo::untag_entity(conn, existing.id, ENTITY_KIND, tag_name)?;
     }
+    let _ = recalculate_urgency(conn, sid)?;
 
     get_by_sid(conn, sid)?.ok_or(Error::NotFound)
 }
@@ -238,8 +241,35 @@ pub fn set_status(conn: &Connection, sid: u32, status: TaskStatus) -> Result<Tas
             i64::from(sid),
         ],
     )?;
+    let _ = recalculate_urgency(conn, sid)?;
 
     get_by_sid(conn, sid)?.ok_or(Error::NotFound)
+}
+
+/// Recalculate and persist a task's cached urgency score.
+///
+/// # Errors
+/// Returns [`crate::Error::NotFound`] if the task does not exist and
+/// [`crate::Error::Sqlite`] for read or write failures.
+pub fn recalculate_urgency(conn: &Connection, sid: u32) -> Result<f64, Error> {
+    let task = get_by_sid(conn, sid)?.ok_or(Error::NotFound)?;
+    let now = OffsetDateTime::now_utc();
+    let today = urgency_today(now);
+    let input = UrgencyInput {
+        priority: task.priority.map(|priority| priority.as_char()),
+        deadline: task.deadline.as_deref(),
+        start_date: task.start_date.as_deref(),
+        tags: &task.tags,
+        has_project: task.project_id.is_some(),
+        created_at_days_ago: task_age_days(task.created_at, now),
+        today: &today,
+    };
+    let score = calculate(&input, &UrgencyConfig::default());
+    conn.execute(
+        "UPDATE tasks SET urgency_cache = ?1 WHERE sid = ?2",
+        params![score, i64::from(sid)],
+    )?;
+    Ok(score)
 }
 
 /// Soft-delete a task by setting `deleted_at`.
@@ -275,6 +305,20 @@ where
         return Ok(Some(task));
     }
     Ok(None)
+}
+
+fn task_age_days(created_at: OffsetDateTime, now: OffsetDateTime) -> f64 {
+    let days = (now - created_at).whole_days().clamp(0, 365);
+    f64::from(u16::try_from(days).unwrap_or(365))
+}
+
+fn urgency_today(now: OffsetDateTime) -> String {
+    format!(
+        "{:04}-{:02}-{:02}",
+        now.year(),
+        u8::from(now.month()),
+        now.day()
+    )
 }
 
 fn read_task_row(row: &Row<'_>) -> Result<Task, Error> {
@@ -353,7 +397,7 @@ mod tests {
     #![allow(clippy::expect_used, clippy::unwrap_used)]
 
     use rusqlite::Connection;
-    use tock_core::domain::task::{NewTask, TaskPatch, TaskStatus};
+    use tock_core::domain::task::{NewTask, Priority, TaskPatch, TaskStatus};
 
     use super::{get_by_sid, insert, update};
     use crate::migrations;
@@ -410,5 +454,24 @@ mod tests {
         let updated = update(&conn, task.sid, &remove_patch).expect("remove uda");
         assert_eq!(updated.udas.get_str("effort").as_deref(), Some("5"));
         assert_eq!(updated.udas.get_str("owner"), None);
+    }
+
+    #[test]
+    fn recalculates_urgency_when_tasks_change() {
+        let conn = test_conn();
+        let mut new_task = sample_new_task();
+        new_task.priority = Some(Priority::Low);
+        let task = insert(&conn, &new_task).expect("insert task");
+        let baseline_urgency = task.urgency;
+
+        let mut patch = TaskPatch {
+            priority: Some(Some(Priority::High)),
+            ..TaskPatch::default()
+        };
+        patch.add_tags.push(String::from("next"));
+        let updated = update(&conn, task.sid, &patch).expect("update task urgency");
+
+        assert!(baseline_urgency > 0.0);
+        assert!(updated.urgency > baseline_urgency);
     }
 }

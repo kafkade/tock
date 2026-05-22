@@ -15,3 +15,4 @@ pub mod tag;
 pub mod task;
 pub mod time_block;
 pub mod uda;
+pub mod urgency;
