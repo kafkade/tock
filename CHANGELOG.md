@@ -14,11 +14,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Urgency scoring engine with configurable coefficients and `tock urgency <sid>` breakdown. Tasks auto-sorted by urgency in list views
 - Hook scripts API: external scripts at `~/.config/tock/hooks/` for lifecycle events (`on-add`, `on-complete`). Pre-hooks can modify or cancel operations. `tock hooks ls/path`
 - Custom report definitions: `tock report define/show/ls/rm` with saved filters, sorting, and column selection
+- Task dependencies: `tock depend/undepend`, dependency-aware blocked/blocking filters (`+BLOCKED`, `+BLOCKING`), blocked urgency penalties, and dependency details in `tock show`
+- Recurring tasks: `tock add --recur daily|weekly|monthly|yearly|every-3d|every-2w`, automatic next-instance creation on completion, and recurrence details in `tock show`
+- Named contexts: `tock context define/set/clear/list/rm` for reusable filters, with active contexts automatically applied to `tock ls`, `tock view`, and `tock report show`
 - Pomodoro focus timer: `tock focus start/done/skip-break/pause/resume/stop/status/stats` with configurable intervals and automatic time-block logging
 - Focus session history per task: `tock focus history <sid>` and auto-stop on `tock done`
 - Time block editing: `tock time edit <sid>` with `--title/--start/--end/--task/--billable` flags
 - Habit tracking: CRUD, identity statements, stacking, cadences (daily/weekly/specific-days), Fibonacci leveling, streak tracking with skip/freeze grace days, backfill logging, break-bad-habit mode, and per-habit reminders
 - Cross-platform notifications on focus events (stderr-based, upgradeable to desktop)
+- Interactive ratatui TUI launched with `tock tui`, with sidebar views/projects, task list, detail pane, vim-style navigation, refresh, complete, and delete actions
 - README rewritten with full feature documentation and install instructions
 
 ## [0.1.0] - 2026-05-21

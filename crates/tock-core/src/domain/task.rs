@@ -115,10 +115,14 @@ pub struct Task {
     pub project_id: Option<Uuid>,
     /// Heading within a project (optional).
     pub heading_id: Option<Uuid>,
+    /// Template task this instance was generated from.
+    pub parent_id: Option<Uuid>,
     /// Deferred start date.
     pub start_date: Option<String>,
     /// Hard deadline.
     pub deadline: Option<String>,
+    /// Stored recurrence specification as JSON.
+    pub recurrence: Option<String>,
     /// Priority level.
     pub priority: Option<Priority>,
     /// Whether this is an "evening" task.
@@ -127,6 +131,8 @@ pub struct Task {
     pub udas: UdaValues,
     /// Tags (flat list of tag names).
     pub tags: Vec<String>,
+    /// Tasks this task depends on.
+    pub depends_on: Vec<Uuid>,
     /// Cached urgency score (recomputed on write).
     pub urgency: f64,
     /// When the task was created.
@@ -156,10 +162,14 @@ pub struct NewTask {
     pub area_id: Option<Uuid>,
     /// Heading within the project.
     pub heading_id: Option<Uuid>,
+    /// Template task this instance was generated from.
+    pub parent_id: Option<Uuid>,
     /// Deferred start date.
     pub start_date: Option<String>,
     /// Deadline.
     pub deadline: Option<String>,
+    /// Stored recurrence specification as JSON.
+    pub recurrence: Option<String>,
     /// Priority.
     pub priority: Option<Priority>,
     /// Evening flag.
@@ -201,6 +211,10 @@ pub struct TaskPatch {
     pub add_tags: Vec<String>,
     /// Tags to remove.
     pub remove_tags: Vec<String>,
+    /// Dependency SIDs to add.
+    pub add_deps: Vec<u32>,
+    /// Dependency SIDs to remove.
+    pub remove_deps: Vec<u32>,
 }
 
 #[cfg(test)]

@@ -217,8 +217,10 @@ mod tests {
             area_id: None,
             project_id: None,
             heading_id: None,
+            parent_id: None,
             start_date: None,
             deadline: Some(String::from("2026-06-01")),
+            recurrence: None,
             priority: Some(Priority::High),
             evening: false,
             udas: {
@@ -227,6 +229,7 @@ mod tests {
                 values
             },
             tags: vec![String::from("errands")],
+            depends_on: Vec::new(),
             urgency: 0.0,
             created_at: OffsetDateTime::UNIX_EPOCH,
             modified_at: OffsetDateTime::UNIX_EPOCH,

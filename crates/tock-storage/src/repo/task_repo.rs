@@ -1,6 +1,8 @@
 //! Repository functions for tasks.
 
-use rusqlite::{Connection, Row, params};
+use std::collections::HashSet;
+
+use rusqlite::{Connection, OptionalExtension, Row, params};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -10,13 +12,14 @@ use super::{
 };
 use crate::Error;
 use crate::repo::{sid_repo, tag_repo};
+use tock_core::domain::recurrence::RecurrenceSpec;
 use tock_core::domain::sid::SidKind;
 use tock_core::domain::task::{NewTask, Priority, Task, TaskPatch, TaskStatus};
 use tock_core::domain::uda::UdaValues;
 use tock_core::domain::urgency::{UrgencyConfig, UrgencyInput, calculate};
 
 const ENTITY_KIND: &str = "task";
-const SELECT_TASK_SQL: &str = "SELECT id, sid, title, notes, status, area_id, project_id, heading_id, start_date, deadline, priority, evening, udas, urgency_cache, created_at, modified_at, done_at, cancelled_at, deleted_at FROM tasks";
+const SELECT_TASK_SQL: &str = "SELECT id, sid, title, notes, status, area_id, project_id, heading_id, parent_id, start_date, deadline, recurrence, priority, evening, udas, urgency_cache, created_at, modified_at, done_at, cancelled_at, deleted_at FROM tasks";
 
 /// Insert a new task row, attach its tags, and return the stored task.
 ///
@@ -34,13 +37,13 @@ pub fn insert(conn: &Connection, input: &NewTask) -> Result<Task, Error> {
     conn.execute(
         "INSERT INTO tasks (
              id, sid, title, notes, status, area_id, project_id, heading_id,
-             start_date, deadline, scheduled_for, evening, priority, udas,
+             parent_id, start_date, deadline, scheduled_for, recurrence, evening, priority, udas,
              urgency_cache, created_at, modified_at, done_at, cancelled_at, deleted_at
          )
          VALUES (
              ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8,
-             ?9, ?10, NULL, ?11, ?12, ?13,
-             0.0, ?14, ?15, ?16, ?17, NULL
+             ?9, ?10, ?11, NULL, ?12, ?13, ?14, ?15,
+             0.0, ?16, ?17, ?18, ?19, NULL
          )",
         params![
             uuid_to_blob(id),
@@ -51,8 +54,10 @@ pub fn insert(conn: &Connection, input: &NewTask) -> Result<Task, Error> {
             input.area_id.map(uuid_to_blob),
             input.project_id.map(uuid_to_blob),
             input.heading_id.map(uuid_to_blob),
+            input.parent_id.map(uuid_to_blob),
             input.start_date,
             input.deadline,
+            input.recurrence,
             bool_to_int(input.evening),
             input.priority.map(priority_to_storage),
             input.udas.to_json(),
@@ -71,7 +76,102 @@ pub fn insert(conn: &Connection, input: &NewTask) -> Result<Task, Error> {
     get_by_id(conn, id)?.ok_or(Error::NotFound)
 }
 
-/// Fetch a task by SID, including its tags.
+/// Add a dependency edge between two tasks.
+///
+/// # Errors
+/// Returns [`crate::Error::NotFound`] if either SID is missing,
+/// [`crate::Error::InvalidState`] if the dependency would be circular or too deep,
+/// and [`crate::Error::Sqlite`] on database failures.
+pub fn add_dependency(conn: &Connection, task_sid: u32, depends_on_sid: u32) -> Result<(), Error> {
+    let task_uuid = task_id_for_sid(conn, task_sid)?;
+    let dependency_uuid = task_id_for_sid(conn, depends_on_sid)?;
+    ensure_no_circular_dependency(conn, task_uuid, dependency_uuid)?;
+
+    conn.execute(
+        "INSERT OR IGNORE INTO task_dependencies (task_id, depends_on_id) VALUES (?1, ?2)",
+        params![uuid_to_blob(task_uuid), uuid_to_blob(dependency_uuid)],
+    )?;
+    let _ = recalculate_urgency(conn, task_sid)?;
+    Ok(())
+}
+
+/// Remove a dependency edge between two tasks.
+///
+/// # Errors
+/// Returns [`crate::Error::Sqlite`] on database failures and
+/// [`crate::Error::NotFound`] if the task SID does not exist.
+pub fn remove_dependency(
+    conn: &Connection,
+    task_sid: u32,
+    depends_on_sid: u32,
+) -> Result<(), Error> {
+    let task_uuid = task_id_for_sid(conn, task_sid)?;
+    let dependency_uuid = task_id_for_sid(conn, depends_on_sid)?;
+
+    conn.execute(
+        "DELETE FROM task_dependencies WHERE task_id = ?1 AND depends_on_id = ?2",
+        params![uuid_to_blob(task_uuid), uuid_to_blob(dependency_uuid)],
+    )?;
+    let _ = recalculate_urgency(conn, task_sid)?;
+    Ok(())
+}
+
+/// Return all dependency UUIDs for a task.
+///
+/// # Errors
+/// Returns [`crate::Error::Sqlite`] on database failures and
+/// [`crate::Error::Core`] if stored UUID data is invalid.
+pub fn get_dependencies(conn: &Connection, task_id: Uuid) -> Result<Vec<Uuid>, Error> {
+    let mut stmt = conn.prepare(
+        "SELECT depends_on_id FROM task_dependencies WHERE task_id = ?1 ORDER BY rowid ASC",
+    )?;
+    let mut rows = stmt.query(params![uuid_to_blob(task_id)])?;
+    let mut dependencies = Vec::new();
+    while let Some(row) = rows.next()? {
+        dependencies.push(parse_uuid_blob(&row.get::<_, Vec<u8>>(0)?)?);
+    }
+    Ok(dependencies)
+}
+
+/// Return all task UUIDs that depend on a task.
+///
+/// # Errors
+/// Returns [`crate::Error::Sqlite`] on database failures and
+/// [`crate::Error::Core`] if stored UUID data is invalid.
+pub fn get_dependents(conn: &Connection, task_id: Uuid) -> Result<Vec<Uuid>, Error> {
+    let mut stmt = conn.prepare(
+        "SELECT task_id FROM task_dependencies WHERE depends_on_id = ?1 ORDER BY rowid ASC",
+    )?;
+    let mut rows = stmt.query(params![uuid_to_blob(task_id)])?;
+    let mut dependents = Vec::new();
+    while let Some(row) = rows.next()? {
+        dependents.push(parse_uuid_blob(&row.get::<_, Vec<u8>>(0)?)?);
+    }
+    Ok(dependents)
+}
+
+/// Return whether a task has any unmet dependency.
+///
+/// Dependencies in `done` or `cancelled` status are considered satisfied.
+///
+/// # Errors
+/// Returns [`crate::Error::Sqlite`] on database failures.
+pub fn is_blocked(conn: &Connection, task_id: Uuid) -> Result<bool, Error> {
+    let blocked: i64 = conn.query_row(
+        "SELECT EXISTS(
+             SELECT 1
+             FROM task_dependencies td
+             JOIN tasks dep ON dep.id = td.depends_on_id
+             WHERE td.task_id = ?1
+               AND dep.status NOT IN ('done', 'cancelled')
+         )",
+        params![uuid_to_blob(task_id)],
+        |row| row.get(0),
+    )?;
+    Ok(blocked != 0)
+}
+
+/// Fetch a task by SID, including its tags and dependencies.
 ///
 /// # Errors
 /// Returns [`crate::Error::Sqlite`] on query failures and
@@ -80,7 +180,7 @@ pub fn get_by_sid(conn: &Connection, sid: u32) -> Result<Option<Task>, Error> {
     fetch_task(conn, "sid = ?1", params![i64::from(sid)])
 }
 
-/// Fetch a task by UUID, including its tags.
+/// Fetch a task by UUID, including its tags and dependencies.
 ///
 /// # Errors
 /// Returns [`crate::Error::Sqlite`] on query failures and
@@ -108,7 +208,7 @@ pub fn list(conn: &Connection, include_deleted: bool) -> Result<Vec<Task>, Error
         let mut stmt = conn.prepare(&sql)?;
         let mut rows = stmt.query(params![])?;
         while let Some(row) = rows.next()? {
-            tasks.push(read_task_row(row)?);
+            tasks.push(read_task_row(conn, row)?);
         }
     }
 
@@ -208,7 +308,16 @@ pub fn update(conn: &Connection, sid: u32, patch: &TaskPatch) -> Result<Task, Er
     for tag_name in &patch.remove_tags {
         tag_repo::untag_entity(conn, existing.id, ENTITY_KIND, tag_name)?;
     }
+    for dependency_sid in &patch.add_deps {
+        add_dependency(conn, sid, *dependency_sid)?;
+    }
+    for dependency_sid in &patch.remove_deps {
+        remove_dependency(conn, sid, *dependency_sid)?;
+    }
     let _ = recalculate_urgency(conn, sid)?;
+    if patch.status.is_some() {
+        recalculate_dependents_urgency(conn, existing.id)?;
+    }
 
     get_by_sid(conn, sid)?.ok_or(Error::NotFound)
 }
@@ -217,8 +326,9 @@ pub fn update(conn: &Connection, sid: u32, patch: &TaskPatch) -> Result<Task, Er
 ///
 /// # Errors
 /// Returns [`crate::Error::Sqlite`] on write failures,
-/// [`crate::Error::NotFound`] if the task does not exist, and
-/// [`crate::Error::Core`] if stored UUID or timestamp data is invalid.
+/// [`crate::Error::NotFound`] if the task does not exist,
+/// [`crate::Error::InvalidState`] if the recurrence metadata is invalid,
+/// and [`crate::Error::Core`] if stored UUID or timestamp data is invalid.
 pub fn set_status(conn: &Connection, sid: u32, status: TaskStatus) -> Result<Task, Error> {
     let existing = get_by_sid(conn, sid)?.ok_or(Error::NotFound)?;
     let now = OffsetDateTime::now_utc();
@@ -242,6 +352,11 @@ pub fn set_status(conn: &Connection, sid: u32, status: TaskStatus) -> Result<Tas
         ],
     )?;
     let _ = recalculate_urgency(conn, sid)?;
+    recalculate_dependents_urgency(conn, existing.id)?;
+
+    if status == TaskStatus::Done && existing.status != TaskStatus::Done {
+        let _ = spawn_next_recurrence(conn, &existing, now)?;
+    }
 
     get_by_sid(conn, sid)?.ok_or(Error::NotFound)
 }
@@ -261,6 +376,7 @@ pub fn recalculate_urgency(conn: &Connection, sid: u32) -> Result<f64, Error> {
         start_date: task.start_date.as_deref(),
         tags: &task.tags,
         has_project: task.project_id.is_some(),
+        is_blocked: is_blocked(conn, task.id)?,
         created_at_days_ago: task_age_days(task.created_at, now),
         today: &today,
     };
@@ -300,11 +416,57 @@ where
     let mut stmt = conn.prepare(&sql)?;
     let mut rows = stmt.query(params)?;
     if let Some(row) = rows.next()? {
-        let mut task = read_task_row(row)?;
+        let mut task = read_task_row(conn, row)?;
         task.tags = tag_repo::tags_for_entity(conn, task.id, ENTITY_KIND)?;
         return Ok(Some(task));
     }
     Ok(None)
+}
+
+fn read_task_row(conn: &Connection, row: &Row<'_>) -> Result<Task, Error> {
+    let id_bytes: Vec<u8> = row.get("id")?;
+    let id = parse_uuid_blob(&id_bytes)?;
+    let sid_value: i64 = row.get("sid")?;
+    let status_raw: String = row.get("status")?;
+    let priority_raw: Option<String> = row.get("priority")?;
+    let evening_raw: i64 = row.get("evening")?;
+    let udas_raw: String = row.get("udas")?;
+
+    Ok(Task {
+        id,
+        sid: parse_u32(sid_value)?,
+        title: row.get("title")?,
+        notes: row.get("notes")?,
+        status: parse_task_status(&status_raw)?,
+        area_id: parse_optional_uuid_blob(row.get::<_, Option<Vec<u8>>>("area_id")?.as_deref())?,
+        project_id: parse_optional_uuid_blob(
+            row.get::<_, Option<Vec<u8>>>("project_id")?.as_deref(),
+        )?,
+        heading_id: parse_optional_uuid_blob(
+            row.get::<_, Option<Vec<u8>>>("heading_id")?.as_deref(),
+        )?,
+        parent_id: parse_optional_uuid_blob(
+            row.get::<_, Option<Vec<u8>>>("parent_id")?.as_deref(),
+        )?,
+        start_date: row.get("start_date")?,
+        deadline: row.get("deadline")?,
+        recurrence: row.get("recurrence")?,
+        priority: priority_raw.as_deref().map(parse_priority).transpose()?,
+        evening: parse_bool(evening_raw)?,
+        udas: UdaValues::from_json(&udas_raw),
+        tags: Vec::new(),
+        depends_on: get_dependencies(conn, id)?,
+        urgency: row.get("urgency_cache")?,
+        created_at: parse_timestamp(&row.get::<_, String>("created_at")?)?,
+        modified_at: parse_timestamp(&row.get::<_, String>("modified_at")?)?,
+        done_at: parse_optional_timestamp(row.get::<_, Option<String>>("done_at")?.as_deref())?,
+        cancelled_at: parse_optional_timestamp(
+            row.get::<_, Option<String>>("cancelled_at")?.as_deref(),
+        )?,
+        deleted_at: parse_optional_timestamp(
+            row.get::<_, Option<String>>("deleted_at")?.as_deref(),
+        )?,
+    })
 }
 
 fn task_age_days(created_at: OffsetDateTime, now: OffsetDateTime) -> f64 {
@@ -321,44 +483,8 @@ fn urgency_today(now: OffsetDateTime) -> String {
     )
 }
 
-fn read_task_row(row: &Row<'_>) -> Result<Task, Error> {
-    let id_bytes: Vec<u8> = row.get("id")?;
-    let sid_value: i64 = row.get("sid")?;
-    let status_raw: String = row.get("status")?;
-    let priority_raw: Option<String> = row.get("priority")?;
-    let evening_raw: i64 = row.get("evening")?;
-    let udas_raw: String = row.get("udas")?;
-
-    Ok(Task {
-        id: parse_uuid_blob(&id_bytes)?,
-        sid: parse_u32(sid_value)?,
-        title: row.get("title")?,
-        notes: row.get("notes")?,
-        status: parse_task_status(&status_raw)?,
-        area_id: parse_optional_uuid_blob(row.get::<_, Option<Vec<u8>>>("area_id")?.as_deref())?,
-        project_id: parse_optional_uuid_blob(
-            row.get::<_, Option<Vec<u8>>>("project_id")?.as_deref(),
-        )?,
-        heading_id: parse_optional_uuid_blob(
-            row.get::<_, Option<Vec<u8>>>("heading_id")?.as_deref(),
-        )?,
-        start_date: row.get("start_date")?,
-        deadline: row.get("deadline")?,
-        priority: priority_raw.as_deref().map(parse_priority).transpose()?,
-        evening: parse_bool(evening_raw)?,
-        udas: UdaValues::from_json(&udas_raw),
-        tags: Vec::new(),
-        urgency: row.get("urgency_cache")?,
-        created_at: parse_timestamp(&row.get::<_, String>("created_at")?)?,
-        modified_at: parse_timestamp(&row.get::<_, String>("modified_at")?)?,
-        done_at: parse_optional_timestamp(row.get::<_, Option<String>>("done_at")?.as_deref())?,
-        cancelled_at: parse_optional_timestamp(
-            row.get::<_, Option<String>>("cancelled_at")?.as_deref(),
-        )?,
-        deleted_at: parse_optional_timestamp(
-            row.get::<_, Option<String>>("deleted_at")?.as_deref(),
-        )?,
-    })
+fn completion_date(now: OffsetDateTime) -> String {
+    urgency_today(now)
 }
 
 fn parse_task_status(raw: &str) -> Result<TaskStatus, Error> {
@@ -392,6 +518,112 @@ fn status_timestamps(
     (done_at, cancelled_at)
 }
 
+fn task_id_for_sid(conn: &Connection, sid: u32) -> Result<Uuid, Error> {
+    let raw: Option<Vec<u8>> = conn
+        .query_row(
+            "SELECT id FROM tasks WHERE sid = ?1",
+            params![i64::from(sid)],
+            |row| row.get(0),
+        )
+        .optional()?;
+    raw.as_deref()
+        .map(parse_uuid_blob)
+        .transpose()?
+        .ok_or(Error::NotFound)
+}
+
+fn task_sid_for_id(conn: &Connection, id: Uuid) -> Result<Option<u32>, Error> {
+    let sid: Option<i64> = conn
+        .query_row(
+            "SELECT sid FROM tasks WHERE id = ?1",
+            params![uuid_to_blob(id)],
+            |row| row.get(0),
+        )
+        .optional()?;
+    sid.map(parse_u32).transpose()
+}
+
+fn ensure_no_circular_dependency(
+    conn: &Connection,
+    task_id: Uuid,
+    depends_on_id: Uuid,
+) -> Result<(), Error> {
+    if task_id == depends_on_id {
+        return Err(Error::InvalidState("circular dependency"));
+    }
+
+    let mut stack = vec![(depends_on_id, 0_usize)];
+    let mut visited = HashSet::new();
+    while let Some((current, depth)) = stack.pop() {
+        if current == task_id {
+            return Err(Error::InvalidState("circular dependency"));
+        }
+        if depth >= 100 {
+            return Err(Error::InvalidState("dependency chain too deep"));
+        }
+        if !visited.insert(current) {
+            continue;
+        }
+        for dependency in get_dependencies(conn, current)? {
+            stack.push((dependency, depth + 1));
+        }
+    }
+    Ok(())
+}
+
+fn recalculate_dependents_urgency(conn: &Connection, task_id: Uuid) -> Result<(), Error> {
+    for dependent_id in get_dependents(conn, task_id)? {
+        if let Some(sid) = task_sid_for_id(conn, dependent_id)? {
+            let _ = recalculate_urgency(conn, sid)?;
+        }
+    }
+    Ok(())
+}
+
+fn spawn_next_recurrence(
+    conn: &Connection,
+    existing: &Task,
+    completed_at: OffsetDateTime,
+) -> Result<Option<Task>, Error> {
+    let Some(recurrence_json) = existing.recurrence.as_deref() else {
+        return Ok(None);
+    };
+    let spec = RecurrenceSpec::from_json(recurrence_json)
+        .ok_or(Error::InvalidState("invalid recurrence spec"))?;
+    let completed_on = completion_date(completed_at);
+    let next_deadline = spec
+        .next_date(
+            existing.deadline.as_deref().unwrap_or(&completed_on),
+            &completed_on,
+        )
+        .ok_or(Error::InvalidState("invalid recurrence date"))?;
+    let template_id = existing.parent_id.unwrap_or(existing.id);
+    let next_task = insert(
+        conn,
+        &NewTask {
+            title: existing.title.clone(),
+            notes: existing.notes.clone(),
+            status: Some(TaskStatus::Pending),
+            project_id: existing.project_id,
+            area_id: existing.area_id,
+            heading_id: existing.heading_id,
+            parent_id: Some(template_id),
+            start_date: None,
+            deadline: Some(next_deadline.clone()),
+            recurrence: existing.recurrence.clone(),
+            priority: existing.priority,
+            evening: existing.evening,
+            udas: existing.udas.clone(),
+            tags: existing.tags.clone(),
+        },
+    )?;
+    println!(
+        "  (created recurring task #{} due {})",
+        next_task.sid, next_deadline
+    );
+    Ok(Some(next_task))
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used, clippy::unwrap_used)]
@@ -399,7 +631,10 @@ mod tests {
     use rusqlite::Connection;
     use tock_core::domain::task::{NewTask, Priority, TaskPatch, TaskStatus};
 
-    use super::{get_by_sid, insert, update};
+    use super::{
+        add_dependency, get_by_sid, insert, is_blocked, remove_dependency, set_status, update,
+    };
+    use crate::Error;
     use crate::migrations;
 
     fn test_conn() -> Connection {
@@ -473,5 +708,68 @@ mod tests {
 
         assert!(baseline_urgency > 0.0);
         assert!(updated.urgency > baseline_urgency);
+    }
+
+    #[test]
+    fn manages_dependencies_and_blocked_state() {
+        let conn = test_conn();
+        let dependency = insert(&conn, &sample_new_task()).expect("insert dependency");
+        let dependent = insert(&conn, &sample_new_task()).expect("insert dependent");
+
+        add_dependency(&conn, dependent.sid, dependency.sid).expect("add dependency");
+        let blocked = get_by_sid(&conn, dependent.sid)
+            .expect("fetch dependent")
+            .expect("dependent exists");
+        assert_eq!(blocked.depends_on, vec![dependency.id]);
+        assert!(is_blocked(&conn, dependent.id).expect("check blocked"));
+
+        set_status(&conn, dependency.sid, TaskStatus::Done).expect("complete dependency");
+        assert!(!is_blocked(&conn, dependent.id).expect("check unblocked"));
+
+        remove_dependency(&conn, dependent.sid, dependency.sid).expect("remove dependency");
+        let unblocked = get_by_sid(&conn, dependent.sid)
+            .expect("fetch dependent")
+            .expect("dependent exists");
+        assert!(unblocked.depends_on.is_empty());
+    }
+
+    #[test]
+    fn rejects_circular_dependencies() {
+        let conn = test_conn();
+        let task_a = insert(&conn, &sample_new_task()).expect("insert task a");
+        let task_b = insert(&conn, &sample_new_task()).expect("insert task b");
+        let task_c = insert(&conn, &sample_new_task()).expect("insert task c");
+
+        add_dependency(&conn, task_a.sid, task_b.sid).expect("add first dependency");
+        add_dependency(&conn, task_b.sid, task_c.sid).expect("add second dependency");
+
+        let error = add_dependency(&conn, task_c.sid, task_a.sid).expect_err("reject cycle");
+        assert!(matches!(error, Error::InvalidState("circular dependency")));
+    }
+
+    #[test]
+    fn completing_recurring_task_creates_next_instance() {
+        let conn = test_conn();
+        let mut recurring = sample_new_task();
+        recurring.title = String::from("Review goals");
+        recurring.deadline = Some(String::from("2026-01-10"));
+        recurring.recurrence = Some(r#"{"pattern":"daily","mode":"periodic"}"#.to_string());
+        recurring.tags.push(String::from("ritual"));
+        let original = insert(&conn, &recurring).expect("insert recurring task");
+
+        let completed = set_status(&conn, original.sid, TaskStatus::Done).expect("complete task");
+        assert_eq!(completed.status, TaskStatus::Done);
+
+        let tasks = super::list(&conn, false).expect("list tasks");
+        assert_eq!(tasks.len(), 2);
+        let next = tasks
+            .into_iter()
+            .find(|task| task.sid != original.sid)
+            .expect("find next instance");
+        assert_eq!(next.title, "Review goals");
+        assert_eq!(next.deadline.as_deref(), Some("2026-01-11"));
+        assert_eq!(next.parent_id, Some(original.id));
+        assert_eq!(next.recurrence, original.recurrence);
+        assert_eq!(next.tags, vec![String::from("ritual")]);
     }
 }

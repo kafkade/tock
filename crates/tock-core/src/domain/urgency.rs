@@ -54,6 +54,8 @@ pub struct UrgencyInput<'a> {
     pub tags: &'a [String],
     /// Whether the task belongs to a project.
     pub has_project: bool,
+    /// Whether the task is currently blocked by unmet dependencies.
+    pub is_blocked: bool,
     /// Age of the task in days.
     pub created_at_days_ago: f64,
     /// Today's date in `YYYY-MM-DD` form for comparisons.
@@ -111,7 +113,7 @@ pub fn explain(input: &UrgencyInput<'_>, config: &UrgencyConfig) -> Vec<(String,
     if has_tag(input.tags, "next") {
         components.push(component("next", config.next_weight, 1.0));
     }
-    if has_tag(input.tags, "blocked") {
+    if input.is_blocked || has_tag(input.tags, "blocked") {
         components.push(component("blocked", config.blocked_weight, 1.0));
     }
 
@@ -207,6 +209,7 @@ mod tests {
             start_date,
             tags,
             has_project: false,
+            is_blocked: false,
             created_at_days_ago,
             today: "2025-01-15",
         }
@@ -302,6 +305,23 @@ mod tests {
         );
         let blocked = calculate(
             &input(None, None, None, &blocked_tags, 0.0),
+            &UrgencyConfig::default(),
+        );
+        assert!(blocked < baseline);
+    }
+
+    #[test]
+    fn blocked_state_tanks_urgency() {
+        let tags = Vec::new();
+        let baseline = calculate(
+            &input(None, None, None, &tags, 0.0),
+            &UrgencyConfig::default(),
+        );
+        let blocked = calculate(
+            &UrgencyInput {
+                is_blocked: true,
+                ..input(None, None, None, &tags, 0.0)
+            },
             &UrgencyConfig::default(),
         );
         assert!(blocked < baseline);

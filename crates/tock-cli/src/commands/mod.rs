@@ -1,6 +1,7 @@
 //! CLI subcommands.
 
 pub mod add;
+pub mod context;
 pub mod done;
 pub mod focus;
 pub mod habit;
@@ -20,6 +21,9 @@ use clap::Subcommand;
 pub enum Commands {
     /// Add a new task. Supports sigils: #tag, !H/M/L, due:YYYY-MM-DD.
     Add {
+        /// Recurrence: daily, weekly, monthly, yearly, every-3d, every-2w.
+        #[arg(long)]
+        recur: Option<String>,
         /// Task description (may include sigils).
         #[arg(trailing_var_arg = true, num_args = 1..)]
         words: Vec<String>,
@@ -50,6 +54,20 @@ pub enum Commands {
         /// Task SID(s).
         #[arg(required = true, num_args = 1..)]
         sids: Vec<u32>,
+    },
+    /// Add a dependency: task <sid> depends on <dep-sid>.
+    Depend {
+        /// Task SID.
+        sid: u32,
+        /// Dependency SID.
+        on: u32,
+    },
+    /// Remove a dependency.
+    Undepend {
+        /// Task SID.
+        sid: u32,
+        /// Dependency SID.
+        from: u32,
     },
     /// List tasks.
     #[command(alias = "ls")]
@@ -82,6 +100,8 @@ pub enum Commands {
     Tag(tag::TagArgs),
     /// Saved custom reports.
     Report(report::ReportArgs),
+    /// Named filter contexts.
+    Context(context::ContextArgs),
     /// Show a built-in view (inbox, today, upcoming, anytime, someday, logbook).
     View {
         /// View name.
@@ -102,6 +122,8 @@ pub enum Commands {
     Uda(uda::UdaArgs),
     /// List available views.
     Views,
+    /// Launch the interactive terminal user interface.
+    Tui,
     /// Generate shell completion scripts.
     Completions {
         /// Shell to generate completions for: bash, zsh, fish, elvish, powershell.

@@ -22,7 +22,11 @@ no-default-features = false
 db-path = "~/.cargo/advisory-db"
 db-urls = ["https://github.com/rustsec/advisory-db"]
 yanked = "deny"
-ignore = []
+ignore = [
+    # paste crate is unmaintained but has no security vulnerabilities and
+    # is a transitive dependency of ratatui/crossterm. No safe upgrade available.
+    "RUSTSEC-2024-0436",
+]
 
 [licenses]
 # SPDX identifiers. Keep this list tight; new licenses require an explicit
