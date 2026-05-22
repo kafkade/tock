@@ -1,7 +1,11 @@
 //! Task domain model per architecture §2.1.
 
+use std::collections::BTreeMap;
+
 use time::OffsetDateTime;
 use uuid::Uuid;
+
+use crate::domain::uda::UdaValues;
 
 /// Task status — the lifecycle states a task can be in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -119,6 +123,8 @@ pub struct Task {
     pub priority: Option<Priority>,
     /// Whether this is an "evening" task.
     pub evening: bool,
+    /// User-defined attributes (JSON key-value pairs).
+    pub udas: UdaValues,
     /// Tags (flat list of tag names).
     pub tags: Vec<String>,
     /// Cached urgency score (recomputed on write).
@@ -158,6 +164,8 @@ pub struct NewTask {
     pub priority: Option<Priority>,
     /// Evening flag.
     pub evening: bool,
+    /// Initial UDA values.
+    pub udas: UdaValues,
     /// Tags to apply.
     pub tags: Vec<String>,
 }
@@ -185,6 +193,10 @@ pub struct TaskPatch {
     pub priority: Option<Option<Priority>>,
     /// New evening flag.
     pub evening: Option<bool>,
+    /// UDA values to set (merged with existing values).
+    pub set_udas: BTreeMap<String, serde_json::Value>,
+    /// UDA keys to remove.
+    pub remove_udas: Vec<String>,
     /// Tags to add.
     pub add_tags: Vec<String>,
     /// Tags to remove.

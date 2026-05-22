@@ -4,11 +4,11 @@ pub mod add;
 pub mod done;
 pub mod focus;
 pub mod habit;
-pub mod list;
 pub mod modify;
 pub mod project;
 pub mod tag;
 pub mod time;
+pub mod uda;
 pub mod views;
 
 use clap::Subcommand;
@@ -87,6 +87,8 @@ pub enum Commands {
     Focus(focus::FocusArgs),
     /// Habit tracking.
     Habit(habit::HabitArgs),
+    /// User-defined attribute management.
+    Uda(uda::UdaArgs),
     /// List available views.
     Views,
     /// Generate shell completion scripts.

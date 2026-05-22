@@ -24,12 +24,22 @@ pub fn parse_modify_args(args: &[String]) -> TaskPatch {
         patch.deadline = Some(Some(d));
     }
 
-    // Check for title:"..." syntax.
     if let Some(title_val) = extract_field(&remaining, "title") {
         patch.title = Some(title_val);
     }
     if let Some(notes_val) = extract_field(&remaining, "notes") {
         patch.notes = Some(Some(notes_val));
+    }
+
+    for token in remaining.split_whitespace() {
+        if let Some(rest) = token.strip_prefix("uda.") {
+            if let Some((key, value)) = rest.split_once(':') {
+                patch.set_udas.insert(
+                    key.to_string(),
+                    serde_json::Value::String(value.to_string()),
+                );
+            }
+        }
     }
 
     patch
@@ -43,4 +53,20 @@ fn extract_field(text: &str, field: &str) -> Option<String> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::expect_used, clippy::unwrap_used)]
+
+    use super::parse_modify_args;
+
+    #[test]
+    fn parses_uda_assignments() {
+        let args = vec![String::from("uda.owner:sam"), String::from("uda.effort:5")];
+        let patch = parse_modify_args(&args);
+
+        assert_eq!(patch.set_udas["owner"], serde_json::json!("sam"));
+        assert_eq!(patch.set_udas["effort"], serde_json::json!("5"));
+    }
 }

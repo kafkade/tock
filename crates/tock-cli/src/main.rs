@@ -12,7 +12,9 @@ use std::path::PathBuf;
 use std::process;
 
 use clap::{CommandFactory, Parser};
-use commands::{Commands, focus::FocusCommand, habit::HabitCommand, time::TimeCommand};
+use commands::{
+    Commands, focus::FocusCommand, habit::HabitCommand, time::TimeCommand, uda::UdaCommand,
+};
 use display::{OutputFormat, format_task_detail, format_tasks};
 use notify::notify;
 use rusqlite::Connection;
@@ -86,6 +88,7 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         Commands::Time(args) => run_time_cmd(conn, &args.command),
         Commands::Focus(args) => run_focus_cmd(conn, &args.command),
         Commands::Habit(args) => run_habit_cmd(conn, &args.command),
+        Commands::Uda(args) => run_uda_cmd(conn, &args.command),
         Commands::View { name, json } => run_view_cmd(conn, name, *json, &cli.format),
         Commands::Views => {
             let today_str = today_string();
@@ -177,11 +180,17 @@ fn run_task_cmd(
             }
         }
         Commands::List { filter, json } => {
-            let _filter = commands::list::parse_filter(filter);
+            let today = today_string();
+            let filter_args = filter.iter().map(String::as_str).collect::<Vec<_>>();
+            let parsed_filter = tock_parse::filter::parse_filter(&filter_args, &today);
             let tasks = tock_storage::repo::task_repo::list(conn, false)?;
+            let filtered: Vec<_> = tasks
+                .into_iter()
+                .filter(|task| tock_parse::filter::matches(&parsed_filter, &TaskFilterable(task)))
+                .collect();
             let format = selected_output_format(global_format, *json);
-            let rendered = format_tasks(&tasks, format);
-            print_task_listing(&rendered, tasks.len(), format);
+            let rendered = format_tasks(&filtered, format);
+            print_task_listing(&rendered, filtered.len(), format);
         }
         Commands::Show { sid, json } => {
             if let Some(task) = tock_storage::repo::task_repo::get_by_sid(conn, *sid)? {
@@ -1328,6 +1337,56 @@ fn run_tag_cmd(
     Ok(())
 }
 
+fn run_uda_cmd(conn: &Connection, cmd: &UdaCommand) -> Result<(), Box<dyn std::error::Error>> {
+    match cmd {
+        UdaCommand::Add {
+            key,
+            r#type,
+            label,
+            default,
+        } => {
+            let type_name = r#type.as_str();
+            let uda_type =
+                tock_core::domain::uda::UdaType::from_str_opt(r#type).ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        format!("unsupported UDA type: {type_name}"),
+                    )
+                })?;
+            let definition = tock_core::domain::uda::UdaDefinition {
+                key: key.clone(),
+                uda_type,
+                label: label.clone(),
+                default: default.clone(),
+            };
+            tock_storage::repo::uda_repo::add_definition(conn, &definition)?;
+            println!(
+                "Created UDA '{}' ({})",
+                definition.key,
+                definition.uda_type.as_str()
+            );
+        }
+        UdaCommand::List => {
+            let definitions = tock_storage::repo::uda_repo::list_definitions(conn)?;
+            for definition in &definitions {
+                println!(
+                    "{:<20}  {:<8}  {:<20}  {}",
+                    definition.key,
+                    definition.uda_type.as_str(),
+                    definition.label.as_deref().unwrap_or("—"),
+                    definition.default.as_deref().unwrap_or("—")
+                );
+            }
+            println!("\n{} UDA definition(s)", definitions.len());
+        }
+        UdaCommand::Rm { key } => {
+            tock_storage::repo::uda_repo::remove_definition(conn, key)?;
+            println!("Removed UDA '{key}'");
+        }
+    }
+    Ok(())
+}
+
 fn run_view_cmd(
     conn: &Connection,
     name: &str,
@@ -1591,5 +1650,9 @@ impl tock_parse::filter::Filterable for TaskFilterable<'_> {
 
     fn is_deleted(&self) -> bool {
         self.0.deleted_at.is_some()
+    }
+
+    fn uda_value(&self, key: &str) -> Option<String> {
+        self.0.udas.get_str(key)
     }
 }

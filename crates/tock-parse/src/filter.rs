@@ -25,6 +25,9 @@ pub trait Filterable {
 
     /// Return whether the entity is deleted.
     fn is_deleted(&self) -> bool;
+
+    /// Return a user-defined attribute value as display text.
+    fn uda_value(&self, key: &str) -> Option<String>;
 }
 
 /// A parsed filter expression.
@@ -54,6 +57,13 @@ pub enum Filter {
     Evening,
     /// Match deleted entities.
     Deleted,
+    /// Match an exact UDA value.
+    Uda {
+        /// UDA key.
+        key: String,
+        /// Expected value.
+        value: String,
+    },
     /// Invert another filter.
     Not(Box<Filter>),
     /// Require all nested filters to match.
@@ -96,6 +106,7 @@ pub fn matches(filter: &Filter, entity: &impl Filterable) -> bool {
         }
         Filter::Evening => entity.is_evening(),
         Filter::Deleted => entity.is_deleted(),
+        Filter::Uda { key, value } => entity.uda_value(key).as_deref() == Some(value.as_str()),
         Filter::Not(inner) => !matches(inner, entity),
         Filter::And(filters) => filters.iter().all(|inner| matches(inner, entity)),
         Filter::Or(filters) => filters.iter().any(|inner| matches(inner, entity)),
@@ -181,6 +192,19 @@ fn parse_atom(input: &str, today: &str) -> Filter {
         return Filter::HasDeadline;
     }
 
+    if input
+        .get(..4)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("uda."))
+    {
+        let rest = &input[4..];
+        if let Some((key, value)) = rest.split_once(':') {
+            return Filter::Uda {
+                key: key.to_owned(),
+                value: value.to_owned(),
+            };
+        }
+    }
+
     permissive_filter()
 }
 
@@ -236,6 +260,7 @@ mod tests {
         start_date: Option<String>,
         is_evening: bool,
         is_deleted: bool,
+        udas: Vec<(String, String)>,
     }
 
     impl Filterable for TestEntity {
@@ -269,6 +294,13 @@ mod tests {
 
         fn is_deleted(&self) -> bool {
             self.is_deleted
+        }
+
+        fn uda_value(&self, key: &str) -> Option<String> {
+            self.udas
+                .iter()
+                .find(|(candidate, _)| candidate == key)
+                .map(|(_, value)| value.clone())
         }
     }
 
@@ -428,6 +460,23 @@ mod tests {
 
         assert!(matches(
             &parse_filter(&["status:done or status:pending"], "2026-06-17"),
+            &entity,
+        ));
+    }
+
+    #[test]
+    fn uda_filter_matches_exact_value() {
+        let entity = TestEntity {
+            udas: vec![(String::from("owner"), String::from("sam"))],
+            ..TestEntity::default()
+        };
+
+        assert!(matches(
+            &parse_filter(&["uda.owner:sam"], "2026-06-17"),
+            &entity
+        ));
+        assert!(!matches(
+            &parse_filter(&["uda.owner:alex"], "2026-06-17"),
             &entity,
         ));
     }
