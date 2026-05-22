@@ -258,7 +258,75 @@ fn run_habit_cmd(conn: &Connection, cmd: &HabitCommand) -> Result<(), Box<dyn st
         ),
         HabitCommand::Archive { sid } => run_habit_archive(conn, *sid),
         HabitCommand::Status => run_habit_status(conn),
+        HabitCommand::Slip { sid, notes } => {
+            let entry = tock_storage::repo::habit_repo::log_entry(
+                conn,
+                *sid,
+                "true",
+                notes.as_deref(),
+                true,
+            )?;
+            let habit =
+                tock_storage::repo::habit_repo::get_by_sid(conn, *sid)?.ok_or("habit not found")?;
+            println!(
+                "🚫 Slip logged for #{} — {} ({} {})",
+                habit.sid,
+                habit.title,
+                habit.streak_current,
+                habit.streak_label()
+            );
+            let _ = entry;
+            Ok(())
+        }
+        HabitCommand::Remind {
+            sid,
+            at,
+            days,
+            clear,
+            list,
+        } => run_habit_remind(conn, *sid, at.as_deref(), days.as_deref(), *clear, *list),
     }
+}
+
+fn run_habit_remind(
+    conn: &Connection,
+    sid: u32,
+    at: Option<&str>,
+    days: Option<&str>,
+    clear: bool,
+    list: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if clear {
+        tock_storage::repo::habit_repo::set_reminders(conn, sid, &[])?;
+        println!("Cleared all reminders for habit #{sid}");
+        return Ok(());
+    }
+    if list {
+        let reminders = tock_storage::repo::habit_repo::get_reminders(conn, sid)?;
+        if reminders.is_empty() {
+            println!("No reminders set for habit #{sid}");
+        } else {
+            for r in &reminders {
+                println!("  🔔 {}", r.display());
+            }
+        }
+        return Ok(());
+    }
+    if let Some(time) = at {
+        let mut reminders = tock_storage::repo::habit_repo::get_reminders(conn, sid)?;
+        let day_list = days
+            .map(|d| d.split(',').map(|s| s.trim().to_lowercase()).collect())
+            .unwrap_or_default();
+        reminders.push(tock_core::domain::habit::Reminder {
+            time: time.to_string(),
+            days: day_list,
+        });
+        tock_storage::repo::habit_repo::set_reminders(conn, sid, &reminders)?;
+        println!("Added reminder at {time} for habit #{sid}");
+    } else {
+        eprintln!("Specify --at <HH:MM>, --list, or --clear");
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1309,22 +1377,22 @@ fn parse_habit_direction_arg(
 
 fn format_habit_status_line(habit: &tock_core::domain::habit::Habit) -> String {
     format!(
-        "{} {}  L{} ({})  streak {}d  best {}d  {}",
-        habit_icon(habit.direction),
+        "{} {}  L{} ({})  {} {}d  best {}d  {}",
+        habit.direction_emoji(),
         habit.title,
         habit.level,
         habit.level_name(),
+        habit.streak_label(),
         habit.streak_current,
         habit.streak_best,
         habit_cadence_display(&habit.cadence)
     )
 }
 
-const fn habit_icon(direction: tock_core::domain::habit::HabitDirection) -> &'static str {
-    match direction {
-        tock_core::domain::habit::HabitDirection::Build => "📖",
-        tock_core::domain::habit::HabitDirection::Break => "🛡",
-    }
+#[allow(dead_code)]
+const fn habit_icon(_direction: tock_core::domain::habit::HabitDirection) -> &'static str {
+    // Kept for backward compat; prefer habit.direction_emoji() instead.
+    "📖"
 }
 
 fn format_habit_xp(level: u32, xp: u32) -> String {

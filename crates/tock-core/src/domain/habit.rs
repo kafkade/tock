@@ -130,6 +130,84 @@ impl Habit {
             _ => "Unknown",
         }
     }
+
+    /// Whether this is a break-bad-habit.
+    #[must_use]
+    pub const fn is_break(&self) -> bool {
+        matches!(self.direction, HabitDirection::Break)
+    }
+
+    /// Streak label: "days clean" for break habits, "streak" for build.
+    #[must_use]
+    pub const fn streak_label(&self) -> &'static str {
+        if self.is_break() { "clean" } else { "streak" }
+    }
+
+    /// Emoji prefix for display.
+    #[must_use]
+    pub const fn direction_emoji(&self) -> &'static str {
+        if self.is_break() { "🚫" } else { "✅" }
+    }
+}
+
+/// A reminder configuration for a habit.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Reminder {
+    /// Time of day (HH:MM format).
+    pub time: String,
+    /// Days this reminder applies to (empty = every day).
+    pub days: Vec<String>,
+}
+
+impl Reminder {
+    /// Parse a JSON array of reminders.
+    #[must_use]
+    pub fn from_json_array(s: &str) -> Vec<Self> {
+        // Expected format: [{"time":"07:00","days":["monday","wednesday"]}]
+        let Ok(arr) = serde_json::from_str::<Vec<serde_json::Value>>(s) else {
+            return Vec::new();
+        };
+        arr.iter()
+            .filter_map(|v| {
+                let time = v.get("time")?.as_str()?.to_string();
+                let days = v
+                    .get("days")
+                    .and_then(|d| d.as_array())
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|d| d.as_str().map(String::from))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                Some(Self { time, days })
+            })
+            .collect()
+    }
+
+    /// Serialize a list of reminders to JSON.
+    #[must_use]
+    pub fn to_json_array(reminders: &[Self]) -> String {
+        let arr: Vec<serde_json::Value> = reminders
+            .iter()
+            .map(|r| {
+                serde_json::json!({
+                    "time": r.time,
+                    "days": r.days,
+                })
+            })
+            .collect();
+        serde_json::to_string(&arr).unwrap_or_else(|_| "[]".to_string())
+    }
+
+    /// Human-readable display.
+    #[must_use]
+    pub fn display(&self) -> String {
+        if self.days.is_empty() {
+            format!("daily at {}", self.time)
+        } else {
+            format!("{} at {}", self.days.join("/"), self.time)
+        }
+    }
 }
 
 /// Input for creating a new habit.

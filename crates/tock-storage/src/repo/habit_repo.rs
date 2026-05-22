@@ -617,6 +617,42 @@ fn read_habit_row(row: &Row<'_>) -> Result<Habit, Error> {
     })
 }
 
+/// Get the reminder configuration for a habit.
+///
+/// Reads the `reminders` JSON column from the habits table.
+///
+/// # Errors
+/// Returns [`crate::Error::NotFound`] if the habit doesn't exist.
+pub fn get_reminders(
+    conn: &Connection,
+    habit_sid: u32,
+) -> Result<Vec<tock_core::domain::habit::Reminder>, Error> {
+    let raw: String = conn.query_row(
+        "SELECT reminders FROM habits WHERE sid = ?1",
+        params![i64::from(habit_sid)],
+        |r| r.get(0),
+    )?;
+    Ok(tock_core::domain::habit::Reminder::from_json_array(&raw))
+}
+
+/// Set (replace) the reminders for a habit.
+///
+/// # Errors
+/// Returns [`crate::Error::Sqlite`] on write failure.
+pub fn set_reminders(
+    conn: &Connection,
+    habit_sid: u32,
+    reminders: &[tock_core::domain::habit::Reminder],
+) -> Result<(), Error> {
+    let json = tock_core::domain::habit::Reminder::to_json_array(reminders);
+    let now = format_timestamp(OffsetDateTime::now_utc())?;
+    conn.execute(
+        "UPDATE habits SET reminders = ?1, modified_at = ?2 WHERE sid = ?3",
+        params![json, now, i64::from(habit_sid)],
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used, clippy::unwrap_used)]
