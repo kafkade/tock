@@ -1,8 +1,11 @@
 //! JSON import — reads a JSON array of task objects and inserts them.
 
+use std::collections::BTreeMap;
+
 use rusqlite::Connection;
 use serde::Deserialize;
 use tock_core::domain::task::{NewTask, Priority, TaskStatus};
+use tock_core::domain::uda::UdaValues;
 
 #[derive(Deserialize)]
 struct TaskImport {
@@ -17,6 +20,8 @@ struct TaskImport {
     start_date: Option<String>,
     #[serde(default)]
     tags: Vec<String>,
+    #[serde(default)]
+    udas: BTreeMap<String, serde_json::Value>,
     #[serde(default)]
     notes: Option<String>,
     #[serde(default)]
@@ -45,6 +50,7 @@ pub fn import_tasks(conn: &Connection, json: &str) -> Result<usize, tock_storage
             deadline: import.deadline.clone(),
             start_date: import.start_date.clone(),
             tags: import.tags.clone(),
+            udas: UdaValues(import.udas.clone()),
             evening: import.evening,
             ..NewTask::default()
         };

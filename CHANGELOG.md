@@ -58,3 +58,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Habit backfill logging: `tock habit backfill <sid> <date>` for catching up on missed days with automatic streak recalculation
 - Break-bad-habit mode: habits with `--direction break` show "days clean" instead of "streak", use 🚫 indicator, and have inverted scoring where NOT doing the habit maintains the streak. `tock habit slip <sid>` logs a slip for break habits
 - Habit reminders: `tock habit remind <sid> --at 07:00 [--days monday,wednesday]` to set time-based reminders. `--list` to view, `--clear` to remove all. Reminders stored per-habit as JSON
+- User-defined attributes (UDAs): `tock uda add effort --type number` to declare custom fields on tasks. Set values with `tock mod <sid> uda.effort:5`. Filter with `uda.effort:5` in list/view commands. UDAs are stored as JSON in the tasks table and preserved through import/export

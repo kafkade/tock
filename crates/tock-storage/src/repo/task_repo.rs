@@ -12,9 +12,10 @@ use crate::Error;
 use crate::repo::{sid_repo, tag_repo};
 use tock_core::domain::sid::SidKind;
 use tock_core::domain::task::{NewTask, Priority, Task, TaskPatch, TaskStatus};
+use tock_core::domain::uda::UdaValues;
 
 const ENTITY_KIND: &str = "task";
-const SELECT_TASK_SQL: &str = "SELECT id, sid, title, notes, status, area_id, project_id, heading_id, start_date, deadline, priority, evening, urgency_cache, created_at, modified_at, done_at, cancelled_at, deleted_at FROM tasks";
+const SELECT_TASK_SQL: &str = "SELECT id, sid, title, notes, status, area_id, project_id, heading_id, start_date, deadline, priority, evening, udas, urgency_cache, created_at, modified_at, done_at, cancelled_at, deleted_at FROM tasks";
 
 /// Insert a new task row, attach its tags, and return the stored task.
 ///
@@ -37,8 +38,8 @@ pub fn insert(conn: &Connection, input: &NewTask) -> Result<Task, Error> {
          )
          VALUES (
              ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8,
-             ?9, ?10, NULL, ?11, ?12, '{}',
-             0.0, ?13, ?14, ?15, ?16, NULL
+             ?9, ?10, NULL, ?11, ?12, ?13,
+             0.0, ?14, ?15, ?16, ?17, NULL
          )",
         params![
             uuid_to_blob(id),
@@ -53,6 +54,7 @@ pub fn insert(conn: &Connection, input: &NewTask) -> Result<Task, Error> {
             input.deadline,
             bool_to_int(input.evening),
             input.priority.map(priority_to_storage),
+            input.udas.to_json(),
             created_at_text,
             created_at_text,
             done_at.map(format_timestamp).transpose()?,
@@ -148,6 +150,14 @@ pub fn update(conn: &Connection, sid: u32, patch: &TaskPatch) -> Result<Task, Er
         .unwrap_or_else(|| existing.deadline.clone());
     let priority = patch.priority.unwrap_or(existing.priority);
     let evening = patch.evening.unwrap_or(existing.evening);
+    let mut udas = existing.udas.clone();
+    for (key, value) in &patch.set_udas {
+        udas.set(key, value.clone());
+    }
+    for key in &patch.remove_udas {
+        udas.remove(key);
+    }
+    let udas_json = udas.to_json();
     let (done_at, cancelled_at) = if patch.status.is_some() {
         status_timestamps(existing.done_at, existing.cancelled_at, status, now)
     } else {
@@ -166,10 +176,11 @@ pub fn update(conn: &Connection, sid: u32, patch: &TaskPatch) -> Result<Task, Er
              deadline = ?8,
              priority = ?9,
              evening = ?10,
-             modified_at = ?11,
-             done_at = ?12,
-             cancelled_at = ?13
-         WHERE sid = ?14",
+             udas = ?11,
+             modified_at = ?12,
+             done_at = ?13,
+             cancelled_at = ?14
+         WHERE sid = ?15",
         params![
             title,
             notes,
@@ -181,6 +192,7 @@ pub fn update(conn: &Connection, sid: u32, patch: &TaskPatch) -> Result<Task, Er
             deadline,
             priority.map(priority_to_storage),
             bool_to_int(evening),
+            udas_json,
             now_text,
             done_at.map(format_timestamp).transpose()?,
             cancelled_at.map(format_timestamp).transpose()?,
@@ -271,6 +283,7 @@ fn read_task_row(row: &Row<'_>) -> Result<Task, Error> {
     let status_raw: String = row.get("status")?;
     let priority_raw: Option<String> = row.get("priority")?;
     let evening_raw: i64 = row.get("evening")?;
+    let udas_raw: String = row.get("udas")?;
 
     Ok(Task {
         id: parse_uuid_blob(&id_bytes)?,
@@ -289,6 +302,7 @@ fn read_task_row(row: &Row<'_>) -> Result<Task, Error> {
         deadline: row.get("deadline")?,
         priority: priority_raw.as_deref().map(parse_priority).transpose()?,
         evening: parse_bool(evening_raw)?,
+        udas: UdaValues::from_json(&udas_raw),
         tags: Vec::new(),
         urgency: row.get("urgency_cache")?,
         created_at: parse_timestamp(&row.get::<_, String>("created_at")?)?,
@@ -332,4 +346,69 @@ fn status_timestamps(
         None
     };
     (done_at, cancelled_at)
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::expect_used, clippy::unwrap_used)]
+
+    use rusqlite::Connection;
+    use tock_core::domain::task::{NewTask, TaskPatch, TaskStatus};
+
+    use super::{get_by_sid, insert, update};
+    use crate::migrations;
+
+    fn test_conn() -> Connection {
+        let mut conn = Connection::open_in_memory().expect("open in-memory db");
+        conn.execute_batch("PRAGMA foreign_keys = ON;")
+            .expect("enable foreign keys");
+        migrations::migrate(&mut conn).expect("migrate");
+        conn
+    }
+
+    fn sample_new_task() -> NewTask {
+        let mut task = NewTask {
+            title: String::from("Write tests"),
+            status: Some(TaskStatus::Pending),
+            ..NewTask::default()
+        };
+        task.udas.set("effort", serde_json::json!(3));
+        task
+    }
+
+    #[test]
+    fn inserts_and_reads_udas() {
+        let conn = test_conn();
+        let task = insert(&conn, &sample_new_task()).expect("insert task");
+
+        assert_eq!(task.udas.get_str("effort").as_deref(), Some("3"));
+        let fetched = get_by_sid(&conn, task.sid)
+            .expect("fetch task")
+            .expect("task exists");
+        assert_eq!(fetched.udas.get_str("effort").as_deref(), Some("3"));
+    }
+
+    #[test]
+    fn update_merges_and_removes_udas() {
+        let conn = test_conn();
+        let task = insert(&conn, &sample_new_task()).expect("insert task");
+
+        let mut patch = TaskPatch::default();
+        patch
+            .set_udas
+            .insert(String::from("owner"), serde_json::json!("sam"));
+        patch
+            .set_udas
+            .insert(String::from("effort"), serde_json::json!(5));
+        patch.remove_udas.push(String::from("missing"));
+        let updated = update(&conn, task.sid, &patch).expect("update task");
+        assert_eq!(updated.udas.get_str("effort").as_deref(), Some("5"));
+        assert_eq!(updated.udas.get_str("owner").as_deref(), Some("sam"));
+
+        let mut remove_patch = TaskPatch::default();
+        remove_patch.remove_udas.push(String::from("owner"));
+        let updated = update(&conn, task.sid, &remove_patch).expect("remove uda");
+        assert_eq!(updated.udas.get_str("effort").as_deref(), Some("5"));
+        assert_eq!(updated.udas.get_str("owner"), None);
+    }
 }

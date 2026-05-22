@@ -39,6 +39,7 @@ struct TaskJson<'a> {
     priority: Option<char>,
     deadline: Option<&'a str>,
     tags: &'a [String],
+    udas: &'a std::collections::BTreeMap<String, serde_json::Value>,
     created_at: String,
 }
 
@@ -87,6 +88,7 @@ fn task_json(task: &Task) -> TaskJson<'_> {
             .map(tock_core::domain::task::Priority::as_char),
         deadline: task.deadline.as_deref(),
         tags: &task.tags,
+        udas: &task.udas.0,
         created_at: task.created_at.to_string(),
     }
 }
@@ -112,6 +114,12 @@ fn format_task_detail_table(task: &Task) -> String {
             .collect::<Vec<_>>()
             .join(" ");
         lines.push(format!("  Tags:     {tag_str}"));
+    }
+    if !task.udas.0.is_empty() {
+        lines.push(String::from("  UDAs:"));
+        for (key, value) in &task.udas.0 {
+            lines.push(format!("    {key}: {value}"));
+        }
     }
     if let Some(ref notes) = task.notes {
         lines.push(format!("  Notes:    {notes}"));
@@ -196,6 +204,7 @@ mod tests {
     use super::{OutputFormat, format_task_detail, format_tasks};
     use time::OffsetDateTime;
     use tock_core::domain::task::{Priority, Task, TaskStatus};
+    use tock_core::domain::uda::UdaValues;
     use uuid::Uuid;
 
     fn sample_task() -> Task {
@@ -212,6 +221,11 @@ mod tests {
             deadline: Some(String::from("2026-06-01")),
             priority: Some(Priority::High),
             evening: false,
+            udas: {
+                let mut values = UdaValues::default();
+                values.set("effort", serde_json::json!(3));
+                values
+            },
             tags: vec![String::from("errands")],
             urgency: 0.0,
             created_at: OffsetDateTime::UNIX_EPOCH,
@@ -249,5 +263,13 @@ mod tests {
         assert_eq!(parsed["priority"], "H");
         assert_eq!(parsed["deadline"], "2026-06-01");
         assert_eq!(parsed["tags"][0], "errands");
+        assert_eq!(parsed["udas"]["effort"], 3);
+    }
+
+    #[test]
+    fn formats_human_task_detail_with_udas() {
+        let rendered = format_task_detail(&sample_task(), OutputFormat::Table);
+        assert!(rendered.contains("UDAs:"));
+        assert!(rendered.contains("effort: 3"));
     }
 }
