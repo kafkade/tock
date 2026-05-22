@@ -38,7 +38,7 @@ tock is a unified personal productivity engine that fuses four traditionally sep
 
 ### Key Hierarchy (Crypto)
 
-```
+```text
 Password → Argon2id → MK → HKDF → MEK → wraps VK → wraps per-item IKs
 ```
 
@@ -59,6 +59,7 @@ Password → Argon2id → MK → HKDF → MEK → wraps VK → wraps per-item IK
 ### WASM Bundle Budget
 
 The `core` WASM feature must stay under **2 MB compressed**. Feature flags in Cargo.toml control what's included:
+
 - `core` = crypto + domain model + storage traits (always loaded)
 - `sync`, `import-export` = lazy-loaded
 
@@ -105,6 +106,7 @@ gzip -c crates/tock-core/pkg/tock_core_bg.wasm | wc -c
 ## ADRs
 
 Architecture Decision Records live in `docs/adr/`. Read them before making changes to:
+
 - Zero-I/O core (ADR-001)
 - End-to-end encryption (ADR-002)
 - Event-sourced sync (ADR-003)
@@ -138,6 +140,120 @@ Architecture Decision Records live in `docs/adr/`. Read them before making chang
 ## PR Title Format
 
 Use conventional commits: `feat:`, `fix:`, `docs:`, `test:`, `refactor:`, `chore:`. For multi-component changes, include the primary component: `feat(crypto): add vault key wrapping`.
+
+## Implementation Status
+
+### What's implemented (v0.1.0 + unreleased)
+
+**Core infrastructure:**
+
+- Workspace scaffold (11 crates), CI pipeline (7 jobs + aggregator), release workflow (5 targets)
+- Toolchain pinned to 1.88.0, cargo-deny, cargo-dist plan, WASM gate
+- Encrypted vault: AES-256-GCM AEAD, Argon2id KDF, HKDF-SHA256, Ed25519 signatures, key hierarchy
+- Append-only event log with per-entity AEAD + device registry
+- SQLite storage with 9 migrations, tracing with vault-data redaction
+
+**Task management (tock-core + tock-storage + tock-cli):**
+
+- Full CRUD: add (with sigils #tag !H/M/L due:date), modify, done, cancel, delete
+- Projects, areas, headings, tags with SID allocation
+- Natural-language date parser (tomorrow, next friday, in 3 days, eow, eom, ISO)
+- Filter DSL: status, tag, priority, project, virtual tags (+TODAY, +OVERDUE, +EVENING, +BLOCKED, +BLOCKING), NOT, AND
+- Six built-in views: inbox, today, upcoming, anytime, someday, logbook
+- Output formatters: --format table|compact|json, shell completions
+- JSON import/export (tock-import, tock-export)
+- User-defined attributes (UDAs): typed definitions, uda.key:value in modify + filter
+- Urgency scoring engine: configurable coefficients, blocked factor, tock urgency breakdown
+- Hook scripts API: on-add, on-complete at ~/.config/tock/hooks/
+- Custom report definitions: tock report define/show/ls/rm
+- Task dependencies: tock depend/undepend, circular detection, +BLOCKED/+BLOCKING filters
+- Recurring tasks: --recur daily|weekly|monthly|yearly|every-Nd|every-Nw, auto-creates next instance
+- Named contexts: tock context define/set/clear/ls/rm, auto-applied to listings
+- Interactive ratatui TUI: 3-pane (sidebar, task list, detail), vim keys
+
+**Time tracking:**
+
+- TimeBlock domain, time_block_repo, tock time start/stop/resume/current/blocks/report/edit
+- On-the-fly task creation, period-based reporting (today/week/month)
+
+**Focus timer (Pomodoro):**
+
+- FocusSession domain with state machine, focus_repo
+- tock focus start/done/skip-break/pause/resume/stop/status/stats
+- Completed cycles auto-log as time blocks, per-task focus history
+- tock done auto-stops linked focus sessions + timers
+
+**Habit tracking:**
+
+- Habit domain with identity statements, stacking, cadences, Fibonacci leveling
+- Streak tracking with skip/freeze grace days, backfill logging
+- Break-bad-habit mode with inverted scoring, "days clean" display
+- Per-habit reminders (tock habit remind --at/--days/--list/--clear)
+
+### What's NOT yet implemented (for v1.0)
+
+- **Sync protocol** — wire format, E2EE sync, conflict resolution, device pairing, server implementation
+- **Importers** — Taskwarrior, CSV import (only JSON import exists)
+- **Markdown export** — only JSON export exists
+- **Accessibility audit** — screen reader support, color contrast
+- **Localization** — i18n framework
+- **iOS/macOS/watchOS apps** — UniFFI scaffolding exists but no SwiftUI app yet
+- **Web app** — WASM compilation works but no frontend
+- **Checklist items** — sub-task checkboxes on tasks
+- **Annotations** — append-only log per task
+- **Scheduled tasks** — calendar slot scheduling (scheduled_for field exists in schema but unused)
+- **Config file** — ~/.config/tock/config.toml for urgency weights, UDA declarations
+- **SQLCipher** — currently using app-layer AEAD; full-disk encryption planned
+
+### Key files by area
+
+**Domain model (tock-core/src/domain/):**
+
+- task.rs, project.rs, area.rs, heading.rs, tag.rs, sid.rs
+- time_block.rs, focus.rs, habit.rs, cadence.rs
+- uda.rs, urgency.rs, recurrence.rs, report.rs
+
+**Storage (tock-storage/src/):**
+
+- vault.rs (OpenVault lifecycle), event_log.rs, migrations.rs (9 migrations)
+- repo/: task_repo, project_repo, area_repo, heading_repo, tag_repo, sid_repo
+- repo/: time_block_repo, focus_repo, habit_repo, uda_repo, report_repo, context_repo
+
+**CLI (tock-cli/src/):**
+
+- main.rs (~1600+ lines, all command handlers)
+- commands/: add, modify, done, list, show, project, tag, time, focus, habit, views, report, uda, hooks_cmd, context
+- tui/: mod (event loop + terminal cleanup), state (AppState, pane navigation, task CRUD), ui (3-pane rendering)
+- tracing_setup.rs, hooks.rs, display.rs, notify.rs
+
+**Crypto (tock-crypto/src/):**
+
+- aead.rs, kdf.rs, keyexchange.rs, signature.rs, secret.rs, random.rs
+
+**Infrastructure:**
+
+- .github/workflows/ci.yml (7 jobs), .github/workflows/release.yml (hand-written)
+- scripts/release.ps1 (version bump, CHANGELOG stamp, tag)
+- deny.toml (ignores RUSTSEC-2024-0436 for paste crate)
+- dist-workspace.toml (allow-dirty for hand-maintained release.yml)
+
+### Test counts
+
+- tock-cli: 15 tests (commands, display, tracing, TUI state)
+- tock-core: 52 tests (domain types, vault, events, urgency, recurrence)
+- tock-crypto: 43 tests (AEAD, KDF, key exchange, signatures, proptests)
+- tock-parse: 37 tests (date parser, filter engine)
+- tock-storage: 23 tests (vault lifecycle, repos, migrations)
+- Total: 172 tests across workspace
+
+### Known gotchas
+
+- `workspace.dependencies` path deps need explicit `version = "X.Y.Z"` for cargo-deny; release.ps1 bumps these
+- `getrandom` needs `features = ["js"]` on wasm32-unknown-unknown for tock-crypto
+- `paste` crate (transitive via ratatui) has RUSTSEC-2024-0436 (unmaintained) — ignored in deny.toml
+- `time` crate 0.3.47+ requires rustc 1.88+
+- Release workflow uses `--notes-file` not `--notes` to avoid bash interpretation of CHANGELOG content
+- Branch protection managed by Terraform in kafkade/github-infra (required_status_checks = ["CI"])
 
 ## Reference Documents
 

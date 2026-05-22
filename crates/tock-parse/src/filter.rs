@@ -26,6 +26,12 @@ pub trait Filterable {
     /// Return whether the entity is deleted.
     fn is_deleted(&self) -> bool;
 
+    /// Return whether the entity is blocked by another entity.
+    fn is_blocked(&self) -> bool;
+
+    /// Return whether the entity blocks other entities.
+    fn is_blocking(&self) -> bool;
+
     /// Return a user-defined attribute value as display text.
     fn uda_value(&self, key: &str) -> Option<String>;
 }
@@ -57,6 +63,10 @@ pub enum Filter {
     Evening,
     /// Match deleted entities.
     Deleted,
+    /// Match blocked entities.
+    Blocked,
+    /// Match entities that block other entities.
+    Blocking,
     /// Match an exact UDA value.
     Uda {
         /// UDA key.
@@ -106,6 +116,8 @@ pub fn matches(filter: &Filter, entity: &impl Filterable) -> bool {
         }
         Filter::Evening => entity.is_evening(),
         Filter::Deleted => entity.is_deleted(),
+        Filter::Blocked => entity.is_blocked(),
+        Filter::Blocking => entity.is_blocking(),
         Filter::Uda { key, value } => entity.uda_value(key).as_deref() == Some(value.as_str()),
         Filter::Not(inner) => !matches(inner, entity),
         Filter::And(filters) => filters.iter().all(|inner| matches(inner, entity)),
@@ -188,6 +200,14 @@ fn parse_atom(input: &str, today: &str) -> Filter {
         return Filter::Deleted;
     }
 
+    if input.eq_ignore_ascii_case("+BLOCKED") {
+        return Filter::Blocked;
+    }
+
+    if input.eq_ignore_ascii_case("+BLOCKING") {
+        return Filter::Blocking;
+    }
+
     if input.eq_ignore_ascii_case("+TAGGED") || input.eq_ignore_ascii_case("+DEADLINE") {
         return Filter::HasDeadline;
     }
@@ -250,6 +270,7 @@ const fn permissive_filter() -> Filter {
 mod tests {
     use super::{Filter, Filterable, matches, parse_filter};
 
+    #[allow(clippy::struct_excessive_bools)]
     #[derive(Clone, Debug, Default)]
     struct TestEntity {
         status: String,
@@ -260,6 +281,8 @@ mod tests {
         start_date: Option<String>,
         is_evening: bool,
         is_deleted: bool,
+        is_blocked: bool,
+        is_blocking: bool,
         udas: Vec<(String, String)>,
     }
 
@@ -294,6 +317,14 @@ mod tests {
 
         fn is_deleted(&self) -> bool {
             self.is_deleted
+        }
+
+        fn is_blocked(&self) -> bool {
+            self.is_blocked
+        }
+
+        fn is_blocking(&self) -> bool {
+            self.is_blocking
         }
 
         fn uda_value(&self, key: &str) -> Option<String> {
@@ -420,6 +451,33 @@ mod tests {
 
         assert!(matches(
             &parse_filter(&["project:myproj"], "2026-06-17"),
+            &entity
+        ));
+    }
+
+    #[test]
+    fn blocked_filter_matches() {
+        let entity = TestEntity {
+            is_blocked: true,
+            ..TestEntity::default()
+        };
+
+        assert!(matches(&parse_filter(&["+BLOCKED"], "2026-06-17"), &entity));
+        assert!(!matches(
+            &parse_filter(&["+BLOCKING"], "2026-06-17"),
+            &entity
+        ));
+    }
+
+    #[test]
+    fn blocking_filter_matches() {
+        let entity = TestEntity {
+            is_blocking: true,
+            ..TestEntity::default()
+        };
+
+        assert!(matches(
+            &parse_filter(&["+BLOCKING"], "2026-06-17"),
             &entity
         ));
     }

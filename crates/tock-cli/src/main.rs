@@ -8,18 +8,21 @@ mod display;
 mod hooks;
 mod notify;
 mod tracing_setup;
+mod tui;
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process;
 
 use clap::{CommandFactory, Parser};
 use commands::{
-    Commands, focus::FocusCommand, habit::HabitCommand, hooks_cmd::HooksCommand, time::TimeCommand,
-    uda::UdaCommand,
+    Commands, context::ContextCommand, focus::FocusCommand, habit::HabitCommand,
+    hooks_cmd::HooksCommand, time::TimeCommand, uda::UdaCommand,
 };
 use display::{OutputFormat, format_task_detail, format_tasks};
 use notify::notify;
 use rusqlite::Connection;
+use serde::Serialize;
 use time::format_description::well_known::Rfc3339;
 use tock_core::domain::cadence::ParsedCadence;
 use tock_core::domain::task::{NewTask, Task, TaskStatus};
@@ -48,6 +51,25 @@ struct Cli {
     /// Subcommand to execute.
     #[command(subcommand)]
     command: Commands,
+}
+
+#[derive(Clone, Debug)]
+struct ActiveContext {
+    name: String,
+    filter: String,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct TaskFilterState {
+    is_blocked: bool,
+    is_blocking: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct RelatedTaskSummary {
+    sid: u32,
+    title: String,
+    status: String,
 }
 
 fn main() {
@@ -84,6 +106,7 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let conn = vault.connection();
+    let active_context = load_active_context(conn)?;
 
     match &cli.command {
         Commands::Add { .. }
@@ -91,18 +114,29 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         | Commands::Done { .. }
         | Commands::Cancel { .. }
         | Commands::Delete { .. }
+        | Commands::Depend { .. }
+        | Commands::Undepend { .. }
         | Commands::List { .. }
         | Commands::Show { .. }
-        | Commands::Urgency { .. } => run_task_cmd(conn, &cli.command, &cli.format),
+        | Commands::Urgency { .. } => {
+            run_task_cmd(conn, &cli.command, &cli.format, active_context.as_ref())
+        }
         Commands::Project(args) => run_project_cmd(conn, &args.command),
         Commands::Area(args) => run_area_cmd(conn, &args.command),
         Commands::Tag(args) => run_tag_cmd(conn, &args.command),
-        Commands::Report(args) => run_report_cmd(conn, &args.command),
+        Commands::Report(args) => run_report_cmd(conn, &args.command, active_context.as_ref()),
+        Commands::Context(args) => run_context_cmd(conn, &args.command),
         Commands::Time(args) => run_time_cmd(conn, &args.command),
         Commands::Focus(args) => run_focus_cmd(conn, &args.command),
         Commands::Habit(args) => run_habit_cmd(conn, &args.command),
         Commands::Uda(args) => run_uda_cmd(conn, &args.command),
-        Commands::View { name, json } => run_view_cmd(conn, name, *json, &cli.format),
+        Commands::Tui => {
+            tui::run(conn)?;
+            Ok(())
+        }
+        Commands::View { name, json } => {
+            run_view_cmd(conn, name, *json, &cli.format, active_context.as_ref())
+        }
         Commands::Views => {
             let today_str = today_string();
             for view in commands::views::all_views(&today_str) {
@@ -141,19 +175,10 @@ fn run_task_cmd(
     conn: &Connection,
     cmd: &Commands,
     global_format: &str,
+    active_context: Option<&ActiveContext>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     match cmd {
-        Commands::Add { words } => {
-            let parsed_task = commands::add::parse_add_input(words);
-            let hook_input = new_task_to_hook_json(&parsed_task);
-            let Some(hooked_json) = hooks::run_hook(hooks::HookEvent::OnAdd, &hook_input) else {
-                println!("Add cancelled by hook");
-                return Ok(());
-            };
-            let new_task = new_task_from_hook_json(&parsed_task, &hooked_json)?;
-            let task = tock_storage::repo::task_repo::insert(conn, &new_task)?;
-            println!("Created task #{} — {}", task.sid, task.title);
-        }
+        Commands::Add { words, recur, .. } => run_add_cmd(conn, words, recur.as_deref())?,
         Commands::Modify { sid, args } => {
             let patch = commands::modify::parse_modify_args(args);
             let task = tock_storage::repo::task_repo::update(conn, *sid, &patch)?;
@@ -200,46 +225,123 @@ fn run_task_cmd(
                 println!("Deleted task #{sid}");
             }
         }
+        Commands::Depend { sid, on } => {
+            tock_storage::repo::task_repo::add_dependency(conn, *sid, *on)?;
+            println!("Task #{sid} now depends on #{on}");
+        }
+        Commands::Undepend { sid, from } => {
+            tock_storage::repo::task_repo::remove_dependency(conn, *sid, *from)?;
+            println!("Task #{sid} no longer depends on #{from}");
+        }
         Commands::List { filter, json } => {
             let today = today_string();
             let filter_args = filter.iter().map(String::as_str).collect::<Vec<_>>();
-            let parsed_filter = tock_parse::filter::parse_filter(&filter_args, &today);
+            let base_filter = tock_parse::filter::parse_filter(&filter_args, &today);
+            let parsed_filter = combine_with_active_context(base_filter, active_context, &today);
             let tasks = tock_storage::repo::task_repo::list(conn, false)?;
-            let filtered: Vec<_> = tasks
-                .into_iter()
-                .filter(|task| tock_parse::filter::matches(&parsed_filter, &TaskFilterable(task)))
-                .collect();
+            let filtered = filter_tasks(conn, tasks, &parsed_filter)?;
             let format = selected_output_format(global_format, *json);
             let rendered = format_tasks(&filtered, format);
-            print_task_listing(&rendered, filtered.len(), format);
+            print_task_listing(
+                &rendered,
+                filtered.len(),
+                format,
+                active_context.map(|ctx| ctx.name.as_str()),
+            );
         }
         Commands::Show { sid, json } => {
             if let Some(task) = tock_storage::repo::task_repo::get_by_sid(conn, *sid)? {
                 let format = selected_output_format(global_format, *json);
-                println!("{}", format_task_detail(&task, format));
+                print_task_show(conn, &task, format)?;
             } else {
                 eprintln!("task #{sid} not found");
             }
         }
-        Commands::Urgency { sid } => {
-            if let Some(task) = tock_storage::repo::task_repo::get_by_sid(conn, *sid)? {
-                let breakdown = explain_task_urgency(&task);
-                let total: f64 = breakdown
-                    .iter()
-                    .map(|(_, _, _, contribution)| contribution)
-                    .sum();
-                println!("Urgency for task #{} — {}", task.sid, task.title);
-                for (component, weight, factor, contribution) in breakdown {
-                    println!(
-                        "  {component:<12} weight={weight:>6.2} factor={factor:>6.2} contribution={contribution:>7.2}"
-                    );
-                }
-                println!("  {:<12} {:>30.2}", "total", total);
-            } else {
-                eprintln!("task #{sid} not found");
-            }
-        }
+        Commands::Urgency { sid } => run_urgency_cmd(conn, *sid)?,
         _ => {}
+    }
+    Ok(())
+}
+
+fn run_add_cmd(
+    conn: &Connection,
+    words: &[String],
+    recur: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut parsed_task = commands::add::parse_add_input(words);
+    parsed_task.recurrence =
+        commands::add::parse_recur_flag(recur).map_err(std::io::Error::other)?;
+    let hook_input = new_task_to_hook_json(&parsed_task);
+    let Some(hooked_json) = hooks::run_hook(hooks::HookEvent::OnAdd, &hook_input) else {
+        println!("Add cancelled by hook");
+        return Ok(());
+    };
+    let new_task = new_task_from_hook_json(&parsed_task, &hooked_json)?;
+    let task = tock_storage::repo::task_repo::insert(conn, &new_task)?;
+    println!("Created task #{} — {}", task.sid, task.title);
+    Ok(())
+}
+
+fn run_urgency_cmd(conn: &Connection, sid: u32) -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(task) = tock_storage::repo::task_repo::get_by_sid(conn, sid)? {
+        let breakdown = explain_task_urgency(
+            &task,
+            tock_storage::repo::task_repo::is_blocked(conn, task.id)?,
+        );
+        let total: f64 = breakdown
+            .iter()
+            .map(|(_, _, _, contribution)| contribution)
+            .sum();
+        println!("Urgency for task #{} — {}", task.sid, task.title);
+        for (component, weight, factor, contribution) in breakdown {
+            println!(
+                "  {component:<12} weight={weight:>6.2} factor={factor:>6.2} contribution={contribution:>7.2}"
+            );
+        }
+        println!("  {:<12} {:>30.2}", "total", total);
+    } else {
+        eprintln!("task #{sid} not found");
+    }
+    Ok(())
+}
+
+fn run_context_cmd(
+    conn: &Connection,
+    cmd: &ContextCommand,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match cmd {
+        ContextCommand::Set { name } => {
+            tock_storage::repo::context_repo::set_active(conn, Some(name))?;
+            println!("Activated context {name}");
+        }
+        ContextCommand::Clear => {
+            tock_storage::repo::context_repo::set_active(conn, None)?;
+            println!("Cleared active context");
+        }
+        ContextCommand::Define { name, filter } => {
+            tock_storage::repo::context_repo::define(conn, name, filter)?;
+            println!("Defined context {name}");
+        }
+        ContextCommand::List => {
+            let active = tock_storage::repo::context_repo::get_active(conn)?;
+            let contexts = tock_storage::repo::context_repo::list(conn)?;
+            if contexts.is_empty() {
+                println!("No contexts defined");
+            } else {
+                for (name, filter) in contexts {
+                    let marker = if active.as_deref() == Some(name.as_str()) {
+                        '*'
+                    } else {
+                        ' '
+                    };
+                    println!("{marker} {name:<16} {filter}");
+                }
+            }
+        }
+        ContextCommand::Rm { name } => {
+            tock_storage::repo::context_repo::delete(conn, name)?;
+            println!("Removed context {name}");
+        }
     }
     Ok(())
 }
@@ -1445,6 +1547,7 @@ fn run_uda_cmd(conn: &Connection, cmd: &UdaCommand) -> Result<(), Box<dyn std::e
 fn run_report_cmd(
     conn: &Connection,
     cmd: &commands::report::ReportCommand,
+    active_context: Option<&ActiveContext>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     match cmd {
         commands::report::ReportCommand::Define {
@@ -1497,18 +1600,25 @@ fn run_report_cmd(
             };
             let today = today_string();
             let query_args = report.query.split_whitespace().collect::<Vec<_>>();
-            let filter = tock_parse::filter::parse_filter(&query_args, &today);
-            let mut filtered: Vec<_> = tock_storage::repo::task_repo::list(conn, false)?
-                .into_iter()
-                .filter(|task| tock_parse::filter::matches(&filter, &TaskFilterable(task)))
-                .collect();
+            let base_filter = tock_parse::filter::parse_filter(&query_args, &today);
+            let filter = combine_with_active_context(base_filter, active_context, &today);
+            let mut filtered = filter_tasks(
+                conn,
+                tock_storage::repo::task_repo::list(conn, false)?,
+                &filter,
+            )?;
             sort_report_tasks(&mut filtered, report.sort.as_deref());
             if *json {
                 println!("{}", format_tasks(&filtered, OutputFormat::Json));
             } else {
                 println!("── {} ──", report.name);
                 let rendered = format_report_tasks(&filtered, &report.columns);
-                print_task_listing(&rendered, filtered.len(), OutputFormat::Table);
+                print_task_listing(
+                    &rendered,
+                    filtered.len(),
+                    OutputFormat::Table,
+                    active_context.map(|ctx| ctx.name.as_str()),
+                );
             }
         }
         commands::report::ReportCommand::Rm { name } => {
@@ -1524,6 +1634,7 @@ fn run_view_cmd(
     name: &str,
     json: bool,
     global_format: &str,
+    active_context: Option<&ActiveContext>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let today_str = today_string();
     let views = commands::views::all_views(&today_str);
@@ -1539,11 +1650,12 @@ fn run_view_cmd(
         return Ok(());
     };
 
-    let all_tasks = tock_storage::repo::task_repo::list(conn, false)?;
-    let filtered: Vec<_> = all_tasks
-        .into_iter()
-        .filter(|task| tock_parse::filter::matches(&view.filter, &TaskFilterable(task)))
-        .collect();
+    let filter = combine_with_active_context(view.filter.clone(), active_context, &today_str);
+    let filtered = filter_tasks(
+        conn,
+        tock_storage::repo::task_repo::list(conn, false)?,
+        &filter,
+    )?;
 
     let format = selected_output_format(global_format, json);
     let rendered = format_tasks(&filtered, format);
@@ -1551,7 +1663,12 @@ fn run_view_cmd(
         println!("{rendered}");
     } else {
         println!("── {} ({}) ──", view.name, view.description);
-        print_task_listing(&rendered, filtered.len(), format);
+        print_task_listing(
+            &rendered,
+            filtered.len(),
+            format,
+            active_context.map(|ctx| ctx.name.as_str()),
+        );
     }
     Ok(())
 }
@@ -1886,13 +2003,186 @@ fn selected_output_format(global_format: &str, json: bool) -> OutputFormat {
     }
 }
 
-fn print_task_listing(rendered: &str, count: usize, format: OutputFormat) {
+fn print_task_listing(
+    rendered: &str,
+    count: usize,
+    format: OutputFormat,
+    active_context: Option<&str>,
+) {
+    if !matches!(format, OutputFormat::Json) {
+        if let Some(active_context) = active_context {
+            println!("[ctx: {active_context}]");
+        }
+    }
     if !rendered.is_empty() {
         println!("{rendered}");
     }
     if !matches!(format, OutputFormat::Json) {
         println!("\n{count} task(s)");
     }
+}
+
+fn load_active_context(
+    conn: &Connection,
+) -> Result<Option<ActiveContext>, Box<dyn std::error::Error>> {
+    let Some(name) = tock_storage::repo::context_repo::get_active(conn)? else {
+        return Ok(None);
+    };
+    let Some(filter) = tock_storage::repo::context_repo::get_filter(conn, &name)? else {
+        return Err(Box::new(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("active context '{name}' is missing"),
+        )));
+    };
+    Ok(Some(ActiveContext { name, filter }))
+}
+
+fn combine_with_active_context(
+    base: tock_parse::filter::Filter,
+    active_context: Option<&ActiveContext>,
+    today: &str,
+) -> tock_parse::filter::Filter {
+    let Some(active_context) = active_context else {
+        return base;
+    };
+    let context_args = active_context.filter.split_whitespace().collect::<Vec<_>>();
+    let context_filter = tock_parse::filter::parse_filter(&context_args, today);
+    tock_parse::filter::Filter::And(vec![context_filter, base])
+}
+
+fn filter_tasks(
+    conn: &Connection,
+    tasks: Vec<Task>,
+    filter: &tock_parse::filter::Filter,
+) -> Result<Vec<Task>, Box<dyn std::error::Error>> {
+    let states = build_task_filter_states(conn, &tasks)?;
+    Ok(tasks
+        .into_iter()
+        .filter(|task| {
+            let state = states.get(&task.id).copied().unwrap_or_default();
+            tock_parse::filter::matches(filter, &TaskFilterable { task, state })
+        })
+        .collect())
+}
+
+fn build_task_filter_states(
+    conn: &Connection,
+    tasks: &[Task],
+) -> Result<HashMap<Uuid, TaskFilterState>, Box<dyn std::error::Error>> {
+    let mut states = HashMap::with_capacity(tasks.len());
+    for task in tasks {
+        let dependents = tock_storage::repo::task_repo::get_dependents(conn, task.id)?;
+        states.insert(
+            task.id,
+            TaskFilterState {
+                is_blocked: tock_storage::repo::task_repo::is_blocked(conn, task.id)?,
+                is_blocking: !dependents.is_empty(),
+            },
+        );
+    }
+    Ok(states)
+}
+
+fn print_task_show(
+    conn: &Connection,
+    task: &Task,
+    format: OutputFormat,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let dependencies = related_task_summaries(conn, &task.depends_on)?;
+    let dependents = related_task_summaries(
+        conn,
+        &tock_storage::repo::task_repo::get_dependents(conn, task.id)?,
+    )?;
+
+    if matches!(format, OutputFormat::Json) {
+        println!(
+            "{}",
+            serde_json::to_string(&serde_json::json!({
+                "task": {
+                    "sid": task.sid,
+                    "title": &task.title,
+                    "status": task.status.as_str(),
+                    "priority": task.priority.map(|priority| priority.as_char().to_string()),
+                    "deadline": task.deadline.as_deref(),
+                    "start_date": task.start_date.as_deref(),
+                    "recurrence": task.recurrence.as_deref(),
+                    "parent_id": task.parent_id.map(|id| id.to_string()),
+                    "depends_on": task.depends_on.iter().map(Uuid::to_string).collect::<Vec<_>>(),
+                    "tags": &task.tags,
+                    "udas": &task.udas.0,
+                    "notes": task.notes.as_deref(),
+                    "created_at": task.created_at.to_string(),
+                    "modified_at": task.modified_at.to_string(),
+                    "done_at": task.done_at.map(|value| value.to_string()),
+                    "cancelled_at": task.cancelled_at.map(|value| value.to_string()),
+                },
+                "dependencies": dependencies,
+                "dependents": dependents,
+            }))?
+        );
+        return Ok(());
+    }
+
+    println!("{}", format_task_detail(task, format));
+    if let Some(recurrence) = task.recurrence.as_deref() {
+        println!("  Recurs:   {}", describe_recurrence(recurrence));
+    }
+    if !dependencies.is_empty() {
+        println!(
+            "  Depends:  {}",
+            format_related_task_summaries(&dependencies)
+        );
+    }
+    if !dependents.is_empty() {
+        println!("  Blocking: {}", format_related_task_summaries(&dependents));
+    }
+    Ok(())
+}
+
+fn related_task_summaries(
+    conn: &Connection,
+    ids: &[Uuid],
+) -> Result<Vec<RelatedTaskSummary>, Box<dyn std::error::Error>> {
+    let mut summaries = Vec::with_capacity(ids.len());
+    for id in ids {
+        if let Some(task) = tock_storage::repo::task_repo::get_by_id(conn, *id)? {
+            summaries.push(RelatedTaskSummary {
+                sid: task.sid,
+                title: task.title,
+                status: task.status.as_str().to_string(),
+            });
+        }
+    }
+    Ok(summaries)
+}
+
+fn format_related_task_summaries(tasks: &[RelatedTaskSummary]) -> String {
+    tasks
+        .iter()
+        .map(|task| format!("#{} [{}] {}", task.sid, task.status, task.title))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn describe_recurrence(recurrence_json: &str) -> String {
+    use tock_core::domain::recurrence::{RecurrenceMode, RecurrencePattern, RecurrenceSpec};
+
+    let Some(spec) = RecurrenceSpec::from_json(recurrence_json) else {
+        return recurrence_json.to_string();
+    };
+    let pattern = match spec.pattern {
+        RecurrencePattern::Daily => "daily".to_string(),
+        RecurrencePattern::Weekly => "weekly".to_string(),
+        RecurrencePattern::Monthly => "monthly".to_string(),
+        RecurrencePattern::Yearly => "yearly".to_string(),
+        RecurrencePattern::EveryNDays(days) => format!("every {days} days"),
+        RecurrencePattern::EveryNWeeks(weeks) => format!("every {weeks} weeks"),
+    };
+    let mode = match spec.mode {
+        RecurrenceMode::Periodic => "periodic",
+        RecurrenceMode::Chained => "chained",
+    };
+    format!("{pattern} ({mode})")
 }
 
 fn new_task_to_hook_json(task: &NewTask) -> String {
@@ -1903,8 +2193,10 @@ fn new_task_to_hook_json(task: &NewTask) -> String {
         "project_id": task.project_id.map(|id| id.to_string()),
         "area_id": task.area_id.map(|id| id.to_string()),
         "heading_id": task.heading_id.map(|id| id.to_string()),
+        "parent_id": task.parent_id.map(|id| id.to_string()),
         "start_date": &task.start_date,
         "deadline": &task.deadline,
+        "recurrence": &task.recurrence,
         "priority": task.priority.map(|priority| priority.as_char().to_string()),
         "evening": task.evening,
         "udas": &task.udas.0,
@@ -1945,8 +2237,10 @@ fn new_task_from_hook_json(original: &NewTask, hook_json: &str) -> Result<NewTas
     apply_optional_uuid_field(object, "project_id", &mut task.project_id)?;
     apply_optional_uuid_field(object, "area_id", &mut task.area_id)?;
     apply_optional_uuid_field(object, "heading_id", &mut task.heading_id)?;
+    apply_optional_uuid_field(object, "parent_id", &mut task.parent_id)?;
     apply_optional_string_field(object, "start_date", &mut task.start_date)?;
     apply_optional_string_field(object, "deadline", &mut task.deadline)?;
+    apply_optional_string_field(object, "recurrence", &mut task.recurrence)?;
     if let Some(priority) = object.get("priority") {
         task.priority = match priority {
             serde_json::Value::Null => None,
@@ -2003,7 +2297,7 @@ fn task_to_hook_json(task: &Task) -> String {
     .to_string()
 }
 
-fn explain_task_urgency(task: &Task) -> Vec<(String, f64, f64, f64)> {
+fn explain_task_urgency(task: &Task, is_blocked: bool) -> Vec<(String, f64, f64, f64)> {
     let now = time::OffsetDateTime::now_utc();
     let today = today_string_for(now);
     let input = tock_core::domain::urgency::UrgencyInput {
@@ -2012,6 +2306,7 @@ fn explain_task_urgency(task: &Task) -> Vec<(String, f64, f64, f64)> {
         start_date: task.start_date.as_deref(),
         tags: &task.tags,
         has_project: task.project_id.is_some(),
+        is_blocked,
         created_at_days_ago: task_age_days(task.created_at, now),
         today: &today,
     };
@@ -2084,19 +2379,22 @@ fn today_string_for(now: time::OffsetDateTime) -> String {
 }
 
 /// Adapter: makes `Task` implement `tock_parse::filter::Filterable`.
-struct TaskFilterable<'a>(&'a tock_core::domain::task::Task);
+struct TaskFilterable<'a> {
+    task: &'a tock_core::domain::task::Task,
+    state: TaskFilterState,
+}
 
 impl tock_parse::filter::Filterable for TaskFilterable<'_> {
     fn status(&self) -> &str {
-        self.0.status.as_str()
+        self.task.status.as_str()
     }
 
     fn tags(&self) -> &[String] {
-        &self.0.tags
+        &self.task.tags
     }
 
     fn priority(&self) -> Option<char> {
-        self.0
+        self.task
             .priority
             .as_ref()
             .map(tock_core::domain::task::Priority::as_char)
@@ -2109,22 +2407,30 @@ impl tock_parse::filter::Filterable for TaskFilterable<'_> {
     }
 
     fn deadline(&self) -> Option<&str> {
-        self.0.deadline.as_deref()
+        self.task.deadline.as_deref()
     }
 
     fn start_date(&self) -> Option<&str> {
-        self.0.start_date.as_deref()
+        self.task.start_date.as_deref()
     }
 
     fn is_evening(&self) -> bool {
-        self.0.evening
+        self.task.evening
     }
 
     fn is_deleted(&self) -> bool {
-        self.0.deleted_at.is_some()
+        self.task.deleted_at.is_some()
+    }
+
+    fn is_blocked(&self) -> bool {
+        self.state.is_blocked
+    }
+
+    fn is_blocking(&self) -> bool {
+        self.state.is_blocking
     }
 
     fn uda_value(&self, key: &str) -> Option<String> {
-        self.0.udas.get_str(key)
+        self.task.udas.get_str(key)
     }
 }

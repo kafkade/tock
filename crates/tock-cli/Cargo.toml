@@ -40,6 +40,8 @@ uuid = { workspace = true }
 time = { workspace = true }
 serde_json = { workspace = true }
 serde = { workspace = true }
+crossterm = { workspace = true }
+ratatui = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

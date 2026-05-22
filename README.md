@@ -64,10 +64,63 @@ Identity statements, habit stacking (`--stack-after`), cadences (daily,
 N×/week, specific days), Fibonacci leveling (Spark → Embodied), and
 grace days (skip/freeze).
 
+### Task dependencies
+
+```sh
+tock depend 1 on 2               # task 1 blocked until task 2 is done
+tock undepend 1 from 2           # remove dependency
+tock ls +BLOCKED                 # list blocked tasks
+tock ls +BLOCKING                # list tasks blocking others
+tock show 1                      # shows dependencies + dependents
+```
+
+Circular dependency detection walks the chain (max depth 100). Blocked
+tasks receive an urgency penalty so they sink in listings.
+
+### Recurring tasks
+
+```sh
+tock add "Pay rent" --recur monthly
+tock add "Standup" --recur daily
+tock add "Review" --recur every-2w
+tock done 1                      # auto-creates next instance
+tock show 1                      # shows recurrence details
+```
+
+Supports `daily`, `weekly`, `monthly`, `yearly`, `every-Nd`, `every-Nw`.
+Periodic mode anchors next instance to the due date; chained mode anchors
+to the completion date.
+
+### Named contexts
+
+```sh
+tock context define work "tag:work status:pending"
+tock context set work            # all listings now filter by work
+tock ls                          # shows [ctx: work] prefix
+tock context clear               # remove active context
+tock context ls                  # list all contexts (* = active)
+tock context rm work
+```
+
+Contexts are named saved filters that are automatically AND-ed into
+every `tock ls`, `tock view`, and `tock report show` command.
+
+### Interactive TUI
+
+```sh
+tock tui
+```
+
+Three-pane ratatui terminal interface: sidebar (views + projects), task
+list (sorted by urgency), and task detail. Vim-style keys: `j`/`k` to
+navigate, `Tab` to switch panes, `Enter` to select, `d` to complete,
+`x` to delete, `r` to refresh, `q` to quit.
+
 ### More
 
 - **Projects & areas** — `tock project add/ls/archive`, `tock area add/ls`
 - **Tags** — `#tag` sigils, `tock tag ls/rename`
+- **Urgency scoring** — `tock urgency 1` for component breakdown
 - **Custom reports** — `tock report define overdue --query '+OVERDUE' --sort deadline`
 - **User-defined attributes** — `tock uda add effort --type number`, filter with `uda.effort:5`
 - **Hook scripts** — external scripts at `~/.config/tock/hooks/` for lifecycle events
@@ -103,7 +156,7 @@ tock/
 │   ├── tock-crypto/            # PURE: AES-256-GCM, Argon2id, HKDF, Ed25519
 │   ├── tock-parse/             # PURE: filter DSL + natural-language dates
 │   ├── tock-storage/           # SQLite vault, repos, migrations
-│   ├── tock-cli/               # `tock` binary (clap CLI)
+│   ├── tock-cli/               # `tock` binary (clap CLI + ratatui TUI)
 │   ├── tock-import/            # JSON importer
 │   ├── tock-export/            # JSON exporter
 │   ├── tock-sync/              # event log, sync protocol (foundation)
