@@ -32,13 +32,13 @@ pub fn parse_modify_args(args: &[String]) -> TaskPatch {
     }
 
     for token in remaining.split_whitespace() {
-        if let Some(rest) = token.strip_prefix("uda.") {
-            if let Some((key, value)) = rest.split_once(':') {
-                patch.set_udas.insert(
-                    key.to_string(),
-                    serde_json::Value::String(value.to_string()),
-                );
-            }
+        if let Some(rest) = token.strip_prefix("uda.")
+            && let Some((key, value)) = rest.split_once(':')
+        {
+            patch.set_udas.insert(
+                key.to_string(),
+                serde_json::Value::String(value.to_string()),
+            );
         }
     }
 

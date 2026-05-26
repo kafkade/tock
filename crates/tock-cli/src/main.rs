@@ -192,18 +192,18 @@ fn run_task_cmd(
                     commands::done::done_status(),
                 )?;
                 // Auto-stop any active focus session linked to this task.
-                if let Some(active) = tock_storage::repo::focus_repo::get_active(conn)? {
-                    if active.task_id == Some(task.id) {
-                        let _ = tock_storage::repo::focus_repo::abort(conn, active.sid);
-                        println!("  (auto-stopped focus session #{})", active.sid);
-                    }
+                if let Some(active) = tock_storage::repo::focus_repo::get_active(conn)?
+                    && active.task_id == Some(task.id)
+                {
+                    let _ = tock_storage::repo::focus_repo::abort(conn, active.sid);
+                    println!("  (auto-stopped focus session #{})", active.sid);
                 }
                 // Auto-stop any running time block linked to this task.
-                if let Some(running) = tock_storage::repo::time_block_repo::get_current(conn)? {
-                    if running.task_id == Some(task.id) {
-                        let _ = tock_storage::repo::time_block_repo::stop(conn, running.sid);
-                        println!("  (auto-stopped timer #{})", running.sid);
-                    }
+                if let Some(running) = tock_storage::repo::time_block_repo::get_current(conn)?
+                    && running.task_id == Some(task.id)
+                {
+                    let _ = tock_storage::repo::time_block_repo::stop(conn, running.sid);
+                    println!("  (auto-stopped timer #{})", running.sid);
                 }
                 println!("Completed task #{} — {}", task.sid, task.title);
                 let _ = hooks::run_hook(hooks::HookEvent::OnComplete, &task_to_hook_json(&task));
@@ -1272,10 +1272,10 @@ fn resolve_time_start_input(
         return Ok((String::from("Untitled"), None));
     };
 
-    if let Ok(sid) = first.parse::<u32>() {
-        if let Some(task) = tock_storage::repo::task_repo::get_by_sid(conn, sid)? {
-            return Ok((task.title.clone(), Some(task.id)));
-        }
+    if let Ok(sid) = first.parse::<u32>()
+        && let Some(task) = tock_storage::repo::task_repo::get_by_sid(conn, sid)?
+    {
+        return Ok((task.title.clone(), Some(task.id)));
     }
 
     let new_task = commands::add::parse_add_input(words);
@@ -1685,7 +1685,7 @@ fn sort_report_tasks(tasks: &mut [Task], sort: Option<&str>) {
                 .then_with(|| left.sid.cmp(&right.sid))
         }),
         Some(field) if field.eq_ignore_ascii_case("sid") => {
-            tasks.sort_by(|left, right| left.sid.cmp(&right.sid));
+            tasks.sort_by_key(|t| t.sid);
         }
         _ => tasks.sort_by(|left, right| {
             right
@@ -1995,7 +1995,7 @@ fn habit_cadence_display(raw: &str) -> String {
     ParsedCadence::from_json(raw).map_or_else(|| raw.to_owned(), |cadence| cadence.display())
 }
 
-fn selected_output_format(global_format: &str, json: bool) -> OutputFormat {
+const fn selected_output_format(global_format: &str, json: bool) -> OutputFormat {
     if json {
         OutputFormat::Json
     } else {
@@ -2009,10 +2009,10 @@ fn print_task_listing(
     format: OutputFormat,
     active_context: Option<&str>,
 ) {
-    if !matches!(format, OutputFormat::Json) {
-        if let Some(active_context) = active_context {
-            println!("[ctx: {active_context}]");
-        }
+    if !matches!(format, OutputFormat::Json)
+        && let Some(active_context) = active_context
+    {
+        println!("[ctx: {active_context}]");
     }
     if !rendered.is_empty() {
         println!("{rendered}");

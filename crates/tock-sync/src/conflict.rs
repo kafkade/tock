@@ -507,7 +507,7 @@ mod tests {
                 fields: vec!["title".into()],
             },
         );
-        let c = classify_against_heads(&incoming, &[head.clone()]);
+        let c = classify_against_heads(&incoming, std::slice::from_ref(&head));
         assert!(c.should_apply());
         assert_eq!(c.superseded, vec![head.id]);
     }

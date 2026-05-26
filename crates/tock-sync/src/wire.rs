@@ -527,7 +527,7 @@ mod tests {
     #[test]
     fn batch_roundtrip_single_event() {
         let se = signed_sample(DeviceId([7; 16]), 1);
-        let encoded = encode_batch(&[se.clone()]).expect("encode");
+        let encoded = encode_batch(std::slice::from_ref(&se)).expect("encode");
         assert!(encoded.starts_with(BATCH_MAGIC));
         let decoded = decode_batch(&encoded).expect("decode");
         assert_eq!(decoded.len(), 1);
@@ -576,7 +576,7 @@ mod tests {
             created_at: OffsetDateTime::from_unix_timestamp(1_700_100_000).expect("ts"),
         };
         let se = sign(event, &sk);
-        let encoded = encode_batch(&[se.clone()]).expect("encode");
+        let encoded = encode_batch(std::slice::from_ref(&se)).expect("encode");
         let decoded = decode_batch(&encoded).expect("decode");
         assert_eq!(decoded.len(), 1);
         let d = &decoded[0];
@@ -677,7 +677,7 @@ mod tests {
             created_at: OffsetDateTime::from_unix_timestamp(1_700_300_000).expect("ts"),
         };
         let se = sign(event, &sk);
-        let encoded = encode_batch(&[se.clone()]).expect("encode");
+        let encoded = encode_batch(std::slice::from_ref(&se)).expect("encode");
         let decoded = decode_batch(&encoded).expect("decode");
         assert_eq!(decoded[0].event.vector_clock, se.event.vector_clock);
     }

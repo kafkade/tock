@@ -218,7 +218,10 @@ mod tests {
             reason: "compromised".into(),
             event_id: Uuid::from_bytes([50; 16]),
         };
-        assert!(is_device_revoked(DeviceId([2; 16]), &[record.clone()]));
+        assert!(is_device_revoked(
+            DeviceId([2; 16]),
+            std::slice::from_ref(&record)
+        ));
         assert!(!is_device_revoked(DeviceId([3; 16]), &[record]));
     }
 

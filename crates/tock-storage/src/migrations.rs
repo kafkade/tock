@@ -115,10 +115,10 @@ pub fn migrate(conn: &mut Connection) -> Result<u32, Error> {
                     |r| r.get(0),
                 )
                 .ok();
-            if let Some(stored) = stored {
-                if stored != checksum(m.sql) {
-                    return Err(Error::MigrationChecksumMismatch { version: m.version });
-                }
+            if let Some(stored) = stored
+                && stored != checksum(m.sql)
+            {
+                return Err(Error::MigrationChecksumMismatch { version: m.version });
             }
         }
     }

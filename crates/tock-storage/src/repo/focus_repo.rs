@@ -271,7 +271,7 @@ const fn validate_new_session(new: &NewFocusSession) -> Result<(), Error> {
 const fn next_state_after_cycle(completed_cycles: u32, existing: &FocusSession) -> FocusState {
     if completed_cycles >= existing.planned_cycles {
         FocusState::Completed
-    } else if completed_cycles % existing.config.cycles_before_long_break == 0 {
+    } else if completed_cycles.is_multiple_of(existing.config.cycles_before_long_break) {
         FocusState::LongBreak
     } else {
         FocusState::ShortBreak

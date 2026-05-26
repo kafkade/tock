@@ -75,11 +75,11 @@ pub enum Filter {
         value: String,
     },
     /// Invert another filter.
-    Not(Box<Filter>),
+    Not(Box<Self>),
     /// Require all nested filters to match.
-    And(Vec<Filter>),
+    And(Vec<Self>),
     /// Require any nested filter to match.
-    Or(Vec<Filter>),
+    Or(Vec<Self>),
 }
 
 /// Parse a filter expression from CLI args.
@@ -228,7 +228,7 @@ fn parse_atom(input: &str, today: &str) -> Filter {
     permissive_filter()
 }
 
-fn strip_prefix_case_insensitive<'a>(input: &'a str, prefix: &str) -> Option<&'a str> {
+const fn strip_prefix_case_insensitive<'a>(input: &'a str, prefix: &str) -> Option<&'a str> {
     if input.len() < prefix.len() {
         return None;
     }
