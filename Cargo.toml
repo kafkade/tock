@@ -81,7 +81,7 @@ clap = { version = "4", features = ["derive", "env"] }
 clap_complete = "4"
 crossterm = "0.29"
 dirs = "6"
-ratatui = "0.29"
+ratatui = "0.30"
 
 # Test-only utilities.
 proptest = "1"
