@@ -25,6 +25,16 @@ pub enum Error {
     #[error("not found")]
     NotFound,
 
+    /// Rate limit exceeded.
+    #[allow(dead_code)]
+    #[error("rate limit exceeded")]
+    RateLimited,
+
+    /// Storage or device quota exceeded.
+    #[allow(dead_code)]
+    #[error("quota exceeded: {0}")]
+    QuotaExceeded(String),
+
     /// Internal server error.
     #[error("internal: {0}")]
     Internal(String),
@@ -43,6 +53,11 @@ impl IntoResponse for Error {
             Self::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, (*msg).to_string()),
             Self::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
             Self::NotFound => (StatusCode::NOT_FOUND, "not found".to_string()),
+            Self::RateLimited => (
+                StatusCode::TOO_MANY_REQUESTS,
+                "rate limit exceeded".to_string(),
+            ),
+            Self::QuotaExceeded(msg) => (StatusCode::FORBIDDEN, msg.clone()),
         };
         let body = serde_json::json!({ "error": message });
         (status, axum::Json(body)).into_response()
