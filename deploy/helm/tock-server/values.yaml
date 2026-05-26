@@ -1,0 +1,33 @@
+# Default values for tock-server Helm chart.
+
+replicaCount: 1
+
+image:
+  repository: ghcr.io/kafkade/tock-server
+  pullPolicy: IfNotPresent
+  tag: ""  # defaults to appVersion
+
+service:
+  type: ClusterIP
+  port: 8080
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 256Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+persistence:
+  enabled: true
+  storageClass: ""
+  accessMode: ReadWriteOnce
+  size: 1Gi
+
+env:
+  RUST_LOG: info
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

@@ -67,6 +67,7 @@ pub fn hooks_dir() -> PathBuf {
 /// Returns the hook's modified JSON, the original JSON when the hook produced
 /// no stdout, or `None` if the hook cancelled the operation.
 #[must_use]
+#[allow(clippy::cognitive_complexity)]
 pub fn run_hook(event: HookEvent, input_json: &str) -> Option<String> {
     let script_path = hook_script_path(event)?;
 

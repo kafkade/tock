@@ -58,7 +58,7 @@ ed25519-dalek = { version = "2", default-features = false, features = ["rand_cor
 zeroize = { version = "1.8", features = ["derive"] }
 subtle = "2.6"
 rand_core = { version = "0.6", features = ["getrandom"] }
-thiserror = "1"
+thiserror = "2"
 
 # Domain & storage shared deps.
 uuid = { version = "1", features = ["v4", "v7", "serde"] }
@@ -67,6 +67,11 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rusqlite = { version = "0.32", features = ["bundled", "blob", "uuid", "time"] }
 
+# Async runtime + HTTP server (used by tock-server, AGPL-3.0).
+axum = "0.8"
+tokio = { version = "1", features = ["full"] }
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+
 # Tracing / structured logging.
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt"] }
@@ -74,7 +79,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt"]
 # CLI argument parsing.
 clap = { version = "4", features = ["derive", "env"] }
 clap_complete = "4"
-crossterm = "0.28"
+crossterm = "0.29"
 dirs = "6"
 ratatui = "0.29"
 
