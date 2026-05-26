@@ -1,0 +1,32 @@
+# docker-compose.yml — simple self-hosting for tock-server.
+#
+# Usage:
+#   docker compose up -d
+#
+# The server stores data in a named volume. The AGPL-3.0 license
+# applies to tock-server; source is at https://github.com/kafkade/tock.
+
+services:
+  tock-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      - TOCK_BIND=0.0.0.0:8080
+      - TOCK_DATA_DIR=/var/lib/tock-server
+      - RUST_LOG=info
+    volumes:
+      - tock-data:/var/lib/tock-server
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  tock-data:
+    driver: local

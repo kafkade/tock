@@ -179,6 +179,7 @@ impl OpenVault {
 ///   header, or malformed metadata.
 /// - [`Error::Sqlite`] / [`Error::MigrationChecksumMismatch`] on
 ///   schema-runtime failures.
+#[allow(clippy::cognitive_complexity)]
 pub fn open(path: &Path, password: &[u8]) -> Result<OpenVault, Error> {
     let _span = tracing::info_span!("vault::open", path = %path.display()).entered();
     if !path.exists() {
