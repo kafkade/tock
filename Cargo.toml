@@ -79,7 +79,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt"]
 # CLI argument parsing.
 clap = { version = "4", features = ["derive", "env"] }
 clap_complete = "4"
-crossterm = "0.28"
+crossterm = "0.29"
 dirs = "6"
 ratatui = "0.29"
 
