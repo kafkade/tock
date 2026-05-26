@@ -104,8 +104,7 @@ const fn apply_direction(amount: i64, forward: bool) -> Option<i64> {
 fn parse_weekday_expression(input: &str, now: Date) -> Option<Date> {
     let tokens: Vec<_> = input.split_whitespace().collect();
     match tokens.as_slice() {
-        [weekday] => next_weekday(now, parse_weekday(weekday)?),
-        ["next", weekday] => next_weekday(now, parse_weekday(weekday)?),
+        [weekday] | ["next", weekday] => next_weekday(now, parse_weekday(weekday)?),
         ["this", weekday] => this_weekday(now, parse_weekday(weekday)?),
         _ => None,
     }

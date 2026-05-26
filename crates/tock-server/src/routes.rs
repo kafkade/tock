@@ -271,7 +271,7 @@ fn parse_hex_32(s: &str) -> Result<[u8; 32], Error> {
 }
 
 fn hex_decode(s: &str) -> Result<Vec<u8>, Error> {
-    if s.len() % 2 != 0 {
+    if !s.len().is_multiple_of(2) {
         return Err(Error::BadRequest("odd-length hex string".into()));
     }
     let mut bytes = Vec::with_capacity(s.len() / 2);

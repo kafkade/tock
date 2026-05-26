@@ -272,8 +272,12 @@ mod tests {
             },
         );
         let incoming = make_event(dev_a(), 1, vc1, EventOp::Create);
-        let result =
-            process_incoming_event(&incoming, &[head.clone()], &vc2, ConflictPolicy::default());
+        let result = process_incoming_event(
+            &incoming,
+            std::slice::from_ref(&head),
+            &vc2,
+            ConflictPolicy::default(),
+        );
         assert_eq!(result.action, IngestAction::Discard);
         assert_eq!(result.new_heads, vec![head.id]);
     }
@@ -365,8 +369,12 @@ mod tests {
     fn duplicate_event_discarded() {
         let vc = VectorClock::singleton(dev_a(), 1);
         let event = make_event(dev_a(), 1, vc.clone(), EventOp::Create);
-        let result =
-            process_incoming_event(&event, &[event.clone()], &vc, ConflictPolicy::default());
+        let result = process_incoming_event(
+            &event,
+            std::slice::from_ref(&event),
+            &vc,
+            ConflictPolicy::default(),
+        );
         assert_eq!(result.action, IngestAction::Discard);
     }
 }

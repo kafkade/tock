@@ -20,7 +20,7 @@ impl OutputFormat {
     /// Parse an output format string, defaulting to table for unknown values.
     #[allow(clippy::should_implement_trait)]
     #[must_use]
-    pub fn from_str(s: &str) -> Self {
+    pub const fn from_str(s: &str) -> Self {
         if s.eq_ignore_ascii_case("compact") {
             Self::Compact
         } else if s.eq_ignore_ascii_case("json") {
