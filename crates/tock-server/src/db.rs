@@ -54,6 +54,7 @@ impl ServerDb {
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS vaults (
                 id         BLOB PRIMARY KEY,
+                account_id TEXT,
                 created_at TEXT NOT NULL
             );
 
@@ -84,6 +85,20 @@ impl ServerDb {
                 blob          BLOB NOT NULL,
                 created_at    TEXT NOT NULL,
                 PRIMARY KEY (vault_id, target_device)
+            );
+
+            CREATE TABLE IF NOT EXISTS accounts (
+                id         TEXT PRIMARY KEY,
+                email      TEXT NOT NULL UNIQUE,
+                api_token  TEXT NOT NULL UNIQUE,
+                tier       TEXT NOT NULL DEFAULT 'free',
+                created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS usage_tracking (
+                account_id   TEXT PRIMARY KEY,
+                bytes_stored INTEGER NOT NULL DEFAULT 0,
+                event_count  INTEGER NOT NULL DEFAULT 0
             );",
         )?;
         Ok(())
@@ -284,6 +299,119 @@ impl ServerDb {
             .flatten();
         Ok(max.unwrap_or(0))
     }
+
+    // ── Account management (hosted mode) ─────────────────────────────
+
+    /// Create a new account. Returns `(account_id, api_token)`.
+    pub fn create_account(
+        &self,
+        email: &str,
+        tier: crate::billing::Tier,
+    ) -> Result<(String, String), Error> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))?;
+        let account_id = uuid::Uuid::now_v7().to_string();
+        let api_token = format!("tok_{}", uuid::Uuid::now_v7().as_hyphenated());
+        let now = time::OffsetDateTime::now_utc()
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap_or_default();
+        conn.execute(
+            "INSERT INTO accounts (id, email, api_token, tier, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![account_id, email, api_token, tier.as_str(), now],
+        )?;
+        conn.execute(
+            "INSERT INTO usage_tracking (account_id) VALUES (?1)",
+            params![account_id],
+        )?;
+        Ok((account_id, api_token))
+    }
+
+    /// Get account info: `(email, tier, usage)`.
+    pub fn get_account(
+        &self,
+        account_id: &str,
+    ) -> Result<Option<(String, String, crate::billing::UsageSnapshot)>, Error> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))?;
+        let row: Option<(String, String)> = conn
+            .query_row(
+                "SELECT email, tier FROM accounts WHERE id = ?1",
+                params![account_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        let Some((email, tier)) = row else {
+            return Ok(None);
+        };
+        let usage = Self::get_usage_inner(&conn, account_id);
+        Ok(Some((email, tier, usage)))
+    }
+
+    /// Get usage snapshot for an account.
+    pub fn get_usage(
+        &self,
+        account_id: &str,
+    ) -> Result<Option<crate::billing::UsageSnapshot>, Error> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))?;
+        let exists: bool = conn
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM accounts WHERE id = ?1",
+                params![account_id],
+                |r| r.get(0),
+            )
+            .unwrap_or(false);
+        if !exists {
+            return Ok(None);
+        }
+        Ok(Some(Self::get_usage_inner(&conn, account_id)))
+    }
+
+    fn get_usage_inner(conn: &Connection, account_id: &str) -> crate::billing::UsageSnapshot {
+        let (bytes_stored, event_count): (i64, i64) = conn
+            .query_row(
+                "SELECT COALESCE(bytes_stored, 0), COALESCE(event_count, 0)
+                 FROM usage_tracking WHERE account_id = ?1",
+                params![account_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap_or((0, 0));
+        crate::billing::UsageSnapshot {
+            bytes_stored: u64::try_from(bytes_stored).unwrap_or(0),
+            event_count: u64::try_from(event_count).unwrap_or(0),
+            device_count: 0,
+            vault_count: 0,
+        }
+    }
+
+    /// Increment usage counters after a push.
+    #[allow(dead_code)]
+    pub fn track_usage(
+        &self,
+        account_id: &str,
+        bytes_delta: i64,
+        events_delta: i64,
+    ) -> Result<(), Error> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))?;
+        conn.execute(
+            "UPDATE usage_tracking
+             SET bytes_stored = bytes_stored + ?2,
+                 event_count  = event_count + ?3
+             WHERE account_id = ?1",
+            params![account_id, bytes_delta, events_delta],
+        )?;
+        Ok(())
+    }
 }
 
 /// An event stored on the server.
@@ -371,5 +499,35 @@ mod tests {
         assert_eq!(after_3.len(), 2); // lamport 4 and 5
         assert_eq!(after_3[0].lamport, 4);
         assert_eq!(after_3[1].lamport, 5);
+    }
+
+    #[test]
+    fn account_create_and_get() {
+        let db = ServerDb::open_memory().expect("open");
+        let (aid, token) = db
+            .create_account("user@example.com", crate::billing::Tier::Personal)
+            .expect("create");
+        assert!(!aid.is_empty());
+        assert!(token.starts_with("tok_"));
+
+        let info = db.get_account(&aid).expect("get").expect("found");
+        assert_eq!(info.0, "user@example.com");
+        assert_eq!(info.1, "personal");
+        assert_eq!(info.2.bytes_stored, 0);
+    }
+
+    #[test]
+    fn usage_tracking_increments() {
+        let db = ServerDb::open_memory().expect("open");
+        let (aid, _) = db
+            .create_account("u@e.com", crate::billing::Tier::Free)
+            .expect("create");
+
+        db.track_usage(&aid, 1024, 5).expect("track");
+        db.track_usage(&aid, 2048, 3).expect("track2");
+
+        let usage = db.get_usage(&aid).expect("get").expect("found");
+        assert_eq!(usage.bytes_stored, 3072);
+        assert_eq!(usage.event_count, 8);
     }
 }

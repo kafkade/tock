@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Docker Compose configuration for simple self-hosting with persistent storage
 - Helm chart for Kubernetes deployment with resource limits, health/readiness probes, and persistent volume claim
 - systemd unit file for traditional server deployments with security hardening
+- Hosted sync service skeleton: `--mode hosted` enables user accounts, subscription tiers (Free/Personal/Family/Pro), per-account rate limiting, usage tracking (encrypted byte counts only), and a `/metrics` endpoint
 - User-defined attributes (UDAs): `tock uda add effort --type number` to declare custom fields on tasks. Set values with `tock mod <sid> uda.effort:5`. Filter with `uda.effort:5` in list/view commands
 - Urgency scoring engine with configurable coefficients and `tock urgency <sid>` breakdown. Tasks auto-sorted by urgency in list views
 - Hook scripts API: external scripts at `~/.config/tock/hooks/` for lifecycle events (`on-add`, `on-complete`). Pre-hooks can modify or cancel operations. `tock hooks ls/path`
