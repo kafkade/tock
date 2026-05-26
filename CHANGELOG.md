@@ -10,6 +10,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Event log wire format: binary serialization/deserialization for `SignedEvent` batches with encrypted batch envelope for E2EE transport
+- Sync transport trait and types: `SyncCursor`, `PushAck`, `PullBatch`, `Transport` trait for pluggable sync backends
+- Conflict resolution engine: vector-clock-based detection (supersedes/stale/duplicate/concurrent), per-field merge for disjoint updates, last-writer-wins for overlapping fields, configurable delete-vs-update policy, conflict log for user review
+- Stateless sync engine: `process_incoming_event` with transactional head classification and merged device clock
+- Device pairing flow: X25519 key exchange, SHA-256 fingerprint verification, onboarding blob with AAD-bound VK encryption, 5-minute invite expiry
+- Device revocation: append-only status changes preserving verifying keys for historical signature verification
+- Recovery key: Crockford Base32 encoding (52 chars), HKDF-derived key, VK wrap/unwrap via recovery path
+- Password rotation: re-derives MK/MEK from new password, re-wraps VK without changing item keys
+- Vault key rotation planning: generates new VK and lists entities requiring re-encryption (plan-only, no mutation)
+- Self-hosted sync server (`tock-server`): Axum HTTP API with push/pull events, device registration, onboarding blob storage, and health check endpoint. Server stores only opaque encrypted blobs and never decrypts user data (AGPL-3.0)
+- Dockerfile: multi-stage build producing a minimal Debian-based container image for tock-server
+- Docker Compose configuration for simple self-hosting with persistent storage
+- Helm chart for Kubernetes deployment with resource limits, health/readiness probes, and persistent volume claim
+- systemd unit file for traditional server deployments with security hardening
 - User-defined attributes (UDAs): `tock uda add effort --type number` to declare custom fields on tasks. Set values with `tock mod <sid> uda.effort:5`. Filter with `uda.effort:5` in list/view commands
 - Urgency scoring engine with configurable coefficients and `tock urgency <sid>` breakdown. Tasks auto-sorted by urgency in list views
 - Hook scripts API: external scripts at `~/.config/tock/hooks/` for lifecycle events (`on-add`, `on-complete`). Pre-hooks can modify or cancel operations. `tock hooks ls/path`

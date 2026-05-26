@@ -1,0 +1,16 @@
+apiVersion: v2
+name: tock-server
+description: Self-hosted sync server for tock (AGPL-3.0)
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/kafkade/tock
+sources:
+  - https://github.com/kafkade/tock
+maintainers:
+  - name: The tock authors
+keywords:
+  - tock
+  - sync
+  - productivity
+  - e2ee
