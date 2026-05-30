@@ -36,6 +36,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Focus session history per task: `tock focus history <sid>` and auto-stop on `tock done`
 - Time block editing: `tock time edit <sid>` with `--title/--start/--end/--task/--billable` flags
 - Habit tracking: CRUD, identity statements, stacking, cadences (daily/weekly/specific-days), Fibonacci leveling, streak tracking with skip/freeze grace days, backfill logging, break-bad-habit mode, and per-habit reminders
+- UniFFI bindings (`tock-uniffi`): full FFI facade exposing all four domains (tasks, habits, time tracking, focus sessions) to Apple platforms via a `Workspace` object with 30+ methods, UniFFI proc-macro types, and a `uniffi-bindgen` CLI for Swift code generation
+- Swift Package Manager layout (`bindings/swift/`): `TockFFI` target for generated bindings and `TockSwift` target with idiomatic async/await wrapper, targeting iOS 17+ and macOS 14+
 - Cross-platform notifications on focus events (stderr-based, upgradeable to desktop)
 - Interactive ratatui TUI launched with `tock tui`, with sidebar views/projects, task list, detail pane, vim-style navigation, refresh, complete, and delete actions
 - README rewritten with full feature documentation and install instructions
