@@ -11,9 +11,17 @@ authors.workspace = true
 readme = "README.md"
 
 [lib]
-# Future builds will add `crate-type = ["staticlib", "cdylib"]` for
-# xcframework packaging; left as the default `rlib` until UniFFI lands.
 name = "tock_uniffi"
+crate-type = ["lib", "staticlib", "cdylib"]
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi_bindgen.rs"
+required-features = ["cli"]
+
+[features]
+default = []
+cli = ["uniffi/cli"]
 
 [lints]
 # UniFFI-generated code uses `#[no_mangle] pub extern "C"` and `unsafe`
@@ -39,5 +47,12 @@ todo = "deny"
 
 [dependencies]
 tock-core = { workspace = true }
+tock-storage = { workspace = true }
+uniffi = { workspace = true }
+uuid = { workspace = true }
+time = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
 
 [dev-dependencies]
+tempfile = { workspace = true }
