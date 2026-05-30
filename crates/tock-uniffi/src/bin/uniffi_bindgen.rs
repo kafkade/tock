@@ -1,4 +1,4 @@
-//! Entry point for the UniFFI binding generator.
+//! Entry point for the `UniFFI` binding generator.
 //!
 //! Build with:
 //! ```sh
