@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- SwiftUI iOS app (`apps/ios/`): five-tab navigation (Today, Inbox, Projects, Habits, Timer), vault unlock gate, quick-add sheet, task/habit/project detail views, focus session UI with Pomodoro cycle tracking, and settings view. Uses `CoreClient` protocol with mock data for development until UniFFI bindings are connected
+
 ## [0.2.1] - 2026-05-30
 
 ### Changed
