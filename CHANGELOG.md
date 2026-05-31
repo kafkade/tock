@@ -12,6 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - macOS native app (`apps/macos/`): full-window `NavigationSplitView` with three-column layout (sidebar, content, detail), `MenuBarExtra` with compact popover (timer/focus status, today tasks, quick-add, focus controls), and global hotkey (`⌃⌥Space`) floating quick-entry panel via AppKit `NSPanel`. macOS-native `Settings` scene with vault/sync/about tabs. Full command menu structure with keyboard shortcuts per architecture §8.3 (`⌘N` new task, `⌘1`–`⌘7` view switching, `Space` complete, `⌘E` evening, `⌘T` timer, `⌘⇧F` focus, `⌘⌥L` lock vault). Uses `@SceneStorage` for per-window state restoration and shared `AppSessionState` across scenes. Carbon `RegisterEventHotKey` for reliable system-wide hotkey. Uses `CoreClient` protocol with mock data for development until UniFFI bindings are connected
+- CI path-based job skipping: Rust, CI/infra, and docs change detection via `dorny/paths-filter` to skip irrelevant jobs on PRs
+- CI WASM bundle-size gate: enforces 2 MB compressed budget on `tock-core` WASM builds
+- CI MSRV job: verifies the workspace compiles on the minimum supported Rust version (1.95)
+- CI markdown lint job: runs `markdownlint-cli2` on all markdown files
+- Scheduled weekly security audit workflow (`cargo audit`) with automatic issue creation on failure
+- Release version/tag validation: verifies git tag matches `Cargo.toml` workspace version before publishing
+- Release crates.io publishing: manual workflow with dependency-ordered dry-run, publish, and index-wait per crate
 - SwiftUI iOS app (`apps/ios/`): five-tab navigation (Today, Inbox, Projects, Habits, Timer), vault unlock gate, quick-add sheet, task/habit/project detail views, focus session UI with Pomodoro cycle tracking, and settings view. Uses `CoreClient` protocol with mock data for development until UniFFI bindings are connected
 - iPadOS adaptive layout: three-column `NavigationSplitView` (sidebar, content, detail) on iPad with automatic fallback to tab bar on iPhone. Sidebar shows smart views, projects, areas, habits, and timer
 - iPad keyboard shortcuts: `⌘N` (new task), `⌘1`–`⌘5` (switch view), `⌘6`/`⌘7` (habits/timer), `Space` (mark done), `⌘E` (evening), `⌘T` (timer), `⌘⇧F` (focus session). Routed per-window via `FocusedValues`
