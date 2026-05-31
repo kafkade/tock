@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Taskwarrior import: `tock import taskwarrior -f <file>` parses `task export` JSON with field mapping (status, priority, dates, annotations), project creation, dependency linking, recurrence conversion, and UDA registration
 - CSV import: `tock import csv -f <file>` with automatic column detection from headers and optional TOML mapping file (`--map config.toml`) for custom column assignments, date formats, and field overrides
+- watchOS companion app (`apps/watchos/`): three-tab layout (Today, Habits, Timer) with today's tasks (up to 20, sorted by urgency), tap-to-complete with haptic feedback, habit tracking with tap-to-log and streak display, quick timer and Pomodoro focus sessions with progress ring. WatchConnectivity sync with paired iPhone and persistent intent queue for offline mutations. WidgetKit complications for all accessory families (circular habit ring, rectangular task list/timer, inline status line, corner habit gauge)
 
 ## [0.3.0] - 2026-05-30
 
