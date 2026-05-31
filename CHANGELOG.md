@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - SwiftUI iOS app (`apps/ios/`): five-tab navigation (Today, Inbox, Projects, Habits, Timer), vault unlock gate, quick-add sheet, task/habit/project detail views, focus session UI with Pomodoro cycle tracking, and settings view. Uses `CoreClient` protocol with mock data for development until UniFFI bindings are connected
+- iPadOS adaptive layout: three-column `NavigationSplitView` (sidebar, content, detail) on iPad with automatic fallback to tab bar on iPhone. Sidebar shows smart views, projects, areas, habits, and timer
+- iPad keyboard shortcuts: `⌘N` (new task), `⌘1`–`⌘5` (switch view), `⌘6`/`⌘7` (habits/timer), `Space` (mark done), `⌘E` (evening), `⌘T` (timer), `⌘⇧F` (focus session). Routed per-window via `FocusedValues`
+- iPad drag-and-drop: drag tasks onto sidebar projects to reassign. Uses ID-only `Transferable` wrapper to avoid leaking plaintext task data via pasteboard
+- Stage Manager multi-window support: each window owns independent `AppState` for sidebar selection and task detail
+- Biometric vault unlock: Face ID and Touch ID support via `LAContext` and iOS Keychain. Vault key cached with `.biometryCurrentSet` access control (auto-invalidated on biometric enrollment changes). Includes reinstall detection, auto-trigger on lock screen, explicit error messaging, and enable/disable toggle in Settings
 
 ## [0.2.1] - 2026-05-30
 
