@@ -20,24 +20,30 @@ This directory contains Architecture Decision Records for the Tock project. Each
 ## Categories
 
 ### Core Architecture
+
 - ADR-001: Zero-I/O core crate design
 - ADR-004: SQLite storage strategy
 - ADR-005: Cross-platform bindings
 
 ### Security & Privacy
+
 - ADR-002: End-to-end encryption design
 - ADR-010: Zero-knowledge authentication
 
 ### Synchronization
+
 - ADR-003: Event-sourced sync with conflict resolution
 
 ### Domain Model
+
 - ADR-008: Unified task/habit/time/focus model
 
 ### User Experience
+
 - ADR-009: Natural language CLI interface
 
 ### Business Model
+
 - ADR-006: Open source licensing strategy
 - ADR-007: Monetization model
 

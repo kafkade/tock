@@ -141,7 +141,40 @@ Prepare a branch for pull request: generate a PR description from the diff AND u
 ### Phase 5: Output
 
 1. **Copy the PR description to the clipboard**
-   - Use PowerShell `Set-Clipboard` (Windows), `pbcopy` (macOS), or `xclip` (Linux)
+
+   **CRITICAL — Windows/PowerShell backtick escaping will corrupt your output
+   if you use the wrong string syntax.** Markdown content contains backticks
+   (`` ` ``) which PowerShell interprets as escape characters inside
+   double-quoted strings (`"..."`) and double-quoted heredocs (`@"..."@`).
+   For example `` `a `` becomes a bell character, `` `n `` becomes a newline,
+   and `` `f `` becomes a form feed — silently destroying the PR description.
+
+   **DO NOT** use `@"..."@` (double-quoted heredoc) or `"..."` strings to
+   hold the PR description. **ALWAYS** use one of these two safe approaches:
+
+   **Option A — temp file (most reliable, preferred):**
+   Use the `create` tool to write the PR description to a temp file, then
+   pipe its content to the clipboard:
+
+   ```powershell
+   Get-Content $env:TEMP\pr-description.md -Raw | Set-Clipboard
+   Remove-Item $env:TEMP\pr-description.md
+   ```
+
+   **Option B — single-quoted heredoc (`@'...'@`):**
+   Single-quoted heredocs preserve all characters literally (no escaping):
+
+   ```powershell
+   $pr = @'
+   ## Description
+   Run `cargo test --workspace` to verify.
+   '@
+   Set-Clipboard -Value $pr
+   ```
+
+   On **macOS** use `pbcopy`, on **Linux** use `xclip -selection clipboard`.
+   These shells do not have the backtick escaping problem.
+
    - Confirm to the user that the description has been copied
 
 2. **Suggest a PR title**

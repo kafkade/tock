@@ -1516,7 +1516,6 @@ Working assumptions, derived from a power user generating ~200 events/day (tasks
 
 Backpressure: if push fails, events queue locally indefinitely; `tock sync status` surfaces backlog count and oldest unsynced timestamp. There is no in-protocol size cap on the local queue — the only limit is local disk.
 
-
 ## 7. CLI Design
 
 ### 7.1 Complete Command Tree
@@ -2738,6 +2737,7 @@ tock habit ls --format md > habits.md
 Eight phases. Each ships a usable artifact to keep dogfooding pressure high. Estimated complexity is calibrated for a **1–2 person team**; "Very High" means months, not weeks. **The roadmap is sequenced so that the core team can dogfood from Phase 1 onward, and other people can dogfood from Phase 2.**
 
 ### Phase 0 — Foundation
+
 **Complexity: High** · Depends on: nothing
 
 - Monorepo scaffolded (`crates/tock-core`, `-cli`, `-server`; `bindings/swift`; `apps/`).
@@ -2750,6 +2750,7 @@ Eight phases. Each ships a usable artifact to keep dogfooding pressure high. Est
 - **Testable**: `tock vault init/unlock/lock/status` works; passes property tests; round-trips encrypted writes.
 
 ### Phase 1 — CLI Task Manager MVP
+
 **Complexity: Medium** · Depends on: Phase 0
 
 - Task CRUD: `add`, `mod`, `done`, `cancel`, `delete`, `undo`, `redo`, `ls`, `show`, `annotate`.
@@ -2763,6 +2764,7 @@ Eight phases. Each ships a usable artifact to keep dogfooding pressure high. Est
 - **Testable**: a single user can fully manage their tasks from the CLI for the everyday basics.
 
 ### Phase 2 — Time Tracking + Focus Timer
+
 **Complexity: Medium** · Depends on: Phase 1
 
 - `start`, `stop`, `resume`, `current`, `blocks`, `report`, `edit`.
@@ -2775,6 +2777,7 @@ Eight phases. Each ships a usable artifact to keep dogfooding pressure high. Est
 - **Testable**: complete a full Pomodoro day end-to-end; produce a weekly time report.
 
 ### Phase 3 — Habit Tracking
+
 **Complexity: Medium** · Depends on: Phase 1
 
 - Habit CRUD with guided creation wizard (`habit add` without `--no-wizard`).
@@ -2787,6 +2790,7 @@ Eight phases. Each ships a usable artifact to keep dogfooding pressure high. Est
 - **Testable**: track a full set of daily habits from the CLI, including identity statements and stacking.
 
 ### Phase 4 — Advanced Task Features
+
 **Complexity: High** · Depends on: Phases 1–3
 
 - UDAs (declared in config; typed; in queries; in reports).
@@ -2801,6 +2805,7 @@ Eight phases. Each ships a usable artifact to keep dogfooding pressure high. Est
 - **Testable**: power-user task management with UDAs, hooks, custom reports, dependencies, recurrence, and contexts.
 
 ### Phase 5 — Sync + Server
+
 **Complexity: Very High** · Depends on: Phases 0–4
 
 - Event log → wire format → sync protocol (E2EE; details in part 1 §5).
@@ -2813,6 +2818,7 @@ Eight phases. Each ships a usable artifact to keep dogfooding pressure high. Est
 - **Testable**: two CLI installs sync the same vault; offline edits merge cleanly; server can't decrypt.
 
 ### Phase 6 — iOS / iPadOS App
+
 **Complexity: Very High** · Depends on: Phases 1–5
 
 - UniFFI bindings + Swift packaging.
@@ -2825,6 +2831,7 @@ Eight phases. Each ships a usable artifact to keep dogfooding pressure high. Est
 - **Testable**: full iPhone/iPad app; Tock App Store submission ready.
 
 ### Phase 7 — macOS + watchOS + Polish
+
 **Complexity: High** · Depends on: Phase 6
 
 - macOS native app (full window + `MenuBarExtra` + global hotkey).
@@ -2942,7 +2949,6 @@ The name is now locked to **`tock`** for the CLI and **Tock** for user-facing su
 
 The team should proceed with **tock** as the working product name, but may revisit it before launch if a clearly better option surfaces.
 
-
 ---
 
 ## Acknowledgments & Prior Art
@@ -3010,4 +3016,3 @@ near-zero ceremony: the same recovery key flow, the same device-onboarding QR
 exchange, the same self-hosted-or-hosted choice for sync, the same export-at-any-time
 guarantee. The tools are deliberately separate binaries — there is no
 "super-app" — but they are designed to feel like one ecosystem.
-

@@ -16,6 +16,7 @@ We need a model that sustains development while keeping all code open, never gat
 
 ## Decision
 
+<!-- markdownlint-disable MD036 -->
 **Model B: Open core with paid hosted sync**
 
 **All code is open source:**
