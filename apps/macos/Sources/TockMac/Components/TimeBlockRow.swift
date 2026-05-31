@@ -12,6 +12,7 @@ struct TimeBlockRow: View {
                 Circle()
                     .fill(TockTheme.Colors.timerActive)
                     .frame(width: 8, height: 8)
+                    .accessibilityLabel("Timer running")
             }
 
             VStack(alignment: .leading, spacing: TockTheme.Spacing.xxs) {
@@ -29,8 +30,10 @@ struct TimeBlockRow: View {
                 .font(.subheadline)
                 .monospacedDigit()
                 .foregroundStyle(block.isRunning ? TockTheme.Colors.timerActive : .secondary)
+                .accessibilityLabel("Duration: \(Self.formatDuration(block.duration))")
         }
         .padding(.vertical, TockTheme.Spacing.xxs)
+        .accessibilityElement(children: .combine)
     }
 
     static func formatDuration(_ interval: TimeInterval) -> String {

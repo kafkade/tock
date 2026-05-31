@@ -60,6 +60,7 @@ struct HabitsView: View {
             Image(systemName: "flame")
                 .font(.title2)
                 .foregroundStyle(.orange)
+                .accessibilityHidden(true)
             Text("No habits")
                 .font(.headline)
             Text("Add habits on iPhone")

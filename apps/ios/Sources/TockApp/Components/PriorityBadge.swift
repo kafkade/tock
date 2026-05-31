@@ -16,5 +16,16 @@ struct PriorityBadge: View {
         Circle()
             .fill(color)
             .frame(width: 8, height: 8)
+            .accessibilityLabel("\(priority.accessibilityName) priority")
+    }
+}
+
+private extension Priority {
+    var accessibilityName: String {
+        switch self {
+        case .high: "High"
+        case .medium: "Medium"
+        case .low: "Low"
+        }
     }
 }

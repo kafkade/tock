@@ -17,6 +17,7 @@ struct WatchHabitRow: View {
                     ? WatchTheme.Colors.habitBuild
                     : WatchTheme.Colors.habitBreak)
                 .frame(width: 8, height: 8)
+                .accessibilityLabel(habit.direction == .build ? "Build habit" : "Break habit")
 
             VStack(alignment: .leading, spacing: WatchTheme.Spacing.xs) {
                 Text(habit.title)
@@ -27,6 +28,7 @@ struct WatchHabitRow: View {
                     Label("\(habit.streakCurrent)d", systemImage: "flame.fill")
                         .font(.caption2)
                         .foregroundStyle(habit.streakCurrent > 0 ? .orange : .secondary)
+                        .accessibilityLabel("Streak: \(habit.streakCurrent) days")
 
                     Text("Lv.\(habit.level)")
                         .font(.caption2)
@@ -48,6 +50,8 @@ struct WatchHabitRow: View {
                     .foregroundStyle(WatchTheme.Colors.accent)
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Log habit")
+            .accessibilityHint("Logs progress for this habit")
         }
     }
 }

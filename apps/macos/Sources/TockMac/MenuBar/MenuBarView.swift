@@ -105,6 +105,8 @@ struct MenuBarView: View {
                     }
                     .buttonStyle(.plain)
                     .disabled(quickAddTitle.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .accessibilityLabel("Add task")
+                    .accessibilityHint("Adds the entered task to your list.")
                 }
             }
             .padding(.horizontal, TockTheme.Spacing.md)
@@ -156,6 +158,7 @@ struct MenuBarView: View {
             Image(systemName: "lock.fill")
                 .font(.title2)
                 .foregroundStyle(.secondary)
+                .accessibilityLabel("Vault locked")
             Text("Vault is locked")
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -193,6 +196,8 @@ struct MenuBarView: View {
             }
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
+            .accessibilityLabel("Complete task")
+            .accessibilityHint("Marks this task as complete.")
         }
         .padding(.horizontal, TockTheme.Spacing.md)
         .padding(.vertical, TockTheme.Spacing.xs)

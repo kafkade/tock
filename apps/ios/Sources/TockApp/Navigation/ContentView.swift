@@ -85,6 +85,8 @@ struct ContentView: View {
                                 .font(.title3)
                         }
                         .keyboardShortcut("n", modifiers: .command)
+                        .accessibilityLabel("Quick Add")
+                        .accessibilityHint("Opens the quick add sheet.")
                     }
                 }
         } detail: {
@@ -147,6 +149,8 @@ struct ContentView: View {
                                     Image(systemName: "plus.circle.fill")
                                         .font(.title3)
                                 }
+                                .accessibilityLabel("Quick Add")
+                                .accessibilityHint("Opens the quick add sheet.")
                             }
                             ToolbarItem(placement: .navigationBarLeading) {
                                 NavigationLink {
@@ -154,6 +158,8 @@ struct ContentView: View {
                                 } label: {
                                     Image(systemName: "gear")
                                 }
+                                .accessibilityLabel("Settings")
+                                .accessibilityHint("Opens settings.")
                             }
                         }
                 }

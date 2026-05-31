@@ -18,6 +18,7 @@ struct VaultSetupView: View {
             Image(systemName: "checkmark.seal.fill")
                 .font(.system(size: 80))
                 .foregroundStyle(TockTheme.Colors.accent)
+                .accessibilityHidden(true)
 
             Text("tock")
                 .font(.largeTitle)
@@ -35,6 +36,8 @@ struct VaultSetupView: View {
                         .foregroundStyle(.red)
                         .font(.caption)
                         .multilineTextAlignment(.center)
+                        .accessibilityLabel("Error")
+                        .accessibilityValue(message)
                 }
 
                 SecureField("Master password", text: $password)
@@ -61,6 +64,7 @@ struct VaultSetupView: View {
                 .controlSize(.large)
                 .disabled(password.isEmpty || isUnlocking)
                 .keyboardShortcut(.defaultAction)
+                .accessibilityHint(primaryActionAccessibilityHint)
 
                 Button(showCreate ? "I have a vault" : "Create new vault") {
                     withAnimation {
@@ -83,6 +87,22 @@ struct VaultSetupView: View {
     private var isUnlocking: Bool {
         if case .unlocking = appState.vaultStatus { return true }
         return false
+    }
+
+    private var primaryActionAccessibilityHint: String {
+        if isUnlocking {
+            return "Wait for the current vault action to finish."
+        }
+
+        if password.isEmpty {
+            return showCreate
+                ? "Enter a master password to create your vault."
+                : "Enter your master password to unlock the vault."
+        }
+
+        return showCreate
+            ? "Creates a new encrypted vault using the entered master password."
+            : "Unlocks your encrypted vault using the entered master password."
     }
 
     private func unlock() async {

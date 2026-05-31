@@ -6,6 +6,7 @@ pub mod done;
 pub mod focus;
 pub mod habit;
 pub mod hooks_cmd;
+pub mod list;
 pub mod modify;
 pub mod project;
 pub mod report;
@@ -131,11 +132,20 @@ pub enum Commands {
     },
     /// Export data to a file.
     Export {
-        /// Format (currently only 'json').
+        /// Format: 'json' or 'md'.
         format: String,
         /// Output file path (stdout if omitted).
         #[arg(long, short)]
         out: Option<std::path::PathBuf>,
+        /// Built-in Markdown template: task-list, habit-report, time-report.
+        #[arg(long)]
+        builtin: Option<String>,
+        /// Path to a custom Tera template file (Markdown export only).
+        #[arg(long)]
+        template: Option<std::path::PathBuf>,
+        /// Task filter expressions (Markdown export only).
+        #[arg(long)]
+        filter: Vec<String>,
     },
     /// Import data from a file.
     Import {

@@ -151,18 +151,20 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
             }
             Ok(())
         }
-        Commands::Export { format, out } => {
-            if !format.eq_ignore_ascii_case("json") {
-                eprintln!("unsupported format: {format}");
-                return Ok(());
-            }
-            let json = tock_export::json::export_tasks(conn)?;
-            match out {
-                Some(path) => std::fs::write(path, &json)?,
-                None => println!("{json}"),
-            }
-            Ok(())
-        }
+        Commands::Export {
+            format,
+            out,
+            builtin,
+            template,
+            filter,
+        } => run_export_cmd(
+            conn,
+            format,
+            out.as_deref(),
+            builtin.as_deref(),
+            template.as_deref(),
+            filter,
+        ),
         Commands::Import { format, file, .. } => {
             if format.eq_ignore_ascii_case("json") {
                 let contents = std::fs::read_to_string(file)?;
@@ -204,6 +206,122 @@ fn run_transactional_import(
         return Ok(true);
     }
     Ok(false)
+}
+
+/// Handle `tock export md` — render Markdown via Tera templates.
+/// Dispatch `tock export <format>`.
+fn run_export_cmd(
+    conn: &Connection,
+    format: &str,
+    out: Option<&std::path::Path>,
+    builtin: Option<&str>,
+    template_path: Option<&std::path::Path>,
+    filter: &[String],
+) -> Result<(), Box<dyn std::error::Error>> {
+    if format.eq_ignore_ascii_case("json") {
+        let json = tock_export::json::export_tasks(conn)?;
+        match out {
+            Some(path) => std::fs::write(path, &json)?,
+            None => println!("{json}"),
+        }
+    } else if format.eq_ignore_ascii_case("md") || format.eq_ignore_ascii_case("markdown") {
+        run_export_md(conn, out, builtin, template_path, filter)?;
+    } else {
+        eprintln!("unsupported format: {format} (supported: json, md)");
+    }
+    Ok(())
+}
+
+/// Handle `tock export md` — render Markdown via Tera templates.
+fn run_export_md(
+    conn: &Connection,
+    out: Option<&std::path::Path>,
+    builtin: Option<&str>,
+    template_path: Option<&std::path::Path>,
+    filter: &[String],
+) -> Result<(), Box<dyn std::error::Error>> {
+    use tock_export::markdown::{BuiltinTemplate, TemplateSource, build_context, render_markdown};
+
+    // Load domain data.
+    let mut tasks = tock_storage::repo::task_repo::list(conn, false)?;
+    let habits = tock_storage::repo::habit_repo::list(conn, false)?;
+    let time_blocks = tock_storage::repo::time_block_repo::list(conn, true)?;
+    let projects = tock_storage::repo::project_repo::list(conn, false)?;
+
+    // Apply task filters if provided.
+    if !filter.is_empty() {
+        let list_filter = commands::list::parse_filter(filter);
+        tasks = apply_list_filter(tasks, &list_filter, &projects);
+    }
+
+    // Determine template source.
+    let custom_content;
+    let template_source = if let Some(path) = template_path {
+        custom_content = std::fs::read_to_string(path)?;
+        TemplateSource::Custom(&custom_content)
+    } else {
+        let bt = builtin
+            .map(BuiltinTemplate::parse_name)
+            .transpose()
+            .map_err(|e| format!("{e}"))?
+            .unwrap_or(BuiltinTemplate::TaskList);
+        TemplateSource::Builtin(bt)
+    };
+
+    let context = build_context(&tasks, &habits, &time_blocks, &projects);
+    let md = render_markdown(&context, &template_source).map_err(|e| format!("{e}"))?;
+
+    match out {
+        Some(path) => std::fs::write(path, &md)?,
+        None => print!("{md}"),
+    }
+    Ok(())
+}
+
+/// Apply a basic list filter to tasks, matching the existing list command logic.
+fn apply_list_filter(
+    tasks: Vec<Task>,
+    filter: &commands::list::ListFilter,
+    projects: &[tock_core::domain::project::Project],
+) -> Vec<Task> {
+    let project_map: HashMap<uuid::Uuid, String> =
+        projects.iter().map(|p| (p.id, p.name.clone())).collect();
+
+    tasks
+        .into_iter()
+        .filter(|t| {
+            if let Some(ref status) = filter.status
+                && t.status.as_str() != status
+            {
+                return false;
+            }
+            if let Some(ref project) = filter.project {
+                let name = t
+                    .project_id
+                    .and_then(|id| project_map.get(&id))
+                    .map_or("", String::as_str);
+                if !name.eq_ignore_ascii_case(project) {
+                    return false;
+                }
+            }
+            if let Some(ref tag) = filter.tag
+                && !t.tags.iter().any(|tg| tg.eq_ignore_ascii_case(tag))
+            {
+                return false;
+            }
+            if let Some(ref priority) = filter.priority {
+                let p_str = t
+                    .priority
+                    .as_ref()
+                    .map(|p| p.as_char().to_string())
+                    .unwrap_or_default();
+                if !p_str.eq_ignore_ascii_case(priority) {
+                    return false;
+                }
+            }
+            true
+        })
+        .collect()
 }
 
 fn run_task_cmd(

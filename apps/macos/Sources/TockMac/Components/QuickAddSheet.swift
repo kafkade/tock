@@ -69,6 +69,10 @@ struct QuickAddSheet: View {
                 .keyboardShortcut(.defaultAction)
                 .disabled(title.trimmingCharacters(in: .whitespaces).isEmpty || isSubmitting)
                 .buttonStyle(.borderedProminent)
+                .accessibilityHint(
+                    title.trimmingCharacters(in: .whitespaces).isEmpty
+                        ? "Enter a task title to add" : "Adds the task"
+                )
             }
             .padding()
         }

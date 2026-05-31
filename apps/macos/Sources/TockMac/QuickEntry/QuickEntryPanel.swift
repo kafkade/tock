@@ -212,6 +212,7 @@ private struct QuickEntryContentView: View {
             Image(systemName: "plus.circle.fill")
                 .font(.title2)
                 .foregroundStyle(TockTheme.Colors.accent)
+                .accessibilityHidden(true)
 
             TextField("Add a task…", text: $input)
                 .textFieldStyle(.plain)
@@ -234,6 +235,7 @@ private struct QuickEntryContentView: View {
                 .controlSize(.small)
                 .keyboardShortcut(.return, modifiers: .command)
                 .disabled(input.trimmingCharacters(in: .whitespaces).isEmpty)
+                .accessibilityHint("Adds the task and closes panel")
             }
         }
         .padding(TockTheme.Spacing.lg)

@@ -22,6 +22,8 @@ struct WatchTaskRow: View {
             }
             .buttonStyle(.plain)
             .frame(width: 24, height: 24)
+            .accessibilityLabel("Complete task")
+            .accessibilityHint("Marks this task as done")
 
             VStack(alignment: .leading, spacing: WatchTheme.Spacing.xs) {
                 HStack(spacing: WatchTheme.Spacing.sm) {
@@ -29,6 +31,7 @@ struct WatchTaskRow: View {
                         Circle()
                             .fill(priorityColor(priority))
                             .frame(width: 6, height: 6)
+                            .accessibilityLabel(priorityAccessibilityLabel(priority))
                     }
 
                     Text(task.title)
@@ -39,6 +42,7 @@ struct WatchTaskRow: View {
                         Image(systemName: "moon.fill")
                             .font(.system(size: 8))
                             .foregroundStyle(.secondary)
+                            .accessibilityLabel("Evening task")
                     }
                 }
 
@@ -48,6 +52,15 @@ struct WatchTaskRow: View {
                         .foregroundStyle(deadline < Date() ? .red : .secondary)
                 }
             }
+            .accessibilityElement(children: .combine)
+        }
+    }
+
+    private func priorityAccessibilityLabel(_ priority: Priority) -> String {
+        switch priority {
+        case .high: "High priority"
+        case .medium: "Medium priority"
+        case .low: "Low priority"
         }
     }
 

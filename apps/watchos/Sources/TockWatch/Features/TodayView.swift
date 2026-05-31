@@ -42,6 +42,7 @@ struct TodayView: View {
             Image(systemName: "sun.max.fill")
                 .font(.title2)
                 .foregroundStyle(.yellow)
+                .accessibilityHidden(true)
             Text("All clear")
                 .font(.headline)
             Text("No tasks for today")

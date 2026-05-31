@@ -83,6 +83,7 @@ clap_complete = "4"
 crossterm = "0.29"
 csv = "1"
 dirs = "6"
+tera = "1"
 ratatui = "0.30"
 toml = "0.8"
 

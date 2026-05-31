@@ -72,8 +72,12 @@ fn draw_task_list(frame: &mut Frame, state: &AppState, area: Rect) {
                 _ => '○',
             };
             let label = format!(
-                "{:>3} {} {} {}",
-                task.sid, status_icon, priority, task.title
+                "{:>3} {} {} {}{}",
+                task.sid,
+                status_icon,
+                priority,
+                task.title,
+                if task.evening { " ☽" } else { "" }
             );
             let style = if task.status.is_closed() {
                 Style::default().fg(Color::DarkGray)
@@ -112,7 +116,32 @@ fn draw_task_list(frame: &mut Frame, state: &AppState, area: Rect) {
 }
 
 fn draw_detail(frame: &mut Frame, state: &AppState, area: Rect) {
-    let content = if let Some(task) = state.selected_task().cloned() {
+    let content = if state.show_help {
+        [
+            "Keyboard Shortcuts",
+            "",
+            "Navigation:",
+            "  Tab / Shift+Tab    Switch panes",
+            "  ← / →              Switch panes",
+            "  1 / 2 / 3          Jump to pane",
+            "  j / ↓              Move down",
+            "  k / ↑              Move up",
+            "  g                  Go to top",
+            "  G                  Go to bottom",
+            "  Enter              Select / expand",
+            "",
+            "Actions:",
+            "  d                  Mark task done",
+            "  x                  Delete task",
+            "  r                  Refresh",
+            "",
+            "General:",
+            "  ?                  Toggle this help",
+            "  q / Esc            Quit",
+            "  Ctrl+C             Quit",
+        ]
+        .join("\n")
+    } else if let Some(task) = state.selected_task().cloned() {
         let mut lines = vec![
             format!("#{} {}", task.sid, task.title),
             String::new(),
@@ -159,7 +188,11 @@ fn draw_detail(frame: &mut Frame, state: &AppState, area: Rect) {
     let paragraph = Paragraph::new(content)
         .block(
             Block::default()
-                .title(" Detail ")
+                .title(if state.show_help {
+                    " Help "
+                } else {
+                    " Detail "
+                })
                 .borders(Borders::ALL)
                 .border_style(pane_border_style(matches!(
                     state.active_pane,
@@ -172,7 +205,7 @@ fn draw_detail(frame: &mut Frame, state: &AppState, area: Rect) {
 
 fn draw_status(frame: &mut Frame, state: &AppState, area: Rect) {
     let message = state.status_message.as_deref().unwrap_or(
-        "Tab: panes · j/k: move · Enter: select · d: done · x: delete · r: refresh · q: quit",
+        "Tab/←→: panes · j/k: move · Enter: select · d: done · x: delete · r: refresh · ?: help · q: quit",
     );
     let status = Paragraph::new(message).style(Style::default().fg(Color::Yellow));
     frame.render_widget(status, area);

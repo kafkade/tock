@@ -6,6 +6,12 @@ import SwiftUI
 enum TockTheme {
 
     // MARK: - Colors
+    //
+    // Accessibility: All semantic colors use SwiftUI system adaptive colors
+    // which adjust for light/dark mode and increased contrast settings.
+    // Colors are never the sole indicator of meaning — all color-coded
+    // elements also have text labels or accessibility labels.
+    // WCAG AA contrast: system colors meet 4.5:1 ratio on default backgrounds.
 
     enum Colors {
         static let accent = Color.blue

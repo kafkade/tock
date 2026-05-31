@@ -1,5 +1,7 @@
 //! # tock-export
 //!
-//! Export tock data to portable formats. Phase 1 supports JSON.
+//! Export tock data to portable formats. Supports JSON and Markdown.
 
+pub mod error;
 pub mod json;
+pub mod markdown;

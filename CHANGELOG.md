@@ -11,9 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Markdown export with Tera templates: `tock export md` with three built-in templates (`--builtin task-list`, `habit-report`, `time-report`), custom template support (`--template <path>`), and optional task filtering (`--filter <expr>`)
 - Taskwarrior import: `tock import taskwarrior -f <file>` parses `task export` JSON with field mapping (status, priority, dates, annotations), project creation, dependency linking, recurrence conversion, and UDA registration
 - CSV import: `tock import csv -f <file>` with automatic column detection from headers and optional TOML mapping file (`--map config.toml`) for custom column assignments, date formats, and field overrides
 - watchOS companion app (`apps/watchos/`): three-tab layout (Today, Habits, Timer) with today's tasks (up to 20, sorted by urgency), tap-to-complete with haptic feedback, habit tracking with tap-to-log and streak display, quick timer and Pomodoro focus sessions with progress ring. WatchConnectivity sync with paired iPhone and persistent intent queue for offline mutations. WidgetKit complications for all accessory families (circular habit ring, rectangular task list/timer, inline status line, corner habit gauge)
+- TUI help overlay: press `?` to see all keyboard shortcuts in the detail pane, with arrow key (←/→) pane navigation
+
+### Changed
+
+- Accessibility audit across iOS, macOS, watchOS, and CLI TUI: added VoiceOver labels for icon-only buttons, color-coded indicators, and stateful controls; decorative images hidden from assistive technology; task/time-block rows combined into single accessibility elements; disabled buttons include explanatory hints; theme files documented with WCAG AA contrast notes
 
 ## [0.3.0] - 2026-05-30
 
