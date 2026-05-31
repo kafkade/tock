@@ -139,10 +139,13 @@ pub enum Commands {
     },
     /// Import data from a file.
     Import {
-        /// Format (currently only 'json').
+        /// Format: 'json', 'taskwarrior', or 'csv'.
         format: String,
         /// Input file path.
         #[arg(long, short)]
         file: std::path::PathBuf,
+        /// Column mapping TOML file (CSV only).
+        #[arg(long, short)]
+        map: Option<std::path::PathBuf>,
     },
 }

@@ -98,12 +98,19 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
 
     let password = cli.password.as_deref().map_or(b"" as &[u8], str::as_bytes);
 
-    let vault = if cli.vault.exists() {
+    let mut vault = if cli.vault.exists() {
         tock_storage::open(&cli.vault, password)?
     } else {
         tracing::info!("vault does not exist, initializing");
         tock_storage::init(&cli.vault, password)?
     };
+
+    // Handle imports that need &mut Connection (for transactions) early.
+    if let Commands::Import { format, file, map } = &cli.command
+        && run_transactional_import(&mut vault, format, file, map.as_deref())?
+    {
+        return Ok(());
+    }
 
     let conn = vault.connection();
     let active_context = load_active_context(conn)?;
@@ -156,19 +163,47 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
             }
             Ok(())
         }
-        Commands::Import { format, file } => {
-            if !format.eq_ignore_ascii_case("json") {
-                eprintln!("unsupported format: {format}");
-                return Ok(());
+        Commands::Import { format, file, .. } => {
+            if format.eq_ignore_ascii_case("json") {
+                let contents = std::fs::read_to_string(file)?;
+                let count = tock_import::json::import_tasks(conn, &contents)?;
+                println!("Imported {count} task(s)");
+            } else {
+                eprintln!("unsupported format: {format} (supported: json, taskwarrior, csv)");
             }
-            let json = std::fs::read_to_string(file)?;
-            let count = tock_import::json::import_tasks(conn, &json)?;
-            println!("Imported {count} task(s)");
             Ok(())
         }
         Commands::Completions { .. } => unreachable!("completions handled before vault open"),
         Commands::Hooks(_) => unreachable!("hooks handled before vault open"),
     }
+}
+
+/// Handle import formats that require `&mut Connection` (for transactions).
+/// Returns `true` if the import was handled, `false` if the format needs
+/// the normal (immutable) code path.
+fn run_transactional_import(
+    vault: &mut tock_storage::OpenVault,
+    format: &str,
+    file: &std::path::Path,
+    map: Option<&std::path::Path>,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    if format.eq_ignore_ascii_case("taskwarrior") {
+        let contents = std::fs::read_to_string(file)?;
+        let conn_mut = vault.connection_mut();
+        let report = tock_import::taskwarrior::import_taskwarrior(conn_mut, &contents)?;
+        print!("{report}");
+        return Ok(true);
+    }
+    if format.eq_ignore_ascii_case("csv") {
+        let contents = std::fs::read_to_string(file)?;
+        let mapping_toml = map.map(std::fs::read_to_string).transpose()?;
+        let conn_mut = vault.connection_mut();
+        let report =
+            tock_import::csv_import::import_csv(conn_mut, &contents, mapping_toml.as_deref())?;
+        print!("{report}");
+        return Ok(true);
+    }
+    Ok(false)
 }
 
 fn run_task_cmd(
