@@ -146,6 +146,10 @@ final class MockCoreClient: CoreClient, @unchecked Sendable {
         }
     }
 
+    func getTask(id: String) async throws -> TaskItem? {
+        Self.sampleTasks.first { $0.id == id }
+    }
+
     func addTask(_ input: NewTaskInput) async throws -> TaskItem {
         TaskItem(
             id: UUID().uuidString, sid: UInt32.random(in: 100...999),
@@ -159,6 +163,7 @@ final class MockCoreClient: CoreClient, @unchecked Sendable {
 
     func completeTask(id: String) async throws {}
     func deleteTask(id: String) async throws {}
+    func modifyTask(id: String, projectId: String?) async throws {}
 
     func listProjects() async throws -> [ProjectItem] { Self.sampleProjects }
 

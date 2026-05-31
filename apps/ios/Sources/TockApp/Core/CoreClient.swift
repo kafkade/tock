@@ -8,9 +8,11 @@ protocol CoreClient: Sendable {
 
     // MARK: Tasks
     func listTasks(filter: TaskFilter) async throws -> [TaskItem]
+    func getTask(id: String) async throws -> TaskItem?
     func addTask(_ input: NewTaskInput) async throws -> TaskItem
     func completeTask(id: String) async throws
     func deleteTask(id: String) async throws
+    func modifyTask(id: String, projectId: String?) async throws
 
     // MARK: Projects
     func listProjects() async throws -> [ProjectItem]

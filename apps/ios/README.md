@@ -11,22 +11,56 @@ Thin SwiftUI shell over the Rust core via UniFFI (see
 - **`CoreClient` protocol** — dependency boundary between views and
   Rust core. `MockCoreClient` for previews/dev, `TockCoreClient` (future)
   for production
-- **`AppState`** — `@Observable` app-wide state (vault status, quick-add)
+- **`AppState`** — `@Observable` app-wide state (vault status, navigation,
+  quick-add). Each Stage Manager window gets its own instance.
 - **Presentation DTOs** — `TaskItem`, `ProjectItem`, `HabitItem`, etc.
   Mapped from UniFFI types when bindings are connected
 
+## Navigation
+
+The app uses an **adaptive layout** that switches based on horizontal
+size class:
+
+### iPhone (compact)
+
+Tab bar with five tabs: Today, Inbox, Projects, Habits, Timer.
+Settings accessible from toolbar. Each tab contains a `NavigationStack`.
+
+### iPad (regular)
+
+Three-column `NavigationSplitView` per architecture §8.2:
+
+- **Sidebar**: Smart views (Today, Inbox, Upcoming, Anytime, Someday,
+  Logbook), Projects, Areas, Habits, Timer, Settings
+- **Content**: Task list / habits / timer based on sidebar selection
+- **Detail**: Selected task detail or placeholder
+
+Supports:
+
+- **Drag and drop**: Drag tasks between sidebar destinations (projects,
+  views) to reorganize
+- **Keyboard shortcuts** (Smart Keyboard / Magic Keyboard):
+  - `⌘N` — New task
+  - `⌘1`–`⌘5` — Switch view (Today/Inbox/Upcoming/Anytime/Someday)
+  - `⌘6`/`⌘7` — Habits/Timer
+  - `Space` — Mark done
+  - `⌘E` — Toggle evening
+  - `⌘T` — Start/stop timer
+  - `⌘⇧F` — Start focus session
+- **Stage Manager**: Each window owns independent state
+
 ## Views
 
-| Tab | View | Description |
+| Tab/Sidebar | View | Description |
 | --- | ---- | ----------- |
-| Today | `TodayView` | Agenda of urgent/due tasks |
-| Inbox | `InboxView` | Unprocessed tasks for triage |
+| Today | `TodayView` / `TaskListView` | Agenda of urgent/due tasks |
+| Inbox | `InboxView` / `TaskListView` | Unprocessed tasks for triage |
 | Projects | `ProjectsView` → `ProjectDetailView` | Hierarchical project browser |
 | Habits | `HabitsView` → `HabitDetailView` | Daily tracker with streaks |
 | Timer | `TimerView` | Time tracking + Pomodoro focus |
 
 Additional: `SettingsView`, `TaskDetailView`, `QuickAddSheet`,
-`VaultSetupView`.
+`VaultSetupView`, `SidebarView`.
 
 ## Building
 
@@ -49,7 +83,10 @@ providing sample data for development and SwiftUI previews.
 - [x] Reusable components (TaskRow, HabitRow, TimeBlockRow, etc.)
 - [x] Quick-add sheet at app level
 - [x] Mock data for development/previews
+- [x] iPadOS `NavigationSplitView` with three-column layout (#50)
+- [x] Keyboard shortcuts for iPad external keyboards (#50)
+- [x] Drag-and-drop task organization (#50)
+- [x] Stage Manager multi-window support (#50)
+- [x] Biometric vault unlock — Face ID / Touch ID (#51)
 - [ ] Connect to UniFFI bindings (requires macOS + `TockFFI` generation)
-- [ ] iPadOS `NavigationSplitView` (#50)
-- [ ] Biometric unlock (#51)
 - [ ] Widgets (#52), App Intents (#53), Share Extension (#54)

@@ -1,8 +1,12 @@
 import SwiftUI
 
-/// Settings view — vault info, sync, and preferences.
+/// Settings view — vault info, security, sync, and preferences.
 struct SettingsView: View {
     @Environment(AppState.self) private var appState
+
+    @State private var showEnableBiometricAlert = false
+    @State private var showDisableBiometricAlert = false
+    @State private var biometricError: String?
 
     var body: some View {
         List {
@@ -23,6 +27,8 @@ struct SettingsView: View {
                     appState.lock()
                 }
             }
+
+            securitySection
 
             Section("Sync") {
                 Label("Not configured", systemImage: "icloud.slash")
@@ -47,5 +53,101 @@ struct SettingsView: View {
             }
         }
         .navigationTitle("Settings")
+    }
+
+    // MARK: - Security section
+
+    @ViewBuilder
+    private var securitySection: some View {
+        let bioType = appState.biometricType
+
+        Section {
+            if appState.biometricAvailable {
+                Toggle(isOn: biometricToggleBinding) {
+                    Label(
+                        "Unlock with \(bioType.label)",
+                        systemImage: bioType.systemImage
+                    )
+                }
+            } else {
+                Label(
+                    "Biometric unlock not available",
+                    systemImage: "lock.slash"
+                )
+                .foregroundStyle(.secondary)
+            }
+
+            if let error = biometricError {
+                Label(error, systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.red)
+                    .font(.caption)
+            }
+        } header: {
+            Text("Security")
+        } footer: {
+            if appState.biometricAvailable {
+                Text(
+                    "\(bioType.label) does not replace your master password. "
+                    + "It stores an unlock key in this device's secure Keychain "
+                    + "so this device can open your vault after biometric authentication. "
+                    + "You'll still need your master password after reinstalling the app, "
+                    + "changing \(bioType.label) settings, or using another device."
+                )
+            }
+        }
+        .alert(
+            "Enable \(bioType.label) Unlock",
+            isPresented: $showEnableBiometricAlert
+        ) {
+            Button("Enable") {
+                enableBiometrics()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(
+                "Your vault key will be stored in this device's Keychain, "
+                + "protected by \(bioType.label). The key is automatically "
+                + "removed if \(bioType.label) settings change or the app "
+                + "is reinstalled."
+            )
+        }
+        .alert(
+            "Disable \(bioType.label) Unlock",
+            isPresented: $showDisableBiometricAlert
+        ) {
+            Button("Disable", role: .destructive) {
+                appState.disableBiometrics()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(
+                "The cached vault key will be removed from this device's "
+                + "Keychain. You'll need your master password to unlock."
+            )
+        }
+    }
+
+    // MARK: - Biometric toggle binding
+
+    private var biometricToggleBinding: Binding<Bool> {
+        Binding<Bool>(
+            get: { appState.biometricEnabled },
+            set: { newValue in
+                if newValue {
+                    showEnableBiometricAlert = true
+                } else {
+                    showDisableBiometricAlert = true
+                }
+            }
+        )
+    }
+
+    private func enableBiometrics() {
+        do {
+            try appState.enableBiometrics()
+            biometricError = nil
+        } catch {
+            biometricError = error.localizedDescription
+        }
     }
 }

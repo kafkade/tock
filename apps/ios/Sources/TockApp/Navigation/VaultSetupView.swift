@@ -3,6 +3,8 @@ import SwiftUI
 /// Vault create / unlock screen.
 ///
 /// Shown when `AppState.vaultStatus` is `.locked` or `.error`.
+/// Offers biometric unlock (Face ID / Touch ID) when available and enabled,
+/// with master password as fallback.
 struct VaultSetupView: View {
     @Environment(AppState.self) private var appState
 
@@ -36,8 +38,15 @@ struct VaultSetupView: View {
                         Label(message, systemImage: "exclamationmark.triangle.fill")
                             .foregroundStyle(.red)
                             .font(.caption)
+                            .multilineTextAlignment(.center)
                     }
 
+                    // Biometric unlock button — shown prominently when available
+                    if appState.canOfferBiometricUnlock && !showCreate {
+                        biometricUnlockButton
+                    }
+
+                    // Password form
                     SecureField("Master password", text: $password)
                         .textFieldStyle(.roundedBorder)
                         .textContentType(.password)
@@ -76,8 +85,45 @@ struct VaultSetupView: View {
                 Spacer()
             }
             .navigationBarHidden(true)
+            .onAppear {
+                attemptAutoUnlock()
+            }
         }
     }
+
+    // MARK: - Biometric button
+
+    @ViewBuilder
+    private var biometricUnlockButton: some View {
+        let bioType = appState.biometricType
+
+        Button {
+            Task { await appState.unlockWithBiometrics() }
+        } label: {
+            Label("Unlock with \(bioType.label)", systemImage: bioType.systemImage)
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.large)
+        .tint(TockTheme.Colors.accent)
+    }
+
+    // MARK: - Auto-unlock
+
+    /// Auto-trigger biometric unlock on first appearance if conditions are met.
+    private func attemptAutoUnlock() {
+        guard appState.canOfferBiometricUnlock,
+              !appState.didAttemptAutoUnlock else { return }
+
+        appState.didAttemptAutoUnlock = true
+        Task {
+            // Small delay to let the view appear before showing biometric prompt
+            try? await Task.sleep(for: .milliseconds(300))
+            await appState.unlockWithBiometrics()
+        }
+    }
+
+    // MARK: - Helpers
 
     private var isUnlocking: Bool {
         if case .unlocking = appState.vaultStatus { return true }
