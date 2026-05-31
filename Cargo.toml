@@ -81,8 +81,10 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt"]
 clap = { version = "4", features = ["derive", "env"] }
 clap_complete = "4"
 crossterm = "0.29"
+csv = "1"
 dirs = "6"
 ratatui = "0.30"
+toml = "0.8"
 
 # Test-only utilities.
 proptest = "1"
