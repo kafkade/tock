@@ -26,7 +26,9 @@ struct TaskDetailView: View {
                             .font(.caption)
                             .foregroundStyle(.tertiary)
                             .monospacedDigit()
+                            .accessibilityLabel("Task number \(task.sid)")
                     }
+                    .accessibilityElement(children: .combine)
                 }
             }
 

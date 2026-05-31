@@ -127,6 +127,8 @@ struct TimerFocusView: View {
                 }
             }
             .frame(width: 100, height: 100)
+            .accessibilityElement(children: .combine)
+            .accessibilityValue(focusProgressDescription(session))
 
             // Action buttons
             focusActions(session)
@@ -145,6 +147,8 @@ struct TimerFocusView: View {
                     Image(systemName: "pause.fill")
                 }
                 .buttonStyle(.bordered)
+                .accessibilityLabel("Pause focus")
+                .accessibilityHint("Pauses the current focus session")
 
                 Button {
                     Task { await completeCycle() }
@@ -152,6 +156,8 @@ struct TimerFocusView: View {
                     Image(systemName: "checkmark")
                 }
                 .buttonStyle(.bordered)
+                .accessibilityLabel("Complete cycle")
+                .accessibilityHint("Marks the current focus cycle as complete")
                 .tint(WatchTheme.Colors.success)
             }
 
@@ -171,6 +177,8 @@ struct TimerFocusView: View {
                 Label("Resume", systemImage: "play.fill")
             }
             .buttonStyle(.bordered)
+            .accessibilityLabel("Resume focus")
+            .accessibilityHint("Resumes the current focus session")
             .tint(WatchTheme.Colors.focusWork)
 
         case .completed, .aborted:
@@ -184,6 +192,8 @@ struct TimerFocusView: View {
                 .font(.caption2)
         }
         .buttonStyle(.plain)
+        .accessibilityLabel("Abort focus")
+        .accessibilityHint("Stops the current focus session")
         .foregroundStyle(.secondary)
     }
 
@@ -261,6 +271,10 @@ struct TimerFocusView: View {
         case .aborted: WatchTheme.Colors.destructive
         case .completed: WatchTheme.Colors.success
         }
+    }
+
+    private func focusProgressDescription(_ session: FocusSessionItem) -> String {
+        "\(session.completedCycles) of \(session.plannedCycles) cycles completed"
     }
 
     private func focusLabel(_ state: FocusState) -> String {

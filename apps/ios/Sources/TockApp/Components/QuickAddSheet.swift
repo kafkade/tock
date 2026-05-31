@@ -67,6 +67,10 @@ struct QuickAddSheet: View {
                     }
                     .disabled(title.trimmingCharacters(in: .whitespaces).isEmpty || isSubmitting)
                     .bold()
+                    .accessibilityHint(
+                        title.trimmingCharacters(in: .whitespaces).isEmpty
+                            ? "Enter a task title to add" : "Adds the task"
+                    )
                 }
             }
         }

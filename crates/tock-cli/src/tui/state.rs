@@ -44,6 +44,8 @@ pub struct AppState {
     pub task_selected: usize,
     /// Whether the application should exit.
     pub should_quit: bool,
+    /// Whether to show the help overlay in the detail pane.
+    pub show_help: bool,
     /// Status text shown at the bottom of the screen.
     pub status_message: Option<String>,
     project_names: HashMap<Uuid, String>,
@@ -62,8 +64,9 @@ impl AppState {
             tasks: Vec::new(),
             task_selected: 0,
             should_quit: false,
+            show_help: false,
             status_message: Some(String::from(
-                "Tab: panes · j/k: move · Enter: select · d: done · x: delete · r: refresh · q: quit",
+                "Tab/←→: panes · j/k: move · Enter: select · d: done · x: delete · r: refresh · ?: help · q: quit",
             )),
             project_names: HashMap::new(),
         };
@@ -544,6 +547,7 @@ mod tests {
             tasks: Vec::new(),
             task_selected: 0,
             should_quit: false,
+            show_help: false,
             status_message: None,
             project_names: std::collections::HashMap::new(),
         };

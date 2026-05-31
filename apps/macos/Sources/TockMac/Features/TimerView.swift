@@ -80,6 +80,8 @@ struct TimerView: View {
                                 .font(.title2)
                         }
                         .disabled(vm.newTimerTitle.trimmingCharacters(in: .whitespaces).isEmpty)
+                        .accessibilityLabel("Start timer")
+                        .accessibilityHint("Starts a timer for the entered task.")
                     }
                 }
             }
@@ -113,6 +115,7 @@ struct TimerView: View {
             Image(systemName: "brain.head.profile")
                 .font(.system(size: 60))
                 .foregroundStyle(TockTheme.Colors.focusWork)
+                .accessibilityHidden(true)
 
             Text("Focus Session")
                 .font(.title2)
@@ -186,12 +189,17 @@ struct TimerView: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Focus progress")
+            .accessibilityValue("\(session.completedCycles) of \(session.plannedCycles) cycles completed while \(focusLabel(for: session.state)).")
 
             HStack(spacing: TockTheme.Spacing.lg) {
                 switch session.state {
                 case .working:
                     Button("Pause") { Task { await vm.pauseFocus() } }
                         .buttonStyle(.bordered)
+                        .accessibilityLabel("Pause focus")
+                        .accessibilityHint("Pauses the current focus session.")
                     Button("Complete Cycle") {
                         Task {
                             await vm.completeCycle()
@@ -199,12 +207,18 @@ struct TimerView: View {
                         }
                     }
                     .buttonStyle(.borderedProminent)
+                    .accessibilityLabel("Complete cycle")
+                    .accessibilityHint("Completes the current work cycle and advances the focus session.")
                 case .shortBreak, .longBreak:
                     Button("Skip Break") { Task { await vm.skipBreak() } }
                         .buttonStyle(.borderedProminent)
+                        .accessibilityLabel("Skip break")
+                        .accessibilityHint("Ends the current break and moves to the next focus cycle.")
                 case .paused:
                     Button("Resume") { Task { await vm.resumeFocus() } }
                         .buttonStyle(.borderedProminent)
+                        .accessibilityLabel("Resume focus")
+                        .accessibilityHint("Resumes the paused focus session.")
                 case .completed, .aborted:
                     EmptyView()
                 }
@@ -216,6 +230,8 @@ struct TimerView: View {
                     }
                 }
                 .buttonStyle(.bordered)
+                .accessibilityLabel("Abort focus session")
+                .accessibilityHint("Ends the focus session without completing the remaining cycles.")
             }
 
             Spacer()

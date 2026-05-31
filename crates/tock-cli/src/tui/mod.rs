@@ -61,8 +61,8 @@ fn handle_key(
         KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => {
             state.should_quit = true;
         }
-        KeyCode::Tab => state.next_pane(),
-        KeyCode::BackTab => state.prev_pane(),
+        KeyCode::Tab | KeyCode::Right => state.next_pane(),
+        KeyCode::BackTab | KeyCode::Left => state.prev_pane(),
         KeyCode::Char('1') => state.active_pane = state::ActivePane::Sidebar,
         KeyCode::Char('2') => state.active_pane = state::ActivePane::TaskList,
         KeyCode::Char('3') => state.active_pane = state::ActivePane::Detail,
@@ -78,6 +78,7 @@ fn handle_key(
             state.delete_selected_task(conn)?;
         }
         KeyCode::Char('r') => state.reload_tasks(conn)?,
+        KeyCode::Char('?') => state.show_help = !state.show_help,
         _ => {}
     }
     Ok(())

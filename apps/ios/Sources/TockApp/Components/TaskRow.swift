@@ -30,6 +30,7 @@ struct TaskRow: View {
                         Image(systemName: "moon.fill")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
+                            .accessibilityLabel("Evening task")
                     }
                 }
 
@@ -59,8 +60,10 @@ struct TaskRow: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .monospacedDigit()
+                .accessibilityLabel("Urgency \(String(format: "%.1f", task.urgency))")
         }
         .padding(.vertical, TockTheme.Spacing.xxs)
+        .accessibilityElement(children: .combine)
         .swipeActions(edge: .leading) {
             if task.status != .done {
                 Button {
@@ -102,5 +105,6 @@ private struct DeadlineLabel: View {
                 .font(.caption2)
         }
         .foregroundStyle(isOverdue ? .red : isToday ? .orange : .secondary)
+        .accessibilityLabel(isOverdue ? "Overdue" : isToday ? "Due today" : "Due \(date.formatted(date: .abbreviated, time: .omitted))")
     }
 }

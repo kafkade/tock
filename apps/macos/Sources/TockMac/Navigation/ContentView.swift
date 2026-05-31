@@ -28,6 +28,8 @@ struct ContentView: View {
                         }
                         .keyboardShortcut("n", modifiers: .command)
                         .help("New Task (⌘N)")
+                        .accessibilityLabel("Quick Add")
+                        .accessibilityHint("Opens the quick add sheet.")
                     }
                 }
         } detail: {
