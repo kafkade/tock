@@ -155,6 +155,7 @@ Prepare a branch for pull request: generate a PR description from the diff AND u
    **Option A — temp file (most reliable, preferred):**
    Use the `create` tool to write the PR description to a temp file, then
    pipe its content to the clipboard:
+
    ```powershell
    Get-Content $env:TEMP\pr-description.md -Raw | Set-Clipboard
    Remove-Item $env:TEMP\pr-description.md
@@ -162,6 +163,7 @@ Prepare a branch for pull request: generate a PR description from the diff AND u
 
    **Option B — single-quoted heredoc (`@'...'@`):**
    Single-quoted heredocs preserve all characters literally (no escaping):
+
    ```powershell
    $pr = @'
    ## Description

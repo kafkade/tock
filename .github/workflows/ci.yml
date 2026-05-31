@@ -113,7 +113,7 @@ jobs:
       - run: cargo fmt --all -- --check
 
   wasm:
-    name: WASM build + size gate
+    name: WASM build
     needs: changes
     if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true'
     runs-on: ubuntu-latest
@@ -126,32 +126,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: wasm
-
-      - name: Build tock-core for WASM
-        run: cargo build -p tock-core --target wasm32-unknown-unknown --no-default-features --features core --release
-
-      # Enforce 2 MB compressed budget (per architecture doc / ADR-005)
-      - name: Check bundle size
-        run: |
-          WASM_FILE=$(find target/wasm32-unknown-unknown/release/deps -name 'tock_core-*.wasm' -not -name '*.d' | head -1)
-          if [ -z "$WASM_FILE" ]; then
-            echo "::error::Could not find compiled WASM file"
-            exit 1
-          fi
-          RAW_SIZE=$(stat -c%s "$WASM_FILE")
-          gzip -k "$WASM_FILE"
-          GZ_SIZE=$(stat -c%s "${WASM_FILE}.gz")
-          BUDGET=2097152  # 2 MB
-
-          echo "Raw WASM size:        $(( RAW_SIZE / 1024 )) KB ($RAW_SIZE bytes)"
-          echo "Compressed WASM size: $(( GZ_SIZE / 1024 )) KB ($GZ_SIZE bytes)"
-          echo "Budget:               $(( BUDGET / 1024 )) KB ($BUDGET bytes)"
-
-          if [ "$GZ_SIZE" -gt "$BUDGET" ]; then
-            echo "::error::WASM bundle exceeds 2 MB compressed budget ($GZ_SIZE bytes > $BUDGET bytes)"
-            exit 1
-          fi
-          echo "✅ Bundle is within budget"
+      # Smoke test: verify tock-core compiles to WASM.
+      # Size gate (2 MB budget) will be added when tock-core gains cdylib
+      # support and wasm-bindgen bindings.
+      - run: cargo build -p tock-core --target wasm32-unknown-unknown --no-default-features --features core
 
   msrv:
     name: MSRV (1.95)
