@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-05-30
+
 ### Added
 
 - macOS native app (`apps/macos/`): full-window `NavigationSplitView` with three-column layout (sidebar, content, detail), `MenuBarExtra` with compact popover (timer/focus status, today tasks, quick-add, focus controls), and global hotkey (`⌃⌥Space`) floating quick-entry panel via AppKit `NSPanel`. macOS-native `Settings` scene with vault/sync/about tabs. Full command menu structure with keyboard shortcuts per architecture §8.3 (`⌘N` new task, `⌘1`–`⌘7` view switching, `Space` complete, `⌘E` evening, `⌘T` timer, `⌘⇧F` focus, `⌘⌥L` lock vault). Uses `@SceneStorage` for per-window state restoration and shared `AppSessionState` across scenes. Carbon `RegisterEventHotKey` for reliable system-wide hotkey. Uses `CoreClient` protocol with mock data for development until UniFFI bindings are connected
