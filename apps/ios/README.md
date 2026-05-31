@@ -88,5 +88,7 @@ providing sample data for development and SwiftUI previews.
 - [x] Drag-and-drop task organization (#50)
 - [x] Stage Manager multi-window support (#50)
 - [x] Biometric vault unlock — Face ID / Touch ID (#51)
+- [x] WidgetKit widgets — Today, Habit, Status across 7 size families (#52)
+- [x] App Intents for Siri and Shortcuts — 11 intents, 4 entity types, 6 pre-built shortcuts (#53)
+- [x] Share extension for quick capture from any app (#54)
 - [ ] Connect to UniFFI bindings (requires macOS + `TockFFI` generation)
-- [ ] Widgets (#52), App Intents (#53), Share Extension (#54)

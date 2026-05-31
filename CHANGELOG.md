@@ -17,6 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - iPad drag-and-drop: drag tasks onto sidebar projects to reassign. Uses ID-only `Transferable` wrapper to avoid leaking plaintext task data via pasteboard
 - Stage Manager multi-window support: each window owns independent `AppState` for sidebar selection and task detail
 - Biometric vault unlock: Face ID and Touch ID support via `LAContext` and iOS Keychain. Vault key cached with `.biometryCurrentSet` access control (auto-invalidated on biometric enrollment changes). Includes reinstall detection, auto-trigger on lock screen, explicit error messaging, and enable/disable toggle in Settings
+- WidgetKit widgets in seven size families: small (timer/next task), medium (today list with interactive checkboxes), large (tasks + habit strip + timer), extra-large iPadOS two-column (today + inbox), and lock screen accessories (habit ring, next task, status line). Interactive buttons use App Intents for completing tasks and logging habits. Deep-links into the app on tap. Shows lock icon when vault is locked
+- App Intents for Siri and Shortcuts: 11 intents covering task capture, completion, timer control, focus sessions, habit logging, streak queries, navigation, and reports. Four AppEntity types (Task, Habit, Project, Report) with string-based search for voice resolution. Six pre-built shortcuts installable from the Shortcuts app. Deep-link URL handling for navigation intents
+- Share extension for quick capture from Safari, Mail, Notes, and other apps. Extracts URLs with page title metadata, plain text, and file/image references. Editable capture form with project picker, tags, priority, and destination chooser (Inbox/Today/Evening/Someday). Pending captures stored as JSON and drained on next app launch
 
 ## [0.2.1] - 2026-05-30
 
