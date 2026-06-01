@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CSV import: `tock import csv -f <file>` with automatic column detection from headers and optional TOML mapping file (`--map config.toml`) for custom column assignments, date formats, and field overrides
 - watchOS companion app (`apps/watchos/`): three-tab layout (Today, Habits, Timer) with today's tasks (up to 20, sorted by urgency), tap-to-complete with haptic feedback, habit tracking with tap-to-log and streak display, quick timer and Pomodoro focus sessions with progress ring. WatchConnectivity sync with paired iPhone and persistent intent queue for offline mutations. WidgetKit complications for all accessory families (circular habit ring, rectangular task list/timer, inline status line, corner habit gauge)
 - TUI help overlay: press `?` to see all keyboard shortcuts in the detail pane, with arrow key (←/→) pane navigation
+- CalDAV bidirectional sync engine (`tock-caldav`): iCalendar parser/serializer (RFC 5545 subset), Task↔VTODO and TimeBlock↔VEVENT mapping, pull→resolve→push sync with ETag conflict retry. CLI commands `tock caldav setup/sync/status/remove` for managing CalDAV collections
 
 ### Changed
 
