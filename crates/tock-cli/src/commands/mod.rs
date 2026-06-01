@@ -1,6 +1,7 @@
 //! CLI subcommands.
 
 pub mod add;
+pub mod caldav;
 pub mod context;
 pub mod done;
 pub mod focus;
@@ -130,6 +131,8 @@ pub enum Commands {
         /// Shell to generate completions for: bash, zsh, fish, elvish, powershell.
         shell: clap_complete::Shell,
     },
+    /// `CalDAV` bidirectional sync.
+    Caldav(caldav::CalDavArgs),
     /// Export data to a file.
     Export {
         /// Format: 'json' or 'md'.

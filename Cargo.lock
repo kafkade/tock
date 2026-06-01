@@ -2688,6 +2688,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "tock-caldav"
+version = "0.3.0"
+dependencies = [
+ "serde_json",
+ "thiserror 2.0.18",
+ "time",
+ "tock-core",
+ "uuid",
+]
+
+[[package]]
 name = "tock-cli"
 version = "0.3.0"
 dependencies = [
@@ -2701,6 +2712,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "time",
+ "tock-caldav",
  "tock-core",
  "tock-export",
  "tock-import",

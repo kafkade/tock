@@ -151,6 +151,7 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
             }
             Ok(())
         }
+        Commands::Caldav(args) => run_caldav_cmd(conn, args),
         Commands::Export {
             format,
             out,
@@ -206,6 +207,180 @@ fn run_transactional_import(
         return Ok(true);
     }
     Ok(false)
+}
+
+/// Handle `tock caldav` subcommands.
+fn run_caldav_cmd(
+    conn: &Connection,
+    args: &commands::caldav::CalDavArgs,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use commands::caldav::CalDavCmd;
+    use tock_storage::repo::caldav_link_repo;
+
+    match &args.cmd {
+        CalDavCmd::Setup {
+            url: _,
+            user,
+            collection,
+            name,
+            password_stdin: _,
+        } => caldav_setup(conn, user, collection, name.as_deref()),
+        CalDavCmd::Sync {
+            collection,
+            dry_run,
+        } => caldav_sync(conn, collection.as_deref(), *dry_run),
+        CalDavCmd::Status => caldav_status(conn),
+        CalDavCmd::Remove { url } => {
+            caldav_link_repo::delete_collection(conn, url)?;
+            println!("Removed CalDAV collection: {url}");
+            println!("All links to this collection have been deleted.");
+            Ok(())
+        }
+    }
+}
+
+/// Register a `CalDAV` collection.
+fn caldav_setup(
+    conn: &Connection,
+    user: &str,
+    collection: &str,
+    name: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use tock_storage::repo::caldav_link_repo;
+
+    let row = caldav_link_repo::CalDavCollectionRow {
+        url: collection.into(),
+        display_name: name.map(String::from),
+        sync_token: None,
+        ctag: None,
+        username: user.into(),
+        last_sync_at: None,
+    };
+    caldav_link_repo::upsert_collection(conn, &row)?;
+    println!(
+        "CalDAV collection configured: {}",
+        name.unwrap_or(collection)
+    );
+    println!("  URL: {collection}");
+    println!("  User: {user}");
+    println!("\nRun `tock caldav sync` to start syncing.");
+    Ok(())
+}
+
+/// Run `CalDAV` sync for one or all collections.
+#[allow(clippy::too_many_lines)]
+fn caldav_sync(
+    conn: &Connection,
+    collection: Option<&str>,
+    dry_run: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use tock_storage::repo::caldav_link_repo;
+
+    let collections = if let Some(url) = collection {
+        let Some(c) = caldav_link_repo::get_collection(conn, url)? else {
+            eprintln!("No collection configured at: {url}");
+            eprintln!("Run `tock caldav setup` first.");
+            return Ok(());
+        };
+        vec![c]
+    } else {
+        caldav_link_repo::list_collections(conn)?
+    };
+
+    if collections.is_empty() {
+        eprintln!("No CalDAV collections configured.");
+        eprintln!("Run `tock caldav setup` to add one.");
+        return Ok(());
+    }
+
+    for col in &collections {
+        let name = col.display_name.as_deref().unwrap_or(&col.url);
+        println!("Syncing collection: {name}");
+
+        let tasks = tock_storage::repo::task_repo::list(conn, false)?;
+        let time_blocks = tock_storage::repo::time_block_repo::list(conn, true)?;
+        let links = caldav_link_repo::list_links(conn, &col.url)?;
+
+        let sync_links: Vec<tock_caldav::sync::CalDavLink> = links
+            .iter()
+            .filter_map(|l| {
+                tock_caldav::sync::EntityType::from_str_opt(&l.entity_type).map(|et| {
+                    tock_caldav::sync::CalDavLink {
+                        local_id: l.local_id,
+                        entity_type: et,
+                        collection_url: l.collection_url.clone(),
+                        href: l.href.clone(),
+                        uid: l.uid.clone(),
+                        etag: l.etag.clone(),
+                        last_pushed_at: l.last_pushed_at.clone(),
+                        last_pulled_at: l.last_pulled_at.clone(),
+                    }
+                })
+            })
+            .collect();
+
+        let push_actions =
+            tock_caldav::sync::compute_push_actions(&tasks, &time_blocks, &sync_links, &col.url);
+
+        if dry_run {
+            println!("  Would push {} resource(s)", push_actions.len());
+            for action in &push_actions {
+                if let tock_caldav::sync::SyncAction::Push {
+                    entity_type,
+                    href,
+                    etag,
+                    ..
+                } = action
+                {
+                    let op = if etag.is_some() { "update" } else { "create" };
+                    println!("    {op} {} → {href}", entity_type.as_str());
+                }
+            }
+            println!("  (dry run — no changes applied)");
+        } else {
+            println!(
+                "  {} task(s), {} time block(s), {} existing link(s)",
+                tasks.len(),
+                time_blocks.len(),
+                sync_links.len()
+            );
+            println!("  {} resource(s) to push", push_actions.len());
+            eprintln!("  Note: CalDAV sync requires a network transport implementation.");
+            eprintln!("  The sync engine is ready but HTTP transport is not yet wired.");
+        }
+    }
+    Ok(())
+}
+
+/// Show `CalDAV` sync status.
+fn caldav_status(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
+    use tock_storage::repo::caldav_link_repo;
+
+    let collections = caldav_link_repo::list_collections(conn)?;
+    if collections.is_empty() {
+        println!("No CalDAV collections configured.");
+        println!("Run `tock caldav setup` to add one.");
+        return Ok(());
+    }
+    println!("CalDAV collections:\n");
+    for col in &collections {
+        let name = col.display_name.as_deref().unwrap_or("(unnamed)");
+        println!("  {name}");
+        println!("    URL:        {}", col.url);
+        println!("    User:       {}", col.username);
+        if let Some(ref token) = col.sync_token {
+            println!("    Sync token: {token}");
+        }
+        if let Some(ref last) = col.last_sync_at {
+            println!("    Last sync:  {last}");
+        } else {
+            println!("    Last sync:  never");
+        }
+        let links = caldav_link_repo::list_links(conn, &col.url)?;
+        println!("    Linked:     {} resource(s)", links.len());
+        println!();
+    }
+    Ok(())
 }
 
 /// Handle `tock export md` — render Markdown via Tera templates.

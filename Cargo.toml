@@ -8,6 +8,7 @@ members = [
     "crates/tock-sync",
     "crates/tock-import",
     "crates/tock-export",
+    "crates/tock-caldav",
     "crates/tock-cli",
     "crates/tock-server",
     "crates/tock-uniffi",
@@ -21,6 +22,7 @@ default-members = [
     "crates/tock-sync",
     "crates/tock-import",
     "crates/tock-export",
+    "crates/tock-caldav",
     "crates/tock-cli",
     "crates/tock-server",
     "crates/tock-uniffi",
@@ -46,6 +48,7 @@ tock-storage = { path = "crates/tock-storage", version = "0.3.0" }
 tock-sync = { path = "crates/tock-sync", version = "0.3.0" }
 tock-import = { path = "crates/tock-import", version = "0.3.0" }
 tock-export = { path = "crates/tock-export", version = "0.3.0" }
+tock-caldav = { path = "crates/tock-caldav", version = "0.3.0" }
 
 # Crypto primitives (used by tock-crypto). All audited RustCrypto crates.
 # See docs/adr/ADR-002-end-to-end-encryption.md.
