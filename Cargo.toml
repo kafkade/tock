@@ -88,7 +88,7 @@ csv = "1"
 dirs = "6"
 tera = "1"
 ratatui = "0.30"
-toml = "0.8"
+toml = "1.1"
 
 # Test-only utilities.
 proptest = "1"
