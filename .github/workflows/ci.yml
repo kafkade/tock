@@ -210,7 +210,7 @@ jobs:
       - name: Generate coverage (codecov format)
         run: cargo llvm-cov --workspace --all-features --codecov --output-path codecov.json
       - name: Upload to Codecov
-        uses: codecov/codecov-action@v6
+        uses: codecov/codecov-action@v7
         with:
           files: codecov.json
           token: ${{ secrets.CODECOV_TOKEN }}
