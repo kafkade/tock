@@ -54,7 +54,7 @@ tock-caldav = { path = "crates/tock-caldav", version = "0.3.0" }
 # See docs/adr/ADR-002-end-to-end-encryption.md.
 aes-gcm = "0.10"
 argon2 = "0.5"
-hkdf = "0.12"
+hkdf = "0.13"
 sha2 = "0.10"
 x25519-dalek = { version = "2", default-features = false, features = ["static_secrets", "zeroize"] }
 ed25519-dalek = { version = "2", default-features = false, features = ["rand_core", "zeroize"] }
