@@ -74,7 +74,7 @@ rusqlite = { version = "0.40", features = ["bundled", "blob", "uuid", "time"] }
 # Async runtime + HTTP server (used by tock-server, AGPL-3.0).
 axum = "0.8"
 tokio = { version = "1", features = ["full"] }
-tower-http = { version = "0.6", features = ["cors", "trace"] }
+tower-http = { version = "0.7", features = ["cors", "trace"] }
 
 # Tracing / structured logging.
 tracing = "0.1"
