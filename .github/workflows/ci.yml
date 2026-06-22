@@ -33,7 +33,7 @@ jobs:
       ci: ${{ steps.filter.outputs.ci }}
       docs: ${{ steps.filter.outputs.docs }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dorny/paths-filter@v4
         id: filter
         with:
@@ -61,7 +61,7 @@ jobs:
     if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
@@ -78,7 +78,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
@@ -91,7 +91,7 @@ jobs:
     if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
@@ -105,7 +105,7 @@ jobs:
     if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
@@ -118,7 +118,7 @@ jobs:
     if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
@@ -137,8 +137,8 @@ jobs:
     if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@1.95
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.100
       - uses: Swatinem/rust-cache@v2
         with:
           key: msrv
@@ -150,7 +150,7 @@ jobs:
     if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check
@@ -163,7 +163,7 @@ jobs:
     runs-on: ubuntu-latest
     # Linux-only; cargo-dist is platform-independent for the plan step.
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
@@ -182,7 +182,7 @@ jobs:
     if: github.event_name == 'push' || needs.changes.outputs.docs == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - run: npx markdownlint-cli2 "**/*.md"
 
   # ── Non-gating jobs ──────────────────────────────────────────────────────────
@@ -197,7 +197,7 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
@@ -225,7 +225,7 @@ jobs:
   #   if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
   #   runs-on: macos-latest
   #   steps:
-  #     - uses: actions/checkout@v6
+  #     - uses: actions/checkout@v7
   #     - uses: dtolnay/rust-toolchain@master
   #       with:
   #         toolchain: ${{ env.RUST_TOOLCHAIN }}
@@ -245,7 +245,7 @@ jobs:
   #   if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
   #   runs-on: ubuntu-latest
   #   steps:
-  #     - uses: actions/checkout@v6
+  #     - uses: actions/checkout@v7
   #     - uses: dtolnay/rust-toolchain@master
   #       with:
   #         toolchain: ${{ env.RUST_TOOLCHAIN }}
