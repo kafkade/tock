@@ -31,7 +31,10 @@ mod workspace;
 
 pub use error::TockError;
 pub use types::*;
-pub use workspace::{Workspace, init_workspace, open_workspace};
+pub use workspace::{
+    PairingAcceptSession, PairingInviteSession, Workspace, begin_pairing_accept, init_workspace,
+    open_workspace,
+};
 
 uniffi::setup_scaffolding!();
 

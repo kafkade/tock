@@ -1,3 +1,4 @@
+#if !os(macOS)
 import SwiftUI
 import WidgetKit
 
@@ -145,3 +146,4 @@ struct AccessoryWidgetView: View {
         }
     }
 }
+#endif

@@ -57,7 +57,7 @@ public final class TockWorkspace: @unchecked Sendable {
     private let handle: Workspace
     private let vaultPath: String
 
-    private init(handle: Workspace, path: String) {
+    fileprivate init(handle: Workspace, path: String) {
         self.handle = handle
         self.vaultPath = path
     }
@@ -126,11 +126,69 @@ public final class TockWorkspace: @unchecked Sendable {
         return TockWorkspace(handle: handle, path: path)
     }
 
+    /// Start the accepter side of a device-pairing handshake.
+    public static func beginPairingAccept() async throws -> TockPairingAcceptSession {
+        let handle = try await performStatic {
+            try TockFFI.beginPairingAccept()
+        }
+        return TockPairingAcceptSession(handle: handle)
+    }
+
     /// Lock the workspace, zeroing key material.
     ///
     /// After this call, all other methods will throw ``TockError/locked``.
     public func lock() async throws {
         try await perform { try $0.lock() }
+    }
+
+    // MARK: - Sync / pairing
+
+    /// Read local sync metadata needed by platform transports.
+    public func syncDeviceInfo() async throws -> TockSyncDeviceInfo {
+        try await perform { try $0.syncDeviceInfo() }
+    }
+
+    /// Persist the sync server URL for this vault.
+    public func setSyncServerURL(_ url: String) async throws {
+        try await perform { try $0.syncSetServerUrl(url: url) }
+    }
+
+    /// Persist the device label used during remote registration.
+    public func setSyncDeviceLabel(_ label: String) async throws {
+        try await perform { try $0.syncSetDeviceLabel(label: label) }
+    }
+
+    /// Persist the server pull cursor after a successful pull page.
+    public func setSyncPullCursor(_ cursor: UInt64) async throws {
+        try await perform { try $0.syncSetPullCursor(cursor: cursor) }
+    }
+
+    /// Diff local state and return transport-ready event frames.
+    public func collectSyncLocalChanges() async throws -> [TockSyncEventFrame] {
+        try await perform { try $0.syncCollectLocalChanges() }
+    }
+
+    /// Decode transport frames and ingest the contained remote events.
+    public func ingestSyncFrames(_ frames: [Data]) async throws -> TockSyncIngestSummary {
+        try await perform { try $0.syncIngestEventFrames(frames: frames) }
+    }
+
+    /// List unresolved sync conflicts for review in the UI.
+    public func listSyncConflicts() async throws -> [TockSyncConflict] {
+        try await perform { try $0.syncListConflicts() }
+    }
+
+    /// Mark a sync conflict resolved.
+    public func resolveSyncConflict(id: String) async throws -> Bool {
+        try await perform { try $0.syncResolveConflict(id: id) }
+    }
+
+    /// Start the inviter side of a device-pairing handshake.
+    public func beginPairingInvite(serverURL: String) async throws -> TockPairingInviteSession {
+        let handle = try await perform {
+            try $0.beginPairingInvite(serverUrl: serverURL)
+        }
+        return TockPairingInviteSession(handle: handle)
     }
 
     // MARK: - Tasks
@@ -307,5 +365,105 @@ public final class TockWorkspace: @unchecked Sendable {
     /// Archive a habit by its short ID.
     public func archiveHabit(sid: UInt32) async throws {
         try await perform { try $0.archiveHabit(sid: sid) }
+    }
+}
+
+/// Wrapper around the inviter side of a device-pairing handshake.
+public final class TockPairingInviteSession: @unchecked Sendable {
+    private let queue = DispatchQueue(
+        label: "com.tock.pairing.invite",
+        qos: .userInitiated
+    )
+    private let handle: PairingInviteSession
+
+    init(handle: PairingInviteSession) {
+        self.handle = handle
+    }
+
+    private func perform<T>(
+        _ body: @escaping (PairingInviteSession) throws -> T
+    ) async throws -> T {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<T, Error>) in
+            queue.async {
+                do {
+                    continuation.resume(returning: try body(self.handle))
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    /// Pairing invite details to encode as QR/text on the existing device.
+    public func invite() async throws -> TockPairingInvite {
+        try await perform { $0.invite() }
+    }
+
+    /// Finalize the inviter half of pairing and build the onboarding blob.
+    public func buildOnboardingBlob(
+        peerPubkeyHex: String,
+        peerFingerprintHex: String,
+        targetDeviceIdHex: String
+    ) async throws -> Data {
+        try await perform {
+            try $0.buildOnboardingBlob(
+                peerPubkeyHex: peerPubkeyHex,
+                peerFingerprintHex: peerFingerprintHex,
+                targetDeviceIdHex: targetDeviceIdHex
+            )
+        }
+    }
+}
+
+/// Wrapper around the accepter side of a device-pairing handshake.
+public final class TockPairingAcceptSession: @unchecked Sendable {
+    private let queue = DispatchQueue(
+        label: "com.tock.pairing.accept",
+        qos: .userInitiated
+    )
+    private let handle: PairingAcceptSession
+
+    init(handle: PairingAcceptSession) {
+        self.handle = handle
+    }
+
+    private func perform<T>(
+        _ body: @escaping (PairingAcceptSession) throws -> T
+    ) async throws -> T {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<T, Error>) in
+            queue.async {
+                do {
+                    continuation.resume(returning: try body(self.handle))
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    /// Values that must be relayed to the existing device during pairing.
+    public func details() async throws -> TockPairingAcceptorInfo {
+        try await perform { try $0.details() }
+    }
+
+    /// Complete onboarding, create the paired vault locally, and return
+    /// an unlocked workspace ready for sync registration/pull.
+    public func completeOnboarding(
+        path: String,
+        password: Data,
+        invite: TockPairingInvite,
+        blob: Data,
+        deviceLabel: String?
+    ) async throws -> TockWorkspace {
+        let handle = try await perform {
+            try $0.completeOnboarding(
+                path: path,
+                password: password,
+                invite: invite,
+                blob: blob,
+                deviceLabel: deviceLabel
+            )
+        }
+        return TockWorkspace(handle: handle, path: path)
     }
 }

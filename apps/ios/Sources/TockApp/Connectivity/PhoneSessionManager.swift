@@ -1,4 +1,6 @@
 import Foundation
+
+#if canImport(WatchConnectivity)
 import WatchConnectivity
 
 /// iPhone side of the watch bridge.
@@ -220,3 +222,17 @@ final class PhoneSessionManager: NSObject, WCSessionDelegate, @unchecked Sendabl
         if session.isReachable { pushSnapshot() }
     }
 }
+#else
+final class PhoneSessionManager: @unchecked Sendable {
+
+    static let shared = PhoneSessionManager()
+
+    private init() {}
+
+    func activate() {}
+
+    func setClient(_ client: (any CoreClient)?) {}
+
+    func pushSnapshot() {}
+}
+#endif

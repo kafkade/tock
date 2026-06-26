@@ -15,12 +15,20 @@ let package = Package(
         .target(
             name: "TockApp",
             dependencies: [
-                .product(name: "TockSwift", package: "Tock"),
+                .product(name: "TockSwift", package: "swift"),
             ],
             path: "Sources/TockApp",
+            exclude: [
+                "App/TockApp.swift",
+            ],
             swiftSettings: [
                 .enableExperimentalFeature("StrictConcurrency"),
             ]
+        ),
+        .testTarget(
+            name: "TockAppTests",
+            dependencies: ["TockApp"],
+            path: "Tests/TockAppTests"
         ),
     ]
 )

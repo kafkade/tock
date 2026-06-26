@@ -5,10 +5,11 @@
 
 use axum::Json;
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
 
+use crate::billing::ServerMode;
 use crate::error::Error;
 use crate::state::AppState;
 
@@ -35,16 +36,26 @@ pub struct RegisterDeviceRequest {
 /// `POST /v1/vaults/:vault_id/devices`
 pub async fn register_device(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(vault_id): Path<String>,
     Json(body): Json<RegisterDeviceRequest>,
 ) -> Result<impl IntoResponse, Error> {
     let vault_bytes = parse_hex_16(&vault_id)?;
     let device_bytes = parse_hex_16(&body.device_id)?;
     let vk_bytes = parse_hex_32(&body.verifying_key)?;
+    let auth_token = hosted_api_token(state.mode, &headers)?;
 
     let db = state.db.clone();
     tokio::task::spawn_blocking(move || {
-        db.ensure_vault(&vault_bytes)?;
+        if let Some(token) = auth_token.as_deref() {
+            let account_id = db
+                .account_id_by_api_token(token)?
+                .ok_or(Error::Unauthorized("invalid bearer token"))?;
+            db.ensure_vault(&vault_bytes)?;
+            db.claim_vault_for_account(&vault_bytes, &account_id)?;
+        } else {
+            db.ensure_vault(&vault_bytes)?;
+        }
         db.register_device(
             &vault_bytes,
             &device_bytes,
@@ -94,27 +105,47 @@ pub struct PushResponse {
 /// `POST /v1/vaults/:vault_id/events/push`
 pub async fn push_events(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(vault_id): Path<String>,
     Json(body): Json<PushEventsRequest>,
 ) -> Result<Json<PushResponse>, Error> {
     let vault_bytes = parse_hex_16(&vault_id)?;
+    let auth_token = hosted_api_token(state.mode, &headers)?;
 
     let db = state.db.clone();
     let result = tokio::task::spawn_blocking(move || {
-        db.ensure_vault(&vault_bytes)?;
+        let hosted_account = if let Some(token) = auth_token.as_deref() {
+            let account_id = db
+                .account_id_by_api_token(token)?
+                .ok_or(Error::Unauthorized("invalid bearer token"))?;
+            db.require_vault_access(&vault_bytes, &account_id)?;
+            Some(account_id)
+        } else {
+            db.ensure_vault(&vault_bytes)?;
+            None
+        };
         let mut accepted = 0_usize;
         let mut duplicates = 0_usize;
+        let mut accepted_bytes = 0_i64;
         for item in &body.events {
             let eid = parse_hex_16(&item.event_id)?;
             let did = parse_hex_16(&item.device_id)?;
             let payload = base64_decode(&item.payload)?;
             if db.push_event(&eid, &vault_bytes, &did, item.lamport, &payload)? {
                 accepted += 1;
+                accepted_bytes += i64::try_from(payload.len()).unwrap_or(i64::MAX);
             } else {
                 duplicates += 1;
             }
         }
         let server_lamport = db.max_lamport(&vault_bytes)?;
+        if let Some(account_id) = hosted_account {
+            db.track_usage(
+                &account_id,
+                accepted_bytes,
+                i64::try_from(accepted).unwrap_or(i64::MAX),
+            )?;
+        }
         Ok::<_, Error>(PushResponse {
             accepted,
             duplicates,
@@ -175,14 +206,22 @@ pub struct PullResponse {
 /// `GET /v1/vaults/:vault_id/events/pull`
 pub async fn pull_events(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(vault_id): Path<String>,
     Query(query): Query<PullQuery>,
 ) -> Result<Json<PullResponse>, Error> {
     let vault_bytes = parse_hex_16(&vault_id)?;
     let limit = query.limit.min(256);
+    let auth_token = hosted_api_token(state.mode, &headers)?;
 
     let db = state.db.clone();
     let result = tokio::task::spawn_blocking(move || {
+        if let Some(token) = auth_token.as_deref() {
+            let account_id = db
+                .account_id_by_api_token(token)?
+                .ok_or(Error::Unauthorized("invalid bearer token"))?;
+            db.require_vault_access(&vault_bytes, &account_id)?;
+        }
         // Request limit+1 to detect "more".
         let events = db.pull_events(&vault_bytes, query.after, limit + 1)?;
         let more = events.len() > limit;
@@ -225,16 +264,25 @@ pub struct PutOnboardingBlobRequest {
 /// `PUT /v1/vaults/:vault_id/onboarding/:device_id`
 pub async fn put_onboarding_blob(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path((vault_id, device_id)): Path<(String, String)>,
     Json(body): Json<PutOnboardingBlobRequest>,
 ) -> Result<impl IntoResponse, Error> {
     let vault_bytes = parse_hex_16(&vault_id)?;
     let device_bytes = parse_hex_16(&device_id)?;
     let blob = base64_decode(&body.blob)?;
+    let auth_token = hosted_api_token(state.mode, &headers)?;
 
     let db = state.db.clone();
     tokio::task::spawn_blocking(move || {
-        db.ensure_vault(&vault_bytes)?;
+        if let Some(token) = auth_token.as_deref() {
+            let account_id = db
+                .account_id_by_api_token(token)?
+                .ok_or(Error::Unauthorized("invalid bearer token"))?;
+            db.require_vault_access(&vault_bytes, &account_id)?;
+        } else {
+            db.ensure_vault(&vault_bytes)?;
+        }
         db.put_onboarding_blob(&vault_bytes, &device_bytes, &blob)
     })
     .await
@@ -246,16 +294,25 @@ pub async fn put_onboarding_blob(
 /// `GET /v1/vaults/:vault_id/onboarding/:device_id`
 pub async fn get_onboarding_blob(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path((vault_id, device_id)): Path<(String, String)>,
 ) -> Result<impl IntoResponse, Error> {
     let vault_bytes = parse_hex_16(&vault_id)?;
     let device_bytes = parse_hex_16(&device_id)?;
+    let auth_token = hosted_api_token(state.mode, &headers)?;
 
     let db = state.db.clone();
-    let blob =
-        tokio::task::spawn_blocking(move || db.get_onboarding_blob(&vault_bytes, &device_bytes))
-            .await
-            .map_err(|e| Error::Internal(e.to_string()))??;
+    let blob = tokio::task::spawn_blocking(move || {
+        if let Some(token) = auth_token.as_deref() {
+            let account_id = db
+                .account_id_by_api_token(token)?
+                .ok_or(Error::Unauthorized("invalid bearer token"))?;
+            db.require_vault_access(&vault_bytes, &account_id)?;
+        }
+        db.get_onboarding_blob(&vault_bytes, &device_bytes)
+    })
+    .await
+    .map_err(|e| Error::Internal(e.to_string()))??;
 
     blob.map_or_else(
         || Err(Error::NotFound),
@@ -313,6 +370,25 @@ fn hex_encode(bytes: &[u8]) -> String {
 fn base64_decode(s: &str) -> Result<Vec<u8>, Error> {
     // Simple base64 decode (standard alphabet + padding).
     base64_decode_impl(s).map_err(|()| Error::BadRequest("invalid base64".into()))
+}
+
+fn hosted_api_token(mode: ServerMode, headers: &HeaderMap) -> Result<Option<String>, Error> {
+    if mode != ServerMode::Hosted {
+        return Ok(None);
+    }
+    let Some(raw) = headers.get(axum::http::header::AUTHORIZATION) else {
+        return Err(Error::Unauthorized("missing bearer token"));
+    };
+    let value = raw
+        .to_str()
+        .map_err(|_| Error::Unauthorized("invalid authorization header"))?;
+    let Some(token) = value.strip_prefix("Bearer ") else {
+        return Err(Error::Unauthorized("expected bearer token"));
+    };
+    if token.is_empty() {
+        return Err(Error::Unauthorized("missing bearer token"));
+    }
+    Ok(Some(token.to_string()))
 }
 
 fn base64_decode_impl(s: &str) -> Result<Vec<u8>, ()> {

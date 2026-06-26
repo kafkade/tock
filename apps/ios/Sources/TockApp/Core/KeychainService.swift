@@ -24,6 +24,8 @@ enum KeychainService {
 
     private static let service = "com.kafkade.tock.vault"
     private static let account = "vault-master-key"
+    private static let syncService = "com.kafkade.tock.sync"
+    private static let syncTokenAccount = "hosted-api-token"
     private static let installIdKey = "com.kafkade.tock.installId"
 
     // MARK: - Vault key operations
@@ -147,6 +149,58 @@ enum KeychainService {
     static func loadMasterPassword(reason: String) throws -> String {
         let data = try loadVaultKey(reason: reason)
         return String(decoding: data, as: UTF8.self)
+    }
+
+    // MARK: - Sync credential storage
+
+    static func saveSyncAuthToken(_ token: String) throws {
+        deleteSyncAuthToken()
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: syncService,
+            kSecAttrAccount as String: syncTokenAccount,
+            kSecValueData as String: Data(token.utf8),
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+        ]
+        let status = SecItemAdd(query as CFDictionary, nil)
+        guard status == errSecSuccess else {
+            throw KeychainError.saveFailed(status)
+        }
+    }
+
+    static func loadSyncAuthToken() throws -> String {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: syncService,
+            kSecAttrAccount as String: syncTokenAccount,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        switch status {
+        case errSecSuccess:
+            guard let data = result as? Data else {
+                throw KeychainError.unexpectedData
+            }
+            return String(decoding: data, as: UTF8.self)
+        case errSecItemNotFound:
+            throw KeychainError.itemNotFound
+        default:
+            throw KeychainError.loadFailed(status)
+        }
+    }
+
+    @discardableResult
+    static func deleteSyncAuthToken() -> Bool {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: syncService,
+            kSecAttrAccount as String: syncTokenAccount,
+        ]
+        let status = SecItemDelete(query as CFDictionary)
+        return status == errSecSuccess || status == errSecItemNotFound
     }
 
     // MARK: - Install ID (reinstall detection)

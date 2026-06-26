@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - iOS, macOS, and watchOS apps now run on the real Rust core instead of mock data (#121): each app opens a real encrypted vault via `TockSwift.TockWorkspace` (UniFFI). The iOS/macOS vault lives in the App Group container (`group.com.kafkade.tock`) so the app, widgets, App Intents, and the Share Extension share one CLI-readable vault; iOS biometric unlock caches the master password in the Keychain. The watch runs as a read-replica: the new iPhone-side `PhoneSessionManager` pushes a snapshot of today's tasks/habits/timer/focus over WatchConnectivity and applies watch-originated mutation intents back to the vault. `MockCoreClient`/`MockWatchCoreClient` are retained only for SwiftUI previews and tests; a `LockedCoreClient` sentinel ensures no production path falls back to mock data while locked
+- Apple apps can configure a sync server, pair a new device with QR or manual codes, and push or pull encrypted changes from Settings with an optional hosted auth token
 - Multi-device sync over HTTP: `tock sync` pushes local changes and pulls remote ones against a self-hosted `tock-server`, runs the conflict-resolution engine, and prints a `pushed N, pulled M, conflicts K` summary. `--server <url>` configures and persists the server on first use; `--dry-run` reports pending local changes without contacting the server
 - Sync conflict review: `tock sync conflicts` lists unresolved concurrent-edit conflicts and `tock sync resolve <id>` acknowledges one — no silent last-write-wins for productivity data (ADR-003)
 - Device pairing: `tock onboard invite` (existing device) and `tock onboard accept` (new device) transfer the vault key over an end-to-end-encrypted X25519 channel with an out-of-band fingerprint check, then create and back-fill a local vault for the new device
@@ -33,6 +34,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Sync server pull cursor is now a monotonic server-assigned position (row order) instead of a per-device Lamport value, so an offline device whose Lamport lags can no longer miss events on pull
 - Allowed the `CDLA-Permissive-2.0` license in `deny.toml` for the Mozilla root-certificate data in `webpki-roots`, pulled in transitively by `reqwest` for the CLI's HTTP sync transport
 - Accessibility audit across iOS, macOS, watchOS, and CLI TUI: added VoiceOver labels for icon-only buttons, color-coded indicators, and stateful controls; decorative images hidden from assistive technology; task/time-block rows combined into single accessibility elements; disabled buttons include explanatory hints; theme files documented with WCAG AA contrast notes
+
+### Security
+
+- Hosted `tock-server` sync, device registration, and onboarding routes now require bearer-token authorization before a vault can be claimed or synchronized
 
 ## [0.3.0] - 2026-05-30
 

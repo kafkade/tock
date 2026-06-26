@@ -52,11 +52,11 @@ struct QuickAddSheet: View {
 
                 Section("Tags") {
                     TextField("Add tags (comma-separated)", text: $tagText)
-                        .textInputAutocapitalization(.never)
+                        .platformTextInputAutocapitalizationNever()
                 }
             }
             .navigationTitle("Quick Add")
-            .navigationBarTitleDisplayMode(.inline)
+            .platformInlineNavigationBarTitle()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
