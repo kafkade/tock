@@ -128,6 +128,7 @@ navigate, `Tab` to switch panes, `Enter` to select, `d` to complete,
 - **Shell completions** — `tock completions bash|zsh|fish|elvish|powershell`
 - **JSON import/export** — `tock export json`, `tock import json --file backup.json`
 - **Encrypted vault** — password-protected, AES-256-GCM per-event AEAD, Ed25519 signed event log
+- **Multi-device sync** — end-to-end encrypted sync through a self-hostable server; see the [dogfooding guide](docs/dogfooding.md)
 
 ## Install
 
@@ -164,6 +165,7 @@ tock/
 │   └── tock-uniffi/            # UniFFI scaffolding (Apple bindings)
 ├── docs/
 │   ├── architecture.md
+│   ├── dogfooding.md           # self-host + multi-device sync guide
 │   ├── adr/                    # 10 Architecture Decision Records
 │   └── distribution/
 └── scripts/

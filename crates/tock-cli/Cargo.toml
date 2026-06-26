@@ -54,3 +54,7 @@ unic-langid = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+# tock-server is AGPL-3.0; used only as a dev-dependency for the
+# end-to-end multi-device sync acceptance test (it never links into the
+# distributed Apache-2.0 CLI binary). See ADR-006.
+tock-server = { workspace = true }
