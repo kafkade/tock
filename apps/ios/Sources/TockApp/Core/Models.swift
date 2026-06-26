@@ -6,7 +6,7 @@ enum TaskStatus: String, Sendable, CaseIterable {
     case inbox, pending, started, done, cancelled, someday
 }
 
-enum Priority: String, Sendable, CaseIterable, Comparable {
+enum Priority: String, Codable, Sendable, CaseIterable, Comparable {
     case low, medium, high
 
     static func < (lhs: Priority, rhs: Priority) -> Bool {
@@ -19,11 +19,11 @@ enum ProjectStatus: String, Sendable {
     case active, paused, someday, done, cancelled
 }
 
-enum FocusState: String, Sendable {
+enum FocusState: String, Codable, Sendable {
     case working, shortBreak, longBreak, paused, aborted, completed
 }
 
-enum HabitDirection: String, Sendable {
+enum HabitDirection: String, Codable, Sendable {
     case build, breakHabit
 }
 

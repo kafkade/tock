@@ -53,7 +53,7 @@ struct ShareExtensionView: View {
                 }
             }
             .navigationTitle("Add to Tock")
-            .navigationBarTitleDisplayMode(.inline)
+            .platformInlineNavigationBarTitle()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { onDismiss() }
@@ -134,7 +134,7 @@ struct ShareExtensionView: View {
                 }
 
                 TextField("Tags (comma-separated)", text: $tagText)
-                    .textInputAutocapitalization(.never)
+                    .platformTextInputAutocapitalizationNever()
             }
 
             // Destination

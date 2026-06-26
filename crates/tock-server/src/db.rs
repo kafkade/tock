@@ -120,6 +120,76 @@ impl ServerDb {
         Ok(())
     }
 
+    /// Resolve an account id from an API token.
+    pub fn account_id_by_api_token(&self, api_token: &str) -> Result<Option<String>, Error> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))?;
+        conn.query_row(
+            "SELECT id FROM accounts WHERE api_token = ?1",
+            params![api_token],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(Into::into)
+    }
+
+    /// Claim an unowned vault for an account, or verify existing ownership.
+    pub fn claim_vault_for_account(
+        &self,
+        vault_id: &[u8; 16],
+        account_id: &str,
+    ) -> Result<(), Error> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))?;
+        let current: Option<Option<String>> = conn
+            .query_row(
+                "SELECT account_id FROM vaults WHERE id = ?1",
+                params![vault_id.to_vec()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        match current {
+            None => return Err(Error::NotFound),
+            Some(Some(existing)) if existing != account_id => {
+                return Err(Error::Unauthorized("vault belongs to a different account"));
+            }
+            Some(Some(_)) => return Ok(()),
+            Some(None) => {}
+        }
+        conn.execute(
+            "UPDATE vaults SET account_id = ?2 WHERE id = ?1",
+            params![vault_id.to_vec(), account_id],
+        )?;
+        Ok(())
+    }
+
+    /// Ensure the given account owns the vault.
+    pub fn require_vault_access(&self, vault_id: &[u8; 16], account_id: &str) -> Result<(), Error> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))?;
+        let owner: Option<Option<String>> = conn
+            .query_row(
+                "SELECT account_id FROM vaults WHERE id = ?1",
+                params![vault_id.to_vec()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        match owner {
+            None => Err(Error::NotFound),
+            Some(Some(existing)) if existing == account_id => Ok(()),
+            Some(Some(_)) => Err(Error::Unauthorized("vault belongs to a different account")),
+            Some(None) => Err(Error::Unauthorized(
+                "vault is not yet associated with an account",
+            )),
+        }
+    }
+
     /// Register a device for a vault.
     pub fn register_device(
         &self,
@@ -539,5 +609,47 @@ mod tests {
         let usage = db.get_usage(&aid).expect("get").expect("found");
         assert_eq!(usage.bytes_stored, 3072);
         assert_eq!(usage.event_count, 8);
+    }
+
+    #[test]
+    fn hosted_account_can_claim_and_reuse_vault() {
+        let db = ServerDb::open_memory().expect("open");
+        let (aid, token) = db
+            .create_account("user@example.com", crate::billing::Tier::Personal)
+            .expect("create");
+        let vault = [9_u8; 16];
+        db.ensure_vault(&vault).expect("vault");
+
+        let looked_up = db
+            .account_id_by_api_token(&token)
+            .expect("lookup")
+            .expect("present");
+        assert_eq!(looked_up, aid);
+
+        db.claim_vault_for_account(&vault, &aid).expect("claim");
+        db.require_vault_access(&vault, &aid).expect("access");
+        db.claim_vault_for_account(&vault, &aid).expect("reclaim");
+    }
+
+    #[test]
+    fn hosted_account_cannot_steal_other_vault() {
+        let db = ServerDb::open_memory().expect("open");
+        let (aid1, _) = db
+            .create_account("user1@example.com", crate::billing::Tier::Personal)
+            .expect("create 1");
+        let (aid2, _) = db
+            .create_account("user2@example.com", crate::billing::Tier::Personal)
+            .expect("create 2");
+        let vault = [10_u8; 16];
+        db.ensure_vault(&vault).expect("vault");
+        db.claim_vault_for_account(&vault, &aid1).expect("claim");
+        assert!(matches!(
+            db.require_vault_access(&vault, &aid2),
+            Err(Error::Unauthorized(_))
+        ));
+        assert!(matches!(
+            db.claim_vault_for_account(&vault, &aid2),
+            Err(Error::Unauthorized(_))
+        ));
     }
 }

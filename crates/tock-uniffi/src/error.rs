@@ -74,3 +74,16 @@ impl From<tock_storage::Error> for TockError {
         }
     }
 }
+
+impl From<tock_sync::Error> for TockError {
+    fn from(e: tock_sync::Error) -> Self {
+        match e {
+            tock_sync::Error::WireFormat(message) => Self::InvalidInput {
+                message: message.into(),
+            },
+            other => Self::StorageError {
+                message: other.to_string(),
+            },
+        }
+    }
+}

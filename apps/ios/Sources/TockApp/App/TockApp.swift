@@ -49,6 +49,9 @@ private struct RootSceneView: View {
             let client = appState.client
             Task { await WidgetSnapshotWriter.publish(from: client) }
             PhoneSessionManager.shared.pushSnapshot()
+            if appState.hasSyncConfiguration {
+                Task { await appState.syncNow() }
+            }
         }
     }
 

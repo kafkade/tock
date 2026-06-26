@@ -7,6 +7,7 @@ struct SettingsView: View {
     @State private var showEnableBiometricAlert = false
     @State private var showDisableBiometricAlert = false
     @State private var biometricError: String?
+    @State private var showPairSheet = false
 
     var body: some View {
         List {
@@ -30,14 +31,7 @@ struct SettingsView: View {
 
             securitySection
 
-            Section("Sync") {
-                Label("Not configured", systemImage: "icloud.slash")
-                    .foregroundStyle(.secondary)
-
-                Text("Sync will be available in a future update.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+            syncSection
 
             Section("About") {
                 LabeledContent("Version", value: "0.1.0")
@@ -53,6 +47,13 @@ struct SettingsView: View {
             }
         }
         .navigationTitle("Settings")
+        .task {
+            await appState.refreshSyncState()
+        }
+        .sheet(isPresented: $showPairSheet) {
+            PairNewDeviceSheet()
+                .environment(appState)
+        }
     }
 
     // MARK: - Security section
@@ -148,6 +149,74 @@ struct SettingsView: View {
             biometricError = nil
         } catch {
             biometricError = error.localizedDescription
+        }
+    }
+
+    @ViewBuilder
+    private var syncSection: some View {
+        Section("Sync") {
+            TextField("Server URL", text: Bindable(appState).syncServerURL)
+                .platformTextInputAutocapitalizationNever()
+                .autocorrectionDisabled()
+            TextField("Device label", text: Bindable(appState).syncDeviceLabel)
+            SecureField("Hosted auth token (optional)", text: Bindable(appState).syncAuthToken)
+
+            Button("Save Sync Settings") {
+                Task { await appState.saveSyncSettings() }
+            }
+
+            Button {
+                Task { await appState.syncNow() }
+            } label: {
+                if appState.isSyncing {
+                    ProgressView()
+                } else {
+                    Text("Sync Now")
+                }
+            }
+            .disabled(!appState.hasSyncConfiguration || appState.isSyncing)
+
+            Button("Pair New Device") {
+                showPairSheet = true
+            }
+            .disabled(!appState.hasSyncConfiguration)
+
+            if let lastSyncSummary = appState.lastSyncSummary {
+                Text(lastSyncSummary)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if let lastSyncAt = appState.lastSyncAt {
+                LabeledContent("Last sync") {
+                    Text(lastSyncAt.formatted(date: .abbreviated, time: .shortened))
+                }
+            }
+
+            if let syncError = appState.syncError {
+                Label(syncError, systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.red)
+                    .font(.caption)
+            }
+        }
+
+        if !appState.syncConflicts.isEmpty {
+            Section("Sync Conflicts") {
+                ForEach(appState.syncConflicts, id: \.id) { conflict in
+                    VStack(alignment: .leading, spacing: TockTheme.Spacing.xs) {
+                        Text("\(conflict.entityKind) \(conflict.entityId)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Text(conflict.detail)
+                            .font(.footnote)
+                        Button("Mark Resolved") {
+                            Task { await appState.resolveSyncConflict(id: conflict.id) }
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                    .padding(.vertical, TockTheme.Spacing.xs)
+                }
+            }
         }
     }
 }

@@ -63,7 +63,7 @@ struct ShowHabitStreakIntent: AppIntent {
                 return .result(dialog: "No habits tracked yet.")
             }
             let summaries = habits.prefix(3).map { "\($0.title): \($0.streakCurrent)🔥" }
-            return .result(dialog: summaries.joined(separator: " · "))
+            return .result(dialog: IntentDialog(stringLiteral: summaries.joined(separator: " · ")))
         }
     }
 }

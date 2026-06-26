@@ -20,7 +20,7 @@ struct ShowTodayIntent: AppIntent {
             ? "All clear — no tasks today! 🎉"
             : "\(count) task\(count == 1 ? "" : "s") today. Opening tock…"
 
-        return .result(dialog: "\(message)", opensIntent: OpenViewIntent(view: .today))
+        return .result(opensIntent: OpenViewIntent(view: .today), dialog: "\(message)")
     }
 }
 

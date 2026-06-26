@@ -344,6 +344,84 @@ pub struct TockHabitEntry {
     pub created_at: String,
 }
 
+/// Local sync/device metadata needed by platform transports.
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct TockSyncDeviceInfo {
+    /// Shared vault UUID.
+    pub vault_id: String,
+    /// This device's random 16-byte id as lowercase hex.
+    pub device_id: String,
+    /// This device's Ed25519 verifying key as lowercase hex.
+    pub verifying_key: String,
+    /// Human-readable device label, if set.
+    pub device_label: Option<String>,
+    /// Persisted sync server base URL, if configured.
+    pub server_url: Option<String>,
+    /// Last consumed server pull cursor.
+    pub pull_cursor: u64,
+}
+
+/// A single outbound sync frame ready for transport.
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct TockSyncEventFrame {
+    /// Event UUID.
+    pub event_id: String,
+    /// Origin device id as lowercase hex.
+    pub device_id: String,
+    /// Lamport timestamp.
+    pub lamport: u64,
+    /// Full wire-format frame bytes for this event.
+    pub payload: Vec<u8>,
+}
+
+/// Result of ingesting remote sync frames.
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct TockSyncIngestSummary {
+    /// Number of foreign events applied locally.
+    pub applied: u32,
+    /// Number of conflicts recorded for review.
+    pub conflicts: u32,
+}
+
+/// A pending sync conflict surfaced for user review.
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct TockSyncConflict {
+    /// Conflict UUID.
+    pub id: String,
+    /// Entity kind (`task`, `habit`, ...).
+    pub entity_kind: String,
+    /// Entity UUID.
+    pub entity_id: String,
+    /// Human-readable conflict detail.
+    pub detail: String,
+}
+
+/// Pairing invite details to encode as QR/text on the existing device.
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct TockPairingInvite {
+    /// Shared vault UUID.
+    pub vault_id: String,
+    /// Sync server URL for the vault.
+    pub server_url: String,
+    /// Inviter ephemeral X25519 public key as lowercase hex.
+    pub inviter_pubkey: String,
+    /// Inviter fingerprint as lowercase hex.
+    pub inviter_fingerprint: String,
+    /// When the invite was created (RFC 3339).
+    pub created_at: String,
+}
+
+/// Acceptor-side values that must be relayed back to the inviter.
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct TockPairingAcceptorInfo {
+    /// Acceptor ephemeral X25519 public key as lowercase hex.
+    pub accepter_pubkey: String,
+    /// Acceptor fingerprint as lowercase hex.
+    pub accepter_fingerprint: String,
+    /// Rendezvous device id used to fetch the onboarding blob.
+    pub rendezvous_device_id: String,
+}
+
 // ── Input records ────────────────────────────────────────────────────
 
 /// Input for creating a new task.

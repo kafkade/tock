@@ -6,7 +6,7 @@ import Foundation
 ///
 /// Timeline providers load this once and pass subsets to each entry.
 /// In production, this will be read from the App Group container.
-struct WidgetSnapshot: Sendable {
+struct WidgetSnapshot: Codable, Sendable {
     let todayTasks: [WidgetTask]
     let inboxTasks: [WidgetTask]
     let habits: [WidgetHabit]
@@ -19,7 +19,7 @@ struct WidgetSnapshot: Sendable {
 // MARK: - Lightweight widget models
 
 /// Task data subset for widget display. Avoids pulling full TaskItem.
-struct WidgetTask: Identifiable, Hashable, Sendable {
+struct WidgetTask: Codable, Identifiable, Hashable, Sendable {
     let id: String
     let sid: UInt32
     let title: String
@@ -30,7 +30,7 @@ struct WidgetTask: Identifiable, Hashable, Sendable {
 }
 
 /// Habit data subset for widget display.
-struct WidgetHabit: Identifiable, Hashable, Sendable {
+struct WidgetHabit: Codable, Identifiable, Hashable, Sendable {
     let id: String
     let title: String
     let direction: HabitDirection
@@ -40,14 +40,14 @@ struct WidgetHabit: Identifiable, Hashable, Sendable {
 }
 
 /// Active timer data for widget display.
-struct WidgetTimer: Sendable {
+struct WidgetTimer: Codable, Sendable {
     let title: String
     let startedAt: Date
     let taskId: String?
 }
 
 /// Active focus session data for widget display.
-struct WidgetFocus: Sendable {
+struct WidgetFocus: Codable, Sendable {
     let completedCycles: UInt32
     let plannedCycles: UInt32
     let state: FocusState

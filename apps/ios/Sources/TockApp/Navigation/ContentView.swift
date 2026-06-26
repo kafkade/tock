@@ -15,13 +15,7 @@ struct ContentView: View {
     var body: some View {
         @Bindable var appState = appState
 
-        Group {
-            if sizeClass == .regular {
-                iPadLayout
-            } else {
-                iPhoneLayout
-            }
-        }
+        rootLayout
         .sheet(isPresented: $appState.showQuickAdd) {
             QuickAddSheet()
         }
@@ -35,33 +29,49 @@ struct ContentView: View {
         .focusedValue(\.sidebarItem, $appState.selectedSidebarItem)
         .focusedValue(\.selectedTask, $appState.selectedTaskId)
         .focusedValue(\.quickAddAction) { appState.showQuickAdd = true }
-        .focusedValue(
-            \.completeTaskAction,
-            appState.selectedTaskId == nil ? nil : {
-                guard let taskId = appState.selectedTaskId else { return }
-                Task { try? await appState.client.completeTask(id: taskId) }
-            }
-        )
-        .focusedValue(
-            \.toggleEveningAction,
-            appState.selectedTaskId == nil ? nil : {
-                // Evening toggle requires modifyTask extension; stubbed for now
-            }
-        )
-        .focusedValue(
-            \.toggleTimerAction,
-            appState.selectedTaskId == nil ? nil : {
-                guard let taskId = appState.selectedTaskId else { return }
-                Task {
-                    if let _ = try? await appState.client.currentTimer() {
-                        _ = try? await appState.client.stopTimer()
-                    } else {
-                        _ = try? await appState.client.startTimer(title: "Task", taskId: taskId)
-                    }
+        .focusedValue(\.completeTaskAction, completeTaskAction)
+        .focusedValue(\.toggleEveningAction, toggleEveningAction)
+        .focusedValue(\.toggleTimerAction, toggleTimerAction)
+        .focusedValue(\.startFocusAction, startFocusAction)
+    }
+
+    private var rootLayout: AnyView {
+        if sizeClass == .regular {
+            AnyView(iPadLayout)
+        } else {
+            AnyView(iPhoneLayout)
+        }
+    }
+
+    private var completeTaskAction: (() -> Void)? {
+        guard let taskId = appState.selectedTaskId else { return nil }
+        return {
+            Task { try? await appState.client.completeTask(id: taskId) }
+        }
+    }
+
+    private var toggleEveningAction: (() -> Void)? {
+        guard appState.selectedTaskId != nil else { return nil }
+        return {
+            // Evening toggle requires modifyTask extension; stubbed for now
+        }
+    }
+
+    private var toggleTimerAction: (() -> Void)? {
+        guard let taskId = appState.selectedTaskId else { return nil }
+        return {
+            Task {
+                if let _ = try? await appState.client.currentTimer() {
+                    _ = try? await appState.client.stopTimer()
+                } else {
+                    _ = try? await appState.client.startTimer(title: "Task", taskId: taskId)
                 }
             }
-        )
-        .focusedValue(\.startFocusAction) {
+        }
+    }
+
+    private var startFocusAction: (() -> Void) {
+        {
             Task { _ = try? await appState.client.startFocus(taskId: appState.selectedTaskId, cycles: 4) }
         }
     }
@@ -152,6 +162,17 @@ struct ContentView: View {
                                 .accessibilityLabel("Quick Add")
                                 .accessibilityHint("Opens the quick add sheet.")
                             }
+                            #if os(macOS)
+                            ToolbarItem {
+                                NavigationLink {
+                                    SettingsView()
+                                } label: {
+                                    Image(systemName: "gear")
+                                }
+                                .accessibilityLabel("Settings")
+                                .accessibilityHint("Opens settings.")
+                            }
+                            #else
                             ToolbarItem(placement: .navigationBarLeading) {
                                 NavigationLink {
                                     SettingsView()
@@ -161,6 +182,7 @@ struct ContentView: View {
                                 .accessibilityLabel("Settings")
                                 .accessibilityHint("Opens settings.")
                             }
+                            #endif
                         }
                 }
                 .tabItem {
