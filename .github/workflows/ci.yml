@@ -40,6 +40,7 @@ jobs:
           filters: |
             rust:
               - 'crates/**'
+              - 'bindings/**'
               - 'Cargo.*'
               - 'deny.toml'
               - 'dist-workspace.toml'
@@ -220,7 +221,28 @@ jobs:
           # already `continue-on-error: true`.
           fail_ci_if_error: false
 
-  # --- Future: iOS build ---
+  # ── Apple bindings (UniFFI Swift) ────────────────────────────────────────────
+  # Builds the TockFFI XCFramework via `cargo xtask xcframework` and runs the
+  # TockSwift integration tests against the real Rust core (macOS slice).
+  apple:
+    name: Apple bindings (Swift)
+    needs: changes
+    if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ci == 'true'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim,aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - name: Generate bindings + build XCFramework
+        run: cargo xtask xcframework
+      - name: Run TockSwift tests
+        run: swift test
+        working-directory: bindings/swift
+
+  # --- Future: iOS app build ---
   # ios:
   #   name: iOS build (smoke test)
   #   needs: changes
@@ -268,7 +290,7 @@ jobs:
   ci:
     name: CI
     if: always()
-    needs: [changes, check, test, clippy, fmt, wasm, msrv, deny, dist-plan, markdownlint]
+    needs: [changes, check, test, clippy, fmt, wasm, msrv, deny, dist-plan, markdownlint, apple]
     runs-on: ubuntu-latest
     steps:
       - name: Fail if any dependency failed

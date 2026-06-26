@@ -33,16 +33,28 @@ cargo test -p tock-uniffi
 
 ## Generating Swift bindings
 
+The Swift bindings and the Apple `TockFFI.xcframework` are produced by the
+`xtask` orchestrator, which builds the FFI crate for every Apple target,
+runs `uniffi-bindgen`, and assembles the framework:
+
 ```bash
-# Build the bindgen CLI
-cargo build -p tock-uniffi --features cli --bin uniffi-bindgen
+cargo xtask xcframework
+```
+
+To run `uniffi-bindgen` directly against the host library (e.g. for
+debugging the generated output):
+
+```bash
+# Build the host library + bindgen CLI
+cargo build -p tock-uniffi --features cli
 
 # Generate Swift + header + modulemap
 cargo run -p tock-uniffi --features cli --bin uniffi-bindgen -- \
     generate --library target/debug/libtock_uniffi.dylib \
     --language swift \
-    --out-dir bindings/swift/Sources/TockFFI
+    --out-dir <out-dir>
 ```
 
-See [`bindings/swift/README.md`](../../bindings/swift/README.md) for the
-full Swift package build instructions.
+See [`bindings/swift/README.md`](../../bindings/swift/README.md) and
+[`xtask/README.md`](../../xtask/README.md) for the full Swift package build
+instructions.
