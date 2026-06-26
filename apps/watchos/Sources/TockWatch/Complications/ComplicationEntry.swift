@@ -62,21 +62,59 @@ final class ComplicationSnapshotStore: @unchecked Sendable {
     private let defaults = UserDefaults.standard
     private let storageKey = "com.kafkade.tock.watch.complicationSnapshot"
 
-    /// Load the current snapshot. Returns mock data in development.
+    /// Load the current snapshot from the latest iPhone sync.
     func loadSnapshot() -> ComplicationSnapshot {
-        // TODO: Decode from UserDefaults when live data is available.
-        // For now, return mock data.
-        Self.mockSnapshot
+        guard let dto = LiveSnapshotStore.shared.current else {
+            return Self.emptySnapshot
+        }
+        return Self.snapshot(from: dto)
     }
 
     /// Update the stored snapshot from a WatchConnectivity context dictionary.
     ///
     /// Called by `WatchSessionManager` when new data arrives from iPhone.
     func update(from context: [String: Any]) {
-        // TODO: Decode context values into snapshot and persist.
-        // In development, this is a no-op — mock data is always used.
-        _ = context
+        LiveSnapshotStore.shared.ingest(context)
     }
+
+    // MARK: - DTO → complication snapshot
+
+    static func snapshot(from dto: WatchSnapshotDTO) -> ComplicationSnapshot {
+        ComplicationSnapshot(
+            todayTasks: dto.todayTasks.map { task in
+                ComplicationTask(
+                    id: task.id, title: task.title,
+                    priority: task.priority.flatMap(Priority.init(rawValue:)),
+                    deadline: task.deadline, urgency: task.urgency
+                )
+            },
+            habits: dto.habits.map { habit in
+                ComplicationHabit(
+                    id: habit.id, title: habit.title,
+                    direction: HabitDirection(rawValue: habit.direction) ?? .build,
+                    streakCurrent: habit.streakCurrent, streakBest: habit.streakBest
+                )
+            },
+            activeTimer: dto.activeTimer.map { timer in
+                ComplicationTimer(title: timer.title, startedAt: timer.startedAt)
+            },
+            activeFocus: dto.activeFocus.map { focus in
+                ComplicationFocus(
+                    completedCycles: focus.completedCycles,
+                    plannedCycles: focus.plannedCycles,
+                    state: FocusState(rawValue: focus.state) ?? .working
+                )
+            },
+            isVaultLocked: dto.vaultLocked,
+            dueCount: dto.dueCount
+        )
+    }
+
+    /// Empty snapshot shown before the first sync arrives.
+    static let emptySnapshot = ComplicationSnapshot(
+        todayTasks: [], habits: [], activeTimer: nil, activeFocus: nil,
+        isVaultLocked: true, dueCount: 0
+    )
 
     // MARK: - Mock data
 

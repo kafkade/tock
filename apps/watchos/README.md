@@ -29,17 +29,21 @@ See `docs/architecture.md` §8.4 for the full watchOS design specification.
 | Directory          | Purpose                                            |
 |--------------------|----------------------------------------------------|
 | `App/`             | App entry point, TabView, vault gate               |
-| `Core/`            | `WatchCoreClient` protocol, mock client, app state |
+| `Core/`            | `WatchCoreClient` protocol, live + mock clients, app state |
 | `Features/`        | Today, Habits, Timer/Focus views                   |
 | `Components/`      | Reusable row components (task, habit)               |
-| `Connectivity/`    | `WatchSessionManager`, persistent intent queue     |
+| `Connectivity/`    | `WatchSessionManager`, snapshot store, intent queue, sync schema |
 | `Complications/`   | WidgetKit complications for all families            |
 | `Theme/`           | Design tokens adapted for watchOS                  |
 
 ## Development
 
-The app uses `MockWatchCoreClient` with static sample data. No Rust core or
-iPhone pairing is required for SwiftUI preview development.
+In production the watch runs `LiveWatchCoreClient`: a **read-replica** of the
+iPhone's vault. The phone (`PhoneSessionManager`) pushes a snapshot of today's
+tasks, habits, and active timer/focus over WatchConnectivity, and the watch
+forwards mutations back to the phone as intents (the phone owns the vault).
+`MockWatchCoreClient` is retained only for SwiftUI previews — no iPhone pairing
+is required for preview development.
 
 To build, open the Xcode project (when created) or use SPM:
 
