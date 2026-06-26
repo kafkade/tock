@@ -163,7 +163,6 @@ struct VaultSetupView: View {
     }
 
     private func defaultVaultPath() -> String {
-        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
-        return docs.appendingPathComponent("tock.vault").path
+        AppGroup.vaultPath()
     }
 }

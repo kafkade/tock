@@ -134,6 +134,21 @@ enum KeychainService {
         return status == errSecSuccess || status == errSecInteractionNotAllowed
     }
 
+    // MARK: - Master password convenience
+
+    /// Cache the vault **master password** (UTF-8 bytes) under biometric
+    /// protection. The core opens the vault from this password, so caching it
+    /// is what lets Face ID / Touch ID open the real encrypted vault.
+    static func saveMasterPassword(_ password: String) throws {
+        try saveVaultKey(Data(password.utf8))
+    }
+
+    /// Load the cached master password, triggering biometric authentication.
+    static func loadMasterPassword(reason: String) throws -> String {
+        let data = try loadVaultKey(reason: reason)
+        return String(decoding: data, as: UTF8.self)
+    }
+
     // MARK: - Install ID (reinstall detection)
 
     /// Verify the install ID matches. If UserDefaults was cleared (reinstall),

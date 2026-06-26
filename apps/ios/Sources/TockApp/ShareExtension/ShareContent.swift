@@ -103,3 +103,18 @@ struct MockShareVaultAccess: ShareVaultAccessChecking {
         .available
     }
 }
+
+/// Real vault access check backed by the App Group container.
+///
+/// The share extension only **queues** captures (the main app drains them into
+/// the vault on next unlock), so capture is possible whenever a vault file
+/// exists in the shared container — no decryption or biometric prompt needed.
+struct AppGroupShareVaultAccess: ShareVaultAccessChecking {
+    func captureAvailability() async -> CaptureAvailability {
+        if FileManager.default.fileExists(atPath: AppGroup.vaultPath()) {
+            return .available
+        }
+        return .unavailable(reason: "Open tock and create a vault before capturing.")
+    }
+}
+

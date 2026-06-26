@@ -34,15 +34,44 @@ final class WatchAppState {
     var connectionStatus: ConnectionStatus = .disconnected
     var selectedTab: Tab = .today
 
-    /// The active core client. Uses mock data until WatchConnectivity
-    /// is wired to a live implementation.
-    var client: any WatchCoreClient = MockWatchCoreClient.shared
+    /// The active core client. Reads from the iPhone snapshot replica and
+    /// forwards mutations to the phone over WatchConnectivity.
+    var client: any WatchCoreClient = LiveWatchCoreClient()
 
     /// Number of pending intents queued for sync.
     var pendingIntentCount: Int = 0
 
     /// Whether the watch has received at least one snapshot from iPhone.
     var hasReceivedInitialSync: Bool = false
+
+    private let session = WatchSessionManager.shared
+
+    /// Activate connectivity and start mirroring the iPhone's snapshot.
+    /// Call once when the app appears.
+    func start() {
+        session.onDataUpdate = { [weak self] in
+            self?.refresh()
+        }
+        session.activate()
+        refresh()
+    }
+
+    /// Recompute UI state from the latest snapshot and connectivity status.
+    func refresh() {
+        let snapshot = LiveSnapshotStore.shared.current
+        hasReceivedInitialSync = snapshot != nil
+        pendingIntentCount = IntentQueue.shared.count
+
+        if let snapshot {
+            vaultStatus = snapshot.vaultLocked ? .locked : .unlocked
+            connectionStatus = session.isReachable
+                ? .connected
+                : .stale(lastSync: snapshot.generatedAt)
+        } else {
+            vaultStatus = .unknown
+            connectionStatus = session.isReachable ? .connected : .disconnected
+        }
+    }
 
     /// Human-readable connection description for the UI.
     var connectionLabel: String {

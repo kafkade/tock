@@ -7,14 +7,17 @@ SwiftUI app for iPhone and iPad, targeting iOS 17+ and macOS 14+.
 Thin SwiftUI shell over the Rust core via UniFFI (see
 [`docs/architecture.md`](../../docs/architecture.md) §8.1):
 
-- **`CoreActor`** — `@globalActor` serializing all UniFFI calls
-- **`CoreClient` protocol** — dependency boundary between views and
-  Rust core. `MockCoreClient` for previews/dev, `TockCoreClient` (future)
-  for production
+- **`CoreClient` protocol** — dependency boundary between views and the
+  Rust core. `TockCoreClient` (backed by `TockSwift.TockWorkspace`) is the
+  production client; `MockCoreClient` is used only for previews/tests, and
+  `LockedCoreClient` is the sentinel used while the vault is locked
+- **`VaultGateway`** — opens the shared App Group vault for extension
+  processes (App Intents, Share Extension) using the Keychain-cached master
+  password
 - **`AppState`** — `@Observable` app-wide state (vault status, navigation,
   quick-add). Each Stage Manager window gets its own instance.
 - **Presentation DTOs** — `TaskItem`, `ProjectItem`, `HabitItem`, etc.
-  Mapped from UniFFI types when bindings are connected
+  Mapped from the generated `Tock*` UniFFI types in `Core/CoreMapping.swift`
 
 ## Navigation
 
@@ -73,8 +76,14 @@ package. The `Package.swift` depends on `../../bindings/swift` (the
 open apps/ios/Package.swift
 ```
 
-Until UniFFI bindings are generated, the app runs with `MockCoreClient`
-providing sample data for development and SwiftUI previews.
+The app opens a real encrypted vault through `TockSwift.TockWorkspace`
+(UniFFI). The vault file lives in the App Group container
+(`group.com.kafkade.tock`) so the app, widgets, App Intents, and Share
+Extension all read and write the same vault — and the CLI can open the same
+file. `MockCoreClient` is used only for SwiftUI previews and tests.
+
+Generating the FFI binary (`TockFFI.xcframework`) requires macOS with the
+Apple Rust targets; run `cargo xtask xcframework` once before building.
 
 ## Status
 
@@ -82,7 +91,7 @@ providing sample data for development and SwiftUI previews.
 - [x] All feature views with view models
 - [x] Reusable components (TaskRow, HabitRow, TimeBlockRow, etc.)
 - [x] Quick-add sheet at app level
-- [x] Mock data for development/previews
+- [x] Mock data for SwiftUI previews/tests
 - [x] iPadOS `NavigationSplitView` with three-column layout (#50)
 - [x] Keyboard shortcuts for iPad external keyboards (#50)
 - [x] Drag-and-drop task organization (#50)
@@ -91,4 +100,4 @@ providing sample data for development and SwiftUI previews.
 - [x] WidgetKit widgets — Today, Habit, Status across 7 size families (#52)
 - [x] App Intents for Siri and Shortcuts — 11 intents, 4 entity types, 6 pre-built shortcuts (#53)
 - [x] Share extension for quick capture from any app (#54)
-- [ ] Connect to UniFFI bindings (requires macOS + `TockFFI` generation)
+- [x] Connected to the real Rust core via `TockSwift.TockWorkspace` (#121)

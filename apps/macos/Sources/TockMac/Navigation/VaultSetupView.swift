@@ -118,11 +118,6 @@ struct VaultSetupView: View {
     }
 
     private func defaultVaultPath() -> String {
-        let appSupport = FileManager.default.urls(
-            for: .applicationSupportDirectory, in: .userDomainMask
-        ).first!
-        let tockDir = appSupport.appendingPathComponent("tock")
-        try? FileManager.default.createDirectory(at: tockDir, withIntermediateDirectories: true)
-        return tockDir.appendingPathComponent("vault.tock").path
+        AppGroup.vaultPath()
     }
 }
