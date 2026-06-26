@@ -402,8 +402,9 @@ pub fn build_context(
 #[allow(clippy::unnecessary_wraps)] // Tera filter API requires Result return type
 fn duration_filter(
     value: &tera::Value,
-    _args: &HashMap<String, tera::Value>,
-) -> tera::Result<tera::Value> {
+    _kwargs: tera::Kwargs,
+    _state: &tera::State<'_>,
+) -> tera::TeraResult<tera::Value> {
     #[allow(clippy::cast_possible_truncation)] // duration seconds fit in i64
     let secs = value
         .as_i64()
@@ -422,7 +423,7 @@ fn duration_filter(
         format!("{seconds}s")
     };
 
-    Ok(tera::Value::String(result))
+    Ok(tera::Value::from(result))
 }
 
 // ---------------------------------------------------------------------------
@@ -640,38 +641,32 @@ mod tests {
 
     #[test]
     fn duration_filter_formats_hours() {
-        let args = HashMap::new();
-        let val = tera::Value::Number(serde_json::Number::from(7380_i64)); // 2h3m
-        let result = duration_filter(&val, &args);
-        assert!(result.is_ok());
-        assert_eq!(
-            result.unwrap_or_default(),
-            tera::Value::String("2h 03m".to_string())
-        );
+        let kwargs = tera::Kwargs::default();
+        let context = tera::Context::new();
+        let state = tera::State::new(&context);
+        let val = tera::Value::from(7380_i64); // 2h3m
+        let result = duration_filter(&val, kwargs, &state);
+        assert_eq!(result.ok(), Some(tera::Value::from("2h 03m")));
     }
 
     #[test]
     fn duration_filter_formats_minutes() {
-        let args = HashMap::new();
-        let val = tera::Value::Number(serde_json::Number::from(125_i64)); // 2m5s
-        let result = duration_filter(&val, &args);
-        assert!(result.is_ok());
-        assert_eq!(
-            result.unwrap_or_default(),
-            tera::Value::String("2m 05s".to_string())
-        );
+        let kwargs = tera::Kwargs::default();
+        let context = tera::Context::new();
+        let state = tera::State::new(&context);
+        let val = tera::Value::from(125_i64); // 2m5s
+        let result = duration_filter(&val, kwargs, &state);
+        assert_eq!(result.ok(), Some(tera::Value::from("2m 05s")));
     }
 
     #[test]
     fn duration_filter_formats_seconds() {
-        let args = HashMap::new();
-        let val = tera::Value::Number(serde_json::Number::from(42_i64));
-        let result = duration_filter(&val, &args);
-        assert!(result.is_ok());
-        assert_eq!(
-            result.unwrap_or_default(),
-            tera::Value::String("42s".to_string())
-        );
+        let kwargs = tera::Kwargs::default();
+        let context = tera::Context::new();
+        let state = tera::State::new(&context);
+        let val = tera::Value::from(42_i64);
+        let result = duration_filter(&val, kwargs, &state);
+        assert_eq!(result.ok(), Some(tera::Value::from("42s")));
     }
 
     #[test]
