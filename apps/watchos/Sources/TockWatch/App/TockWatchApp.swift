@@ -23,6 +23,9 @@ struct TockWatchApp: App {
                 }
             }
             .environment(appState)
+            .task {
+                appState.start()
+            }
         }
     }
 

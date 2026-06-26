@@ -1,4 +1,5 @@
 import SwiftUI
+import TockSwift
 
 /// App-wide observable session state shared across all scenes.
 ///
@@ -24,7 +25,7 @@ final class AppSessionState {
 
     /// The active core client. Replaced with a live client when the
     /// vault is unlocked; defaults to mock for development.
-    var client: any CoreClient = MockCoreClient.shared
+    var client: any CoreClient = LockedCoreClient()
 
     // MARK: - Menu bar display state
 
@@ -61,25 +62,57 @@ final class AppSessionState {
 
     func unlock(path: String, password: String) async {
         vaultStatus = .unlocking
-        // TODO: Replace with actual vault open via CoreActor when
-        // UniFFI bindings are connected.
-        try? await Task.sleep(for: .milliseconds(500))
-        vaultStatus = .unlocked
-        await refreshMenuBarState()
+        do {
+            let workspace = try await TockWorkspace.open(
+                path: path, password: Data(password.utf8)
+            )
+            client = TockCoreClient(workspace: workspace)
+            vaultStatus = .unlocked
+            await refreshMenuBarState()
+        } catch {
+            vaultStatus = .error(Self.describe(error))
+        }
     }
 
     func createVault(path: String, password: String) async {
         vaultStatus = .unlocking
-        try? await Task.sleep(for: .milliseconds(500))
-        vaultStatus = .unlocked
-        await refreshMenuBarState()
+        do {
+            let workspace = try await TockWorkspace.create(
+                path: path, password: Data(password.utf8)
+            )
+            client = TockCoreClient(workspace: workspace)
+            vaultStatus = .unlocked
+            await refreshMenuBarState()
+        } catch {
+            vaultStatus = .error(Self.describe(error))
+        }
     }
 
     func lock() {
+        if let live = client as? TockCoreClient {
+            Task { try? await live.lock() }
+        }
+        client = LockedCoreClient()
         vaultStatus = .locked
         activeTimer = nil
         activeFocus = nil
         todayTasks = []
+    }
+
+    /// Human-readable description for a vault error, mapping the common
+    /// `TockError` cases to friendly text.
+    private static func describe(_ error: Error) -> String {
+        if let tockError = error as? TockError {
+            switch tockError {
+            case .InvalidCredentials:
+                return "Incorrect master password."
+            case .VaultNotFound:
+                return "No vault found. Create one to get started."
+            default:
+                return "Could not open the vault. Please try again."
+            }
+        }
+        return error.localizedDescription
     }
 
     // MARK: - Menu bar data refresh

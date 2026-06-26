@@ -15,7 +15,7 @@ struct AccessoryWidgetEntry: TimelineEntry {
 struct HabitAccessoryProvider: TimelineProvider {
     private let store: any WidgetSnapshotStore
 
-    init(store: any WidgetSnapshotStore = MockWidgetSnapshotStore.shared) {
+    init(store: any WidgetSnapshotStore = AppGroupWidgetSnapshotStore.shared) {
         self.store = store
     }
 
@@ -46,7 +46,7 @@ struct HabitAccessoryProvider: TimelineProvider {
 struct StatusAccessoryProvider: TimelineProvider {
     private let store: any WidgetSnapshotStore
 
-    init(store: any WidgetSnapshotStore = MockWidgetSnapshotStore.shared) {
+    init(store: any WidgetSnapshotStore = AppGroupWidgetSnapshotStore.shared) {
         self.store = store
     }
 

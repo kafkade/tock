@@ -1,4 +1,5 @@
 import SwiftUI
+import TockSwift
 
 /// App-wide observable state.
 ///
@@ -21,8 +22,13 @@ final class AppState {
     var showQuickAdd = false
 
     /// The active core client. Replaced with a live client when the
-    /// vault is unlocked; defaults to mock for development.
-    var client: any CoreClient = MockCoreClient.shared
+    /// vault is unlocked; locked sentinel until then.
+    var client: any CoreClient = LockedCoreClient()
+
+    /// Master password held transiently in memory while the vault is unlocked,
+    /// so the user can opt in to biometric unlock (which caches it in the
+    /// Keychain) after unlocking. Cleared on `lock()`.
+    private var sessionPassword: String?
 
     // MARK: - iPad navigation state
 
@@ -82,30 +88,73 @@ final class AppState {
 
     func unlock(path: String, password: String) async {
         vaultStatus = .unlocking
-        // TODO: Replace with actual vault open via CoreActor when
-        // UniFFI bindings are connected.
-        // For now, simulate a brief unlock delay.
-        try? await Task.sleep(for: .milliseconds(500))
-        vaultStatus = .unlocked
-        didExplicitlyLock = false
-        didAttemptAutoUnlock = false
+        do {
+            let workspace = try await TockWorkspace.open(
+                path: path, password: Data(password.utf8)
+            )
+            client = TockCoreClient(workspace: workspace)
+            sessionPassword = password
+            vaultStatus = .unlocked
+            didExplicitlyLock = false
+            didAttemptAutoUnlock = false
+            await WidgetSnapshotWriter.publish(from: client)
+            PhoneSessionManager.shared.setClient(client)
+            PhoneSessionManager.shared.pushSnapshot()
+        } catch {
+            vaultStatus = .error(Self.describe(error))
+        }
     }
 
     func createVault(path: String, password: String) async {
         vaultStatus = .unlocking
-        try? await Task.sleep(for: .milliseconds(500))
-        vaultStatus = .unlocked
-        didExplicitlyLock = false
-        didAttemptAutoUnlock = false
+        do {
+            let workspace = try await TockWorkspace.create(
+                path: path, password: Data(password.utf8)
+            )
+            client = TockCoreClient(workspace: workspace)
+            sessionPassword = password
+            vaultStatus = .unlocked
+            didExplicitlyLock = false
+            didAttemptAutoUnlock = false
+            await WidgetSnapshotWriter.publish(from: client)
+            PhoneSessionManager.shared.setClient(client)
+            PhoneSessionManager.shared.pushSnapshot()
+        } catch {
+            vaultStatus = .error(Self.describe(error))
+        }
     }
 
     func lock() {
+        if let live = client as? TockCoreClient {
+            Task { try? await live.lock() }
+        }
+        client = LockedCoreClient()
+        sessionPassword = nil
         vaultStatus = .locked
         selectedSidebarItem = .today
         selectedTaskId = nil
         selectedTaskIds = []
         didExplicitlyLock = true
         didAttemptAutoUnlock = false
+        WidgetSnapshotWriter.publishLocked()
+        PhoneSessionManager.shared.setClient(nil)
+        PhoneSessionManager.shared.pushSnapshot()
+    }
+
+    /// Human-readable description for a vault error, mapping the common
+    /// `TockError` cases to friendly text.
+    private static func describe(_ error: Error) -> String {
+        if let tockError = error as? TockError {
+            switch tockError {
+            case .InvalidCredentials:
+                return "Incorrect master password."
+            case .VaultNotFound:
+                return "No vault found. Create one to get started."
+            default:
+                return "Could not open the vault. Please try again."
+            }
+        }
+        return error.localizedDescription
     }
 
     // MARK: - Biometric unlock
@@ -119,15 +168,18 @@ final class AppState {
         vaultStatus = .unlocking
         do {
             let reason = "Unlock your tock vault"
-            let _keyData = try KeychainService.loadVaultKey(reason: reason)
-            // TODO: Pass keyData to CoreActor.unlockWithCachedKey(_:) when
-            // UniFFI bindings are connected. For now, mock unlock succeeds
-            // if the Keychain read succeeded (biometric auth passed).
-            _ = _keyData
-            try? await Task.sleep(for: .milliseconds(200))
+            let password = try KeychainService.loadMasterPassword(reason: reason)
+            let workspace = try await TockWorkspace.open(
+                path: AppGroup.vaultPath(), password: Data(password.utf8)
+            )
+            client = TockCoreClient(workspace: workspace)
+            sessionPassword = password
             vaultStatus = .unlocked
             didExplicitlyLock = false
             didAttemptAutoUnlock = false
+            await WidgetSnapshotWriter.publish(from: client)
+            PhoneSessionManager.shared.setClient(client)
+            PhoneSessionManager.shared.pushSnapshot()
         } catch let error as KeychainError {
             switch error {
             case .userCancelled:
@@ -146,28 +198,24 @@ final class AppState {
                 vaultStatus = .error(error.localizedDescription ?? "Biometric unlock failed.")
             }
         } catch {
-            vaultStatus = .error("Biometric unlock failed: \(error.localizedDescription)")
+            vaultStatus = .error("Biometric unlock failed: \(Self.describe(error))")
         }
     }
 
     // MARK: - Biometric enable / disable
 
-    /// Enable biometric unlock by caching the vault key in the Keychain.
+    /// Enable biometric unlock by caching the master password in the Keychain.
     ///
-    /// Must be called while the vault is unlocked. In production, the key
-    /// would come from CoreActor. Currently stores a mock placeholder.
+    /// Must be called while the vault is unlocked — the password captured at
+    /// unlock time is stored under biometric protection so it can be passed to
+    /// `open_workspace` on future biometric unlocks.
     func enableBiometrics() throws {
-        guard vaultStatus == .unlocked else { return }
-
-        // TODO: In production, get the real vault key from CoreActor:
-        //   let key = await CoreActor.shared.exportCachedKey()
-        // For development, store a deterministic mock key.
-        let mockKey = Data("tock-mock-vault-key-v1".utf8)
-        try KeychainService.saveVaultKey(mockKey)
+        guard case .unlocked = vaultStatus, let password = sessionPassword else { return }
+        try KeychainService.saveMasterPassword(password)
         biometricEnabled = true
     }
 
-    /// Disable biometric unlock and remove the cached key.
+    /// Disable biometric unlock and remove the cached password.
     func disableBiometrics() {
         KeychainService.deleteVaultKey()
         biometricEnabled = false

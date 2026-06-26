@@ -30,7 +30,7 @@ struct ShareExtensionView: View {
 
     init(
         content: ShareContent,
-        vaultAccess: any ShareVaultAccessChecking = MockShareVaultAccess(),
+        vaultAccess: any ShareVaultAccessChecking = AppGroupShareVaultAccess(),
         onDismiss: @escaping () -> Void
     ) {
         self.content = content
@@ -68,8 +68,9 @@ struct ShareExtensionView: View {
         }
         .task {
             availability = await vaultAccess.captureAvailability()
-            let client = MockCoreClient.shared
-            projects = (try? await client.listProjects()) ?? []
+            if let client = try? await VaultGateway.shared.client() {
+                projects = (try? await client.listProjects()) ?? []
+            }
         }
     }
 

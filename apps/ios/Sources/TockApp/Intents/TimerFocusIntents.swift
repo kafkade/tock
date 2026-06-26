@@ -19,9 +19,10 @@ struct StartTimerIntent: AppIntent {
     var note: String?
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        let client = MockCoreClient.shared
+        let client = try await VaultGateway.shared.client()
         let title = note ?? task?.title ?? "Untitled"
         let block = try await client.startTimer(title: title, taskId: task?.id)
+        await WidgetSnapshotWriter.publish(from: client)
 
         var message = "Timer started"
         if let taskTitle = task?.title {
@@ -45,8 +46,9 @@ struct StopTimerIntent: AppIntent {
     static var openAppWhenRun = false
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        let client = MockCoreClient.shared
+        let client = try await VaultGateway.shared.client()
         if let block = try await client.stopTimer() {
+            await WidgetSnapshotWriter.publish(from: client)
             let duration = block.duration
             let minutes = Int(duration / 60)
             let seconds = Int(duration.truncatingRemainder(dividingBy: 60))
@@ -75,10 +77,11 @@ struct StartFocusIntent: AppIntent {
     var length: Int
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        let client = MockCoreClient.shared
+        let client = try await VaultGateway.shared.client()
         let workMinutes: UInt32 = 25
         let cycles = max(1, UInt32(length) / workMinutes)
         let session = try await client.startFocus(taskId: task?.id, cycles: cycles)
+        await WidgetSnapshotWriter.publish(from: client)
 
         var message = "Focus session started — \(session.plannedCycles) cycle"
         if session.plannedCycles != 1 { message += "s" }

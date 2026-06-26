@@ -26,9 +26,9 @@ struct LogHabitIntent: AppIntent {
     }
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        // TODO: In production, log via CoreActor / App Group storage
-        let client = MockCoreClient.shared
+        let client = try await VaultGateway.shared.client()
         _ = try await client.logHabit(id: habit.id, notes: notes)
+        await WidgetSnapshotWriter.publish(from: client)
         return .result(dialog: "Logged '\(habit.title)' ✓")
     }
 }
@@ -48,7 +48,7 @@ struct ShowHabitStreakIntent: AppIntent {
     var habit: HabitEntity?
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        let client = MockCoreClient.shared
+        let client = try await VaultGateway.shared.client()
 
         if let habit {
             let habits = try await client.listHabits()

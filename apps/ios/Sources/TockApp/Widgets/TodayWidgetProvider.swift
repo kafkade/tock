@@ -18,7 +18,7 @@ struct TodayWidgetEntry: TimelineEntry {
 struct TodayWidgetProvider: TimelineProvider {
     private let store: any WidgetSnapshotStore
 
-    init(store: any WidgetSnapshotStore = MockWidgetSnapshotStore.shared) {
+    init(store: any WidgetSnapshotStore = AppGroupWidgetSnapshotStore.shared) {
         self.store = store
     }
 

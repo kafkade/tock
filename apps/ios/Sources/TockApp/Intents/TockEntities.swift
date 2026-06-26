@@ -36,12 +36,11 @@ struct TaskEntity: AppEntity {
 /// String-based query for resolving tasks by name.
 ///
 /// Supports Siri natural-language matching ("Mark dentist done")
-/// and Shortcuts entity picker. Uses `MockCoreClient.shared` for
-/// development; production will use App Group shared storage.
+/// and Shortcuts entity picker. Resolves tasks via the App Group vault
+/// through `VaultGateway`.
 struct TaskEntityQuery: EntityStringQuery {
     func entities(for identifiers: [String]) async throws -> [TaskEntity] {
-        // TODO: In production, query via App Group shared CoreClient
-        let client = MockCoreClient.shared
+        let client = try await VaultGateway.shared.client()
         let allTasks = try await client.listTasks(filter: .all)
         return allTasks
             .filter { identifiers.contains($0.id) }
@@ -49,7 +48,7 @@ struct TaskEntityQuery: EntityStringQuery {
     }
 
     func entities(matching query: String) async throws -> [TaskEntity] {
-        let client = MockCoreClient.shared
+        let client = try await VaultGateway.shared.client()
         let allTasks = try await client.listTasks(filter: .all)
         let lowered = query.lowercased()
         return allTasks
@@ -58,7 +57,7 @@ struct TaskEntityQuery: EntityStringQuery {
     }
 
     func suggestedEntities() async throws -> [TaskEntity] {
-        let client = MockCoreClient.shared
+        let client = try await VaultGateway.shared.client()
         let todayTasks = try await client.listTasks(filter: .today)
         return todayTasks.map {
             TaskEntity(id: $0.id, title: $0.title, priority: $0.priority?.rawValue)
@@ -97,7 +96,7 @@ struct HabitEntity: AppEntity {
 
 struct HabitEntityQuery: EntityStringQuery {
     func entities(for identifiers: [String]) async throws -> [HabitEntity] {
-        let client = MockCoreClient.shared
+        let client = try await VaultGateway.shared.client()
         let habits = try await client.listHabits()
         return habits
             .filter { identifiers.contains($0.id) }
@@ -105,7 +104,7 @@ struct HabitEntityQuery: EntityStringQuery {
     }
 
     func entities(matching query: String) async throws -> [HabitEntity] {
-        let client = MockCoreClient.shared
+        let client = try await VaultGateway.shared.client()
         let habits = try await client.listHabits()
         let lowered = query.lowercased()
         return habits
@@ -114,7 +113,7 @@ struct HabitEntityQuery: EntityStringQuery {
     }
 
     func suggestedEntities() async throws -> [HabitEntity] {
-        let client = MockCoreClient.shared
+        let client = try await VaultGateway.shared.client()
         let habits = try await client.listHabits()
         return habits.map {
             HabitEntity(id: $0.id, title: $0.title, streakCurrent: Int($0.streakCurrent), levelName: $0.levelName)
@@ -146,7 +145,7 @@ struct ProjectEntity: AppEntity {
 
 struct ProjectEntityQuery: EntityStringQuery {
     func entities(for identifiers: [String]) async throws -> [ProjectEntity] {
-        let client = MockCoreClient.shared
+        let client = try await VaultGateway.shared.client()
         let projects = try await client.listProjects()
         return projects
             .filter { identifiers.contains($0.id) }
@@ -154,7 +153,7 @@ struct ProjectEntityQuery: EntityStringQuery {
     }
 
     func entities(matching query: String) async throws -> [ProjectEntity] {
-        let client = MockCoreClient.shared
+        let client = try await VaultGateway.shared.client()
         let projects = try await client.listProjects()
         let lowered = query.lowercased()
         return projects
@@ -163,7 +162,7 @@ struct ProjectEntityQuery: EntityStringQuery {
     }
 
     func suggestedEntities() async throws -> [ProjectEntity] {
-        let client = MockCoreClient.shared
+        let client = try await VaultGateway.shared.client()
         let projects = try await client.listProjects()
         return projects.map { ProjectEntity(id: $0.id, name: $0.name) }
     }

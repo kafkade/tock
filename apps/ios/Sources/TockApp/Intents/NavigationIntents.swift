@@ -13,7 +13,7 @@ struct ShowTodayIntent: AppIntent {
     static var openAppWhenRun = true
 
     func perform() async throws -> some IntentResult & ProvidesDialog & OpensIntent {
-        let client = MockCoreClient.shared
+        let client = try await VaultGateway.shared.client()
         let tasks = try await client.listTasks(filter: .today)
         let count = tasks.count
         let message = count == 0
@@ -68,7 +68,7 @@ struct RunReportIntent: AppIntent {
         // return structured results. For now, return a mock summary.
         switch report.id {
         case "r-standup":
-            let client = MockCoreClient.shared
+            let client = try await VaultGateway.shared.client()
             let today = try await client.listTasks(filter: .today)
             return .result(dialog: "Standup: \(today.count) tasks today. Report ready in tock.")
 
@@ -76,7 +76,7 @@ struct RunReportIntent: AppIntent {
             return .result(dialog: "Weekly Review: 0 tasks completed. Open tock for details.")
 
         case "r-time":
-            let client = MockCoreClient.shared
+            let client = try await VaultGateway.shared.client()
             let blocks = try await client.listTimeBlocks()
             let total = blocks.reduce(0.0) { $0 + $1.duration }
             let hours = Int(total / 3600)

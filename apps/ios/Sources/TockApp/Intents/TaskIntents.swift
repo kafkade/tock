@@ -28,8 +28,7 @@ struct AddTaskIntent: AppIntent {
     var priority: TaskPriorityParam?
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        // TODO: In production, delegate to CoreActor via App Group
-        let client = MockCoreClient.shared
+        let client = try await VaultGateway.shared.client()
         let input = NewTaskInput(
             title: taskTitle,
             notes: nil,
@@ -40,6 +39,7 @@ struct AddTaskIntent: AppIntent {
             tags: tags ?? []
         )
         let task = try await client.addTask(input)
+        await WidgetSnapshotWriter.publish(from: client)
 
         var message = "Added '\(task.title)'"
         if let projectName = project?.name {
@@ -97,9 +97,9 @@ struct CompleteTaskIntent: AppIntent {
     }
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        // TODO: In production, complete via CoreActor / App Group storage
-        let client = MockCoreClient.shared
+        let client = try await VaultGateway.shared.client()
         try await client.completeTask(id: task.id)
+        await WidgetSnapshotWriter.publish(from: client)
         return .result(dialog: "Completed '\(task.title)' ✓")
     }
 }
@@ -119,9 +119,10 @@ struct CaptureToInboxIntent: AppIntent {
     var text: String
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        let client = MockCoreClient.shared
+        let client = try await VaultGateway.shared.client()
         let input = NewTaskInput(title: text)
         _ = try await client.addTask(input)
+        await WidgetSnapshotWriter.publish(from: client)
         return .result(dialog: "Captured to inbox: '\(text)'")
     }
 }

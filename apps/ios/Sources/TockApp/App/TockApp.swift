@@ -25,6 +25,7 @@ struct TockApp: App {
 /// Handles `tock://` deep-link URLs from widgets and App Intents.
 private struct RootSceneView: View {
     @State private var appState = AppState()
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         Group {
@@ -41,6 +42,13 @@ private struct RootSceneView: View {
         }
         .task {
             await drainPendingCaptures()
+        }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .background || phase == .inactive else { return }
+            guard case .unlocked = appState.vaultStatus else { return }
+            let client = appState.client
+            Task { await WidgetSnapshotWriter.publish(from: client) }
+            PhoneSessionManager.shared.pushSnapshot()
         }
     }
 
@@ -80,11 +88,15 @@ private struct RootSceneView: View {
 
     /// Drain captures saved by the share extension and create tasks.
     private func drainPendingCaptures() async {
+        PhoneSessionManager.shared.activate()
         guard case .unlocked = appState.vaultStatus else { return }
         let captures = SharePendingStore.shared.drainAll()
         for capture in captures {
             let input = capture.toNewTaskInput()
             _ = try? await appState.client.addTask(input)
+        }
+        if !captures.isEmpty {
+            await WidgetSnapshotWriter.publish(from: appState.client)
         }
     }
 }
