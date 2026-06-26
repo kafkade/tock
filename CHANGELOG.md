@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- UniFFI Swift bindings now link against the real Rust core: `import TockSwift` exposes a working `TockWorkspace` with idiomatic async/await wrappers across all domains (tasks, projects, areas, tags, time tracking, focus sessions, habits). Bindings and the `TockFFI.xcframework` (macOS + iOS device + iOS simulator slices) are regenerated reproducibly via `cargo xtask xcframework`
 - Markdown export with Tera templates: `tock export md` with three built-in templates (`--builtin task-list`, `habit-report`, `time-report`), custom template support (`--template <path>`), and optional task filtering (`--filter <expr>`)
 - Taskwarrior import: `tock import taskwarrior -f <file>` parses `task export` JSON with field mapping (status, priority, dates, annotations), project creation, dependency linking, recurrence conversion, and UDA registration
 - CSV import: `tock import csv -f <file>` with automatic column detection from headers and optional TOML mapping file (`--map config.toml`) for custom column assignments, date formats, and field overrides

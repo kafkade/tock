@@ -1,18 +1,12 @@
-// This directory holds UniFFI-generated files.
+// This directory holds the UniFFI-generated Swift bindings.
 //
-// After building the Rust library, regenerate with:
+// `Sources/TockFFI/tock_uniffi.swift` is emitted by `cargo xtask xcframework`
+// (gitignored). That same command also compiles the Rust static libraries
+// for the Apple targets and packages them as `TockFFI.xcframework`.
 //
-//     cargo run -p tock-uniffi --features cli --bin uniffi-bindgen -- \
-//         generate --library target/debug/libtock_uniffi.dylib \
-//         --language swift \
-//         --out-dir bindings/swift/Sources/TockFFI
+// Regenerate both with:
 //
-// Generated files (git-ignored via /bindings/swift/generated/ rule):
-//   - tock_uniffi.swift
-//   - tock_uniffiFFI.h
-//   - tock_uniffiFFI.modulemap
+//     cargo xtask xcframework
 //
-// This placeholder ensures the Swift package can reference the target
-// directory even before generation has run.
-
-// Intentionally empty — generated code goes here.
+// This `Placeholder.swift` keeps the SwiftPM `TockFFI` target's source
+// directory tracked before generation has run; it is intentionally empty.

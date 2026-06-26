@@ -8,50 +8,50 @@ Swift Package wrapping the tock Rust core via UniFFI. Provides:
 
 ## Prerequisites
 
-- Rust toolchain with targets:
+- Rust toolchain (the workspace pin in `rust-toolchain.toml`)
+- Xcode 15+ with Swift 5.9+ (`swift`, `xcodebuild`, `lipo` on `PATH`)
+- The Apple Rust targets — `cargo xtask xcframework` installs these for you
+  via `rustup target add`:
   `aarch64-apple-ios`, `aarch64-apple-ios-sim`, `aarch64-apple-darwin`,
   `x86_64-apple-darwin`
-- Xcode 15+ with Swift 5.9+
-- `cargo` and the `uniffi-bindgen` tool (built from `tock-uniffi`)
 
 ## Building
 
-### 1. Build the Rust library
+### One command: generate bindings + XCFramework
 
 ```bash
-# macOS (native, for development)
-cargo build -p tock-uniffi
-
-# iOS device
-cargo build -p tock-uniffi --target aarch64-apple-ios
-
-# iOS Simulator
-cargo build -p tock-uniffi --target aarch64-apple-ios-sim
+cargo xtask xcframework
 ```
 
-### 2. Generate Swift bindings
+This single task (see `xtask/src/main.rs`):
+
+1. Installs the four Apple Rust targets (idempotent).
+2. Builds `tock-uniffi` for each target with the `apple-ffi` profile.
+3. Runs `uniffi-bindgen` and writes the Swift bindings to
+   `Sources/TockFFI/tock_uniffi.swift`.
+4. `lipo`s the two macOS slices and runs `xcodebuild -create-xcframework`
+   to produce `TockFFI.xcframework`.
+
+Both `tock_uniffi.swift` and `TockFFI.xcframework/` are **gitignored** — they
+are build outputs. Run the task once before `swift build`/`swift test`.
+
+> **Why a dedicated `apple-ffi` Cargo profile?** The workspace `release`
+> profile sets `strip = "symbols"` and `lto = "thin"`, both of which drop the
+> `#[no_mangle]` UniFFI scaffolding from the static library and break linkage.
+> `apple-ffi` inherits `release` but disables stripping and LTO.
+
+### Run the tests
 
 ```bash
-cargo run -p tock-uniffi --features cli --bin uniffi-bindgen -- \
-    generate --library target/debug/libtock_uniffi.dylib \
-    --language swift \
-    --out-dir bindings/swift/Sources/TockFFI
+cd bindings/swift
+swift test
 ```
 
-This produces three files in `Sources/TockFFI/`:
+The tests in `Tests/TockSwiftTests` open an encrypted vault and round-trip
+tasks, projects, areas, tags, time blocks, focus sessions, and habits through
+the real Rust core (macOS / arm64 slice).
 
-- `tock_uniffi.swift` — Swift types and FFI function declarations
-- `tock_uniffiFFI.h` — C header for the FFI functions
-- `tock_uniffiFFI.modulemap` — Clang module map
-
-### 3. Build the XCFramework (future)
-
-An `xcframework` combining `arm64-ios`, `arm64-ios-sim`,
-`arm64-macos`, and `x86_64-macos` slices will be automated via
-`cargo xtask xcframework`. Until then, link the platform-specific
-static library directly.
-
-### 4. Use in your app
+### Use in your app
 
 ```swift
 // Package.swift dependency
