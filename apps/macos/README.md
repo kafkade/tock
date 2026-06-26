@@ -17,12 +17,17 @@ swift build
 swift run TockMac
 ```
 
-> **Note:** The Rust core is not yet connected — the app uses `MockCoreClient` with static sample data. Production integration requires generating `TockFFI` via UniFFI and wiring it through `CoreActor`.
+> **Note:** The app opens a real encrypted vault through
+> `TockSwift.TockWorkspace` (UniFFI). The vault file is created in the
+> Application Support / App Group container and is readable by the CLI.
+> `MockCoreClient` is retained only for SwiftUI previews; `LockedCoreClient`
+> is the sentinel used while the vault is locked. Generate the FFI binary with
+> `cargo xtask xcframework` before building.
 
 ## Architecture
 
 - **`App/`** — `@main` entry point (`TockMacApp`) with `WindowGroup`, `MenuBarExtra`, and `Settings` scenes.
-- **`Core/`** — Shared types: `AppSessionState` (cross-scene observable state), `CoreClient` protocol, `MockCoreClient`, domain models.
+- **`Core/`** — Shared types: `AppSessionState` (cross-scene observable state), `CoreClient` protocol, `TockCoreClient` (real client over `TockSwift.TockWorkspace`), `LockedCoreClient` sentinel, `MockCoreClient` (previews), domain models.
 - **`Navigation/`** — `ContentView` (3-column layout), `SidebarView`, `TaskListView`, `VaultSetupView`.
 - **`Features/`** — View implementations: Today, Inbox, Habits, Timer, Projects, Settings, detail views.
 - **`ViewModels/`** — Presentation logic for feature views.
