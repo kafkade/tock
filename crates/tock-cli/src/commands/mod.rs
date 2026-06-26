@@ -11,6 +11,7 @@ pub mod list;
 pub mod modify;
 pub mod project;
 pub mod report;
+pub mod sync_cmd;
 pub mod tag;
 pub mod time;
 pub mod uda;
@@ -133,6 +134,12 @@ pub enum Commands {
     },
     /// `CalDAV` bidirectional sync.
     Caldav(caldav::CalDavArgs),
+    /// Multi-device sync: push/pull events and review conflicts.
+    Sync(sync_cmd::SyncArgs),
+    /// Pair a new device with an existing vault.
+    Onboard(sync_cmd::OnboardArgs),
+    /// Inspect and revoke registered devices.
+    Device(sync_cmd::DeviceArgs),
     /// Export data to a file.
     Export {
         /// Format: 'json' or 'md'.

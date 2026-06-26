@@ -204,11 +204,18 @@ impl ServerDb {
         Ok(result > 0)
     }
 
-    /// Pull events for a vault after a given lamport value.
+    /// Pull events for a vault after a given opaque cursor position.
+    ///
+    /// The cursor is the server-assigned `rowid`, which is monotonic in
+    /// insertion order. This is deliberately **not** the lamport value:
+    /// lamports are per-device and an offline device can push events
+    /// with lamports below ones already stored, which a lamport-ordered
+    /// cursor would skip. Rowid ordering guarantees every event is
+    /// delivered exactly once as the cursor advances.
     pub fn pull_events(
         &self,
         vault_id: &[u8; 16],
-        after_lamport: i64,
+        after_cursor: i64,
         limit: usize,
     ) -> Result<Vec<StoredEvent>, Error> {
         let conn = self
@@ -217,19 +224,20 @@ impl ServerDb {
             .map_err(|e| Error::Internal(e.to_string()))?;
         let limit_i = i64::try_from(limit).unwrap_or(i64::MAX);
         let mut stmt = conn.prepare(
-            "SELECT id, device_id, lamport, payload, created_at
+            "SELECT rowid, id, device_id, lamport, payload, created_at
              FROM server_events
-             WHERE vault_id = ?1 AND lamport > ?2
-             ORDER BY lamport ASC
+             WHERE vault_id = ?1 AND rowid > ?2
+             ORDER BY rowid ASC
              LIMIT ?3",
         )?;
-        let rows = stmt.query_map(params![vault_id.to_vec(), after_lamport, limit_i], |row| {
+        let rows = stmt.query_map(params![vault_id.to_vec(), after_cursor, limit_i], |row| {
             Ok(StoredEvent {
-                id: row.get(0)?,
-                device_id: row.get(1)?,
-                lamport: row.get(2)?,
-                payload: row.get(3)?,
-                created_at: row.get(4)?,
+                rowid: row.get(0)?,
+                id: row.get(1)?,
+                device_id: row.get(2)?,
+                lamport: row.get(3)?,
+                payload: row.get(4)?,
+                created_at: row.get(5)?,
             })
         })?;
         let mut events = Vec::new();
@@ -416,6 +424,8 @@ impl ServerDb {
 
 /// An event stored on the server.
 pub struct StoredEvent {
+    /// Server-assigned monotonic rowid (pull cursor position).
+    pub rowid: i64,
     /// Event id bytes.
     pub id: Vec<u8>,
     /// Device that produced the event.

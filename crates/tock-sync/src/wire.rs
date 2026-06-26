@@ -452,6 +452,9 @@ fn parse_entity_kind(s: &str) -> Result<EntityKind, Error> {
         "focus_session" => EntityKind::FocusSession,
         "annotation" => EntityKind::Annotation,
         "device" => EntityKind::Device,
+        "tag" => EntityKind::Tag,
+        "tag_link" => EntityKind::TagLink,
+        "habit_skip" => EntityKind::HabitSkip,
         _ => return Err(Error::WireFormat("unknown entity kind")),
     })
 }

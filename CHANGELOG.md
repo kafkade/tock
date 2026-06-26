@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Multi-device sync over HTTP: `tock sync` pushes local changes and pulls remote ones against a self-hosted `tock-server`, runs the conflict-resolution engine, and prints a `pushed N, pulled M, conflicts K` summary. `--server <url>` configures and persists the server on first use; `--dry-run` reports pending local changes without contacting the server
+- Sync conflict review: `tock sync conflicts` lists unresolved concurrent-edit conflicts and `tock sync resolve <id>` acknowledges one — no silent last-write-wins for productivity data (ADR-003)
+- Device pairing: `tock onboard invite` (existing device) and `tock onboard accept` (new device) transfer the vault key over an end-to-end-encrypted X25519 channel with an out-of-band fingerprint check, then create and back-fill a local vault for the new device
+- Device management: `tock device ls` lists registered devices with status and `tock device revoke <id>` revokes one; the revocation propagates to peers on the next sync
+- `HttpTransport` (in `tock-cli`, per ADR-001): a concrete `tock_sync::Transport` implementation over the server's `push`/`pull`/`devices`/`onboarding` REST endpoints; the server only ever stores ciphertext
+- Event-sourcing sync substrate (`tock-storage::sync`): synthesizes signed, AEAD-encrypted events by diffing domain state against a journal at sync time, covering tasks, projects, areas, headings, tags, time blocks, focus sessions, habits, and devices through one code path
 - Localization (i18n) framework for the CLI: user-facing strings are now translatable via [Fluent](https://projectfluent.org/) (`i18n-embed`). English (`en-US`) ships fully localized in `crates/tock-cli/i18n/`, with a `--lang`/`TOCK_LANG` override and automatic OS-locale detection (falls back to English). Adds `cargo xtask i18n-check` to validate catalog id parity (wired into CI), a translator guide ([`docs/TRANSLATING.md`](docs/TRANSLATING.md)), and a `tr!` macro with compile-time message-id checking for contributors
 - UniFFI Swift bindings now link against the real Rust core: `import TockSwift` exposes a working `TockWorkspace` with idiomatic async/await wrappers across all domains (tasks, projects, areas, tags, time tracking, focus sessions, habits). Bindings and the `TockFFI.xcframework` (macOS + iOS device + iOS simulator slices) are regenerated reproducibly via `cargo xtask xcframework`
 - Markdown export with Tera templates: `tock export md` with three built-in templates (`--builtin task-list`, `habit-report`, `time-report`), custom template support (`--template <path>`), and optional task filtering (`--filter <expr>`)
@@ -22,6 +28,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `tock_sync::Transport` is now an `async` trait (`async-trait`), enabling real network transports; the CLI drives it via a Tokio runtime for sync commands. `tock-sync` itself stays runtime-free and WASM-safe
+- Sync server pull cursor is now a monotonic server-assigned position (row order) instead of a per-device Lamport value, so an offline device whose Lamport lags can no longer miss events on pull
+- Allowed the `CDLA-Permissive-2.0` license in `deny.toml` for the Mozilla root-certificate data in `webpki-roots`, pulled in transitively by `reqwest` for the CLI's HTTP sync transport
 - Accessibility audit across iOS, macOS, watchOS, and CLI TUI: added VoiceOver labels for icon-only buttons, color-coded indicators, and stateful controls; decorative images hidden from assistive technology; task/time-block rows combined into single accessibility elements; disabled buttons include explanatory hints; theme files documented with WCAG AA contrast notes
 
 ## [0.3.0] - 2026-05-30

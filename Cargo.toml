@@ -65,7 +65,7 @@ thiserror = "2"
 uniffi = "0.31"
 
 # Domain & storage shared deps.
-uuid = { version = "1", features = ["v4", "v7", "serde"] }
+uuid = { version = "1", features = ["v4", "v5", "v7", "serde"] }
 time = { version = "0.3", default-features = false, features = ["std", "macros", "formatting", "parsing", "serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -75,6 +75,11 @@ rusqlite = { version = "0.40", features = ["bundled", "blob", "uuid", "time"] }
 axum = "0.8"
 tokio = { version = "1", features = ["full"] }
 tower-http = { version = "0.7", features = ["cors", "trace"] }
+
+# Async trait support for the sync Transport abstraction (no runtime,
+# WASM-safe) and the CLI's concrete HTTP transport (ADR-001).
+async-trait = "0.1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
 # Tracing / structured logging.
 tracing = "0.1"
