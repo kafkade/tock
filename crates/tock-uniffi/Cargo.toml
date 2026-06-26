@@ -47,7 +47,9 @@ todo = "deny"
 
 [dependencies]
 tock-core = { workspace = true }
+tock-crypto = { workspace = true }
 tock-storage = { workspace = true }
+tock-sync = { workspace = true }
 uniffi = { workspace = true }
 uuid = { workspace = true }
 time = { workspace = true }

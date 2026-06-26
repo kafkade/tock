@@ -26,6 +26,7 @@ struct TodayWidget: Widget {
     }
 }
 
+#if !os(macOS)
 /// Habit accessory widget — lock screen habit ring.
 ///
 /// Shows the top habit's streak as a circular progress ring,
@@ -64,6 +65,7 @@ struct StatusAccessoryWidget: Widget {
         ])
     }
 }
+#endif
 
 // MARK: - Widget Bundle
 
@@ -85,7 +87,9 @@ struct StatusAccessoryWidget: Widget {
 struct TockWidgetBundle: WidgetBundle {
     var body: some Widget {
         TodayWidget()
+        #if !os(macOS)
         HabitAccessoryWidget()
         StatusAccessoryWidget()
+        #endif
     }
 }

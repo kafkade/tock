@@ -12,6 +12,7 @@ struct VaultSetupView: View {
     @State private var confirmPassword = ""
     @State private var isCreating = false
     @State private var showCreate = false
+    @State private var showJoinExisting = false
 
     var body: some View {
         NavigationStack {
@@ -83,14 +84,25 @@ struct VaultSetupView: View {
                         }
                     }
                     .font(.caption)
+
+                    if !showCreate {
+                        Button("Join existing vault") {
+                            showJoinExisting = true
+                        }
+                        .font(.caption)
+                    }
                 }
                 .padding(.horizontal, TockTheme.Spacing.xxl)
 
                 Spacer()
             }
-            .navigationBarHidden(true)
+            .platformHiddenNavigationBar()
             .onAppear {
                 attemptAutoUnlock()
+            }
+            .sheet(isPresented: $showJoinExisting) {
+                JoinExistingVaultSheet()
+                    .environment(appState)
             }
         }
     }

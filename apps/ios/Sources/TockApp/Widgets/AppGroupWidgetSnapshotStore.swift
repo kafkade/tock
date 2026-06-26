@@ -1,17 +1,6 @@
 import Foundation
 import WidgetKit
 
-// MARK: - Codable conformance for snapshot persistence
-
-extension Priority: Codable {}
-extension HabitDirection: Codable {}
-extension FocusState: Codable {}
-extension WidgetTask: Codable {}
-extension WidgetHabit: Codable {}
-extension WidgetTimer: Codable {}
-extension WidgetFocus: Codable {}
-extension WidgetSnapshot: Codable {}
-
 // MARK: - App Group snapshot file location
 
 enum WidgetSnapshotFile {

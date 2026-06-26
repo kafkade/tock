@@ -1,3 +1,4 @@
+#if !os(macOS)
 import WidgetKit
 import SwiftUI
 
@@ -72,3 +73,4 @@ struct StatusAccessoryProvider: TimelineProvider {
         }
     }
 }
+#endif

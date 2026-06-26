@@ -25,6 +25,36 @@ final class AppState {
     /// vault is unlocked; locked sentinel until then.
     var client: any CoreClient = LockedCoreClient()
 
+    /// The underlying workspace handle for sync/pairing operations.
+    private var workspace: TockWorkspace?
+
+    /// Sync transport/orchestration entry point for the unlocked vault.
+    private var syncClient: SyncClient?
+
+    /// Persisted sync server URL for the current vault.
+    var syncServerURL = ""
+
+    /// Optional device label sent during sync registration.
+    var syncDeviceLabel = ""
+
+    /// Hosted-mode bearer token stored in the Keychain.
+    var syncAuthToken = ""
+
+    /// Whether a sync run is currently in flight.
+    var isSyncing = false
+
+    /// Latest sync summary for display in Settings.
+    var lastSyncSummary: String?
+
+    /// Latest sync-specific error.
+    var syncError: String?
+
+    /// When the last successful sync completed.
+    var lastSyncAt: Date?
+
+    /// Unresolved sync conflicts surfaced from the Rust sync engine.
+    var syncConflicts: [TockSyncConflict] = []
+
     /// Master password held transiently in memory while the vault is unlocked,
     /// so the user can opt in to biometric unlock (which caches it in the
     /// Keychain) after unlocking. Cleared on `lock()`.
@@ -92,14 +122,7 @@ final class AppState {
             let workspace = try await TockWorkspace.open(
                 path: path, password: Data(password.utf8)
             )
-            client = TockCoreClient(workspace: workspace)
-            sessionPassword = password
-            vaultStatus = .unlocked
-            didExplicitlyLock = false
-            didAttemptAutoUnlock = false
-            await WidgetSnapshotWriter.publish(from: client)
-            PhoneSessionManager.shared.setClient(client)
-            PhoneSessionManager.shared.pushSnapshot()
+            await finishUnlock(with: workspace, password: password)
         } catch {
             vaultStatus = .error(Self.describe(error))
         }
@@ -111,17 +134,14 @@ final class AppState {
             let workspace = try await TockWorkspace.create(
                 path: path, password: Data(password.utf8)
             )
-            client = TockCoreClient(workspace: workspace)
-            sessionPassword = password
-            vaultStatus = .unlocked
-            didExplicitlyLock = false
-            didAttemptAutoUnlock = false
-            await WidgetSnapshotWriter.publish(from: client)
-            PhoneSessionManager.shared.setClient(client)
-            PhoneSessionManager.shared.pushSnapshot()
+            await finishUnlock(with: workspace, password: password)
         } catch {
             vaultStatus = .error(Self.describe(error))
         }
+    }
+
+    func adoptPairedWorkspace(_ workspace: TockWorkspace, password: String) async {
+        await finishUnlock(with: workspace, password: password)
     }
 
     func lock() {
@@ -129,6 +149,8 @@ final class AppState {
             Task { try? await live.lock() }
         }
         client = LockedCoreClient()
+        workspace = nil
+        syncClient = nil
         sessionPassword = nil
         vaultStatus = .locked
         selectedSidebarItem = .today
@@ -136,6 +158,10 @@ final class AppState {
         selectedTaskIds = []
         didExplicitlyLock = true
         didAttemptAutoUnlock = false
+        isSyncing = false
+        syncError = nil
+        lastSyncSummary = nil
+        syncConflicts = []
         WidgetSnapshotWriter.publishLocked()
         PhoneSessionManager.shared.setClient(nil)
         PhoneSessionManager.shared.pushSnapshot()
@@ -172,14 +198,7 @@ final class AppState {
             let workspace = try await TockWorkspace.open(
                 path: AppGroup.vaultPath(), password: Data(password.utf8)
             )
-            client = TockCoreClient(workspace: workspace)
-            sessionPassword = password
-            vaultStatus = .unlocked
-            didExplicitlyLock = false
-            didAttemptAutoUnlock = false
-            await WidgetSnapshotWriter.publish(from: client)
-            PhoneSessionManager.shared.setClient(client)
-            PhoneSessionManager.shared.pushSnapshot()
+            await finishUnlock(with: workspace, password: password)
         } catch let error as KeychainError {
             switch error {
             case .userCancelled:
@@ -219,5 +238,134 @@ final class AppState {
     func disableBiometrics() {
         KeychainService.deleteVaultKey()
         biometricEnabled = false
+    }
+
+    // MARK: - Sync settings / actions
+
+    var hasSyncConfiguration: Bool {
+        !syncServerURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    func refreshSyncState() async {
+        guard let workspace else { return }
+        do {
+            let info = try await workspace.syncDeviceInfo()
+            syncServerURL = info.serverUrl ?? ""
+            syncDeviceLabel = info.deviceLabel ?? ""
+            syncConflicts = try await workspace.listSyncConflicts()
+            syncError = nil
+        } catch {
+            syncError = Self.describe(error)
+        }
+
+        do {
+            syncAuthToken = try KeychainService.loadSyncAuthToken()
+        } catch KeychainError.itemNotFound {
+            syncAuthToken = ""
+        } catch {
+            syncError = error.localizedDescription
+        }
+    }
+
+    func saveSyncSettings() async {
+        guard let workspace else { return }
+        do {
+            try await workspace.setSyncServerURL(syncServerURL.trimmingCharacters(in: .whitespacesAndNewlines))
+            let trimmedLabel = syncDeviceLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmedLabel.isEmpty {
+                try await workspace.setSyncDeviceLabel(trimmedLabel)
+            }
+            let trimmedToken = syncAuthToken.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmedToken.isEmpty {
+                KeychainService.deleteSyncAuthToken()
+            } else {
+                try KeychainService.saveSyncAuthToken(trimmedToken)
+                syncAuthToken = trimmedToken
+            }
+            syncError = nil
+            await refreshSyncState()
+        } catch {
+            syncError = Self.describe(error)
+        }
+    }
+
+    func syncNow() async {
+        guard let syncClient else { return }
+        isSyncing = true
+        syncError = nil
+        defer { isSyncing = false }
+
+        do {
+            let result = try await syncClient.sync(authToken: currentSyncToken)
+            lastSyncAt = Date()
+            lastSyncSummary = "Pushed \(result.pushed), pulled \(result.pulled), conflicts \(result.conflicts)."
+            await refreshSyncState()
+            await WidgetSnapshotWriter.publish(from: client)
+            PhoneSessionManager.shared.pushSnapshot()
+        } catch {
+            syncError = Self.describe(error)
+        }
+    }
+
+    func resolveSyncConflict(id: String) async {
+        guard let workspace else { return }
+        do {
+            if try await workspace.resolveSyncConflict(id: id) {
+                await refreshSyncState()
+            }
+        } catch {
+            syncError = Self.describe(error)
+        }
+    }
+
+    func beginPairingInvite() async throws -> TockPairingInviteSession {
+        guard let workspace else { throw TockError.Locked }
+        return try await workspace.beginPairingInvite(
+            serverURL: syncServerURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+    }
+
+    func uploadOnboardingBlob(
+        session: TockPairingInviteSession,
+        responseCode: String
+    ) async throws {
+        let invite = try await session.invite()
+        let details = try PairingCodeCodec.decodeAcceptor(responseCode)
+        let blob = try await session.buildOnboardingBlob(
+            peerPubkeyHex: details.accepterPubkey,
+            peerFingerprintHex: details.accepterFingerprint,
+            targetDeviceIdHex: details.rendezvousDeviceId
+        )
+        try await SyncClient.putOnboardingBlob(
+            invite: invite,
+            targetDeviceID: details.rendezvousDeviceId,
+            blob: blob,
+            authToken: currentSyncToken
+        )
+    }
+
+    // MARK: - Internals
+
+    private var currentSyncToken: String? {
+        let trimmed = syncAuthToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private func finishUnlock(with workspace: TockWorkspace, password: String) async {
+        let liveClient = TockCoreClient(workspace: workspace)
+        self.workspace = workspace
+        self.syncClient = SyncClient(workspace: workspace)
+        client = liveClient
+        sessionPassword = password
+        vaultStatus = .unlocked
+        didExplicitlyLock = false
+        didAttemptAutoUnlock = false
+        await refreshSyncState()
+        await WidgetSnapshotWriter.publish(from: client)
+        PhoneSessionManager.shared.setClient(client)
+        PhoneSessionManager.shared.pushSnapshot()
+        if hasSyncConfiguration {
+            Task { await syncNow() }
+        }
     }
 }

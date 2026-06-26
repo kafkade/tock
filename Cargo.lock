@@ -3616,7 +3616,9 @@ dependencies = [
  "thiserror 2.0.18",
  "time",
  "tock-core",
+ "tock-crypto",
  "tock-storage",
+ "tock-sync",
  "uniffi",
  "uuid",
 ]

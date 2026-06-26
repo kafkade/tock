@@ -434,6 +434,7 @@ struct LockedWidgetView: View {
 
     var body: some View {
         switch family {
+        #if !os(macOS)
         case .accessoryInline:
             Text("🔒 Tap to unlock")
         case .accessoryCircular:
@@ -451,6 +452,7 @@ struct LockedWidgetView: View {
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
+        #endif
         default:
             VStack(spacing: 8) {
                 Image(systemName: "lock.fill")

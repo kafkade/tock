@@ -79,7 +79,7 @@ struct TaskDetailView: View {
             }
         }
         .navigationTitle("Task \(task.sid)")
-        .navigationBarTitleDisplayMode(.inline)
+        .platformInlineNavigationBarTitle()
     }
 
     private var statusIcon: String {
