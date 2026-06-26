@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Localization (i18n) framework for the CLI: user-facing strings are now translatable via [Fluent](https://projectfluent.org/) (`i18n-embed`). English (`en-US`) ships fully localized in `crates/tock-cli/i18n/`, with a `--lang`/`TOCK_LANG` override and automatic OS-locale detection (falls back to English). Adds `cargo xtask i18n-check` to validate catalog id parity (wired into CI), a translator guide ([`docs/TRANSLATING.md`](docs/TRANSLATING.md)), and a `tr!` macro with compile-time message-id checking for contributors
 - Markdown export with Tera templates: `tock export md` with three built-in templates (`--builtin task-list`, `habit-report`, `time-report`), custom template support (`--template <path>`), and optional task filtering (`--filter <expr>`)
 - Taskwarrior import: `tock import taskwarrior -f <file>` parses `task export` JSON with field mapping (status, priority, dates, annotations), project creation, dependency linking, recurrence conversion, and UDA registration
 - CSV import: `tock import csv -f <file>` with automatic column detection from headers and optional TOML mapping file (`--map config.toml`) for custom column assignments, date formats, and field overrides

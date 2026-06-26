@@ -67,6 +67,8 @@ jobs:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
       - uses: Swatinem/rust-cache@v2
       - run: cargo check --workspace --all-features
+      - name: Validate localization catalogs
+        run: cargo xtask i18n-check
 
   test:
     name: Test
