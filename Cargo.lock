@@ -3267,6 +3267,7 @@ dependencies = [
  "tock-export",
  "tock-import",
  "tock-parse",
+ "tock-server",
  "tock-storage",
  "tock-sync",
  "tokio",

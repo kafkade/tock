@@ -26,25 +26,12 @@
 //! - `GET /v1/accounts/:id` — account info (hosted mode only)
 //! - `GET /v1/accounts/:id/usage` — usage stats (hosted mode only)
 
-mod accounts;
-mod billing;
-mod db;
-mod error;
-mod metrics;
-mod quota;
-mod routes;
-mod state;
-
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::Arc;
 
-use axum::Router;
-use axum::routing::{get, post, put};
 use clap::Parser;
-use tower_http::trace::TraceLayer;
 
-use billing::ServerMode;
+use tock_server::ServerMode;
 
 /// tock-server — encrypted blob store for tock sync (AGPL-3.0-only).
 #[derive(Parser, Debug)]
@@ -96,52 +83,13 @@ fn main() {
         std::process::exit(1);
     }
 
-    let db_path = args.data_dir.join("tock-server.db");
-    let server_db = match db::ServerDb::open(&db_path) {
-        Ok(db) => db,
+    let app_state = match tock_server::open_app_state(&args.data_dir, mode) {
+        Ok(state) => state,
         Err(e) => {
             tracing::error!(error = %e, "failed to open database");
             std::process::exit(1);
         }
     };
-
-    let app_state = state::AppState {
-        db: Arc::new(server_db),
-        mode,
-        rate_limiter: Arc::new(quota::RateLimiter::new()),
-        metrics: Arc::new(metrics::Metrics::new()),
-    };
-
-    let mut app = Router::new()
-        .route("/health", get(routes::health))
-        .route("/metrics", get(metrics::metrics))
-        .route(
-            "/v1/vaults/{vault_id}/devices",
-            post(routes::register_device),
-        )
-        .route(
-            "/v1/vaults/{vault_id}/events/push",
-            post(routes::push_events),
-        )
-        .route(
-            "/v1/vaults/{vault_id}/events/pull",
-            get(routes::pull_events),
-        )
-        .route(
-            "/v1/vaults/{vault_id}/onboarding/{device_id}",
-            put(routes::put_onboarding_blob).get(routes::get_onboarding_blob),
-        );
-
-    // Hosted-mode-only routes.
-    if mode == ServerMode::Hosted {
-        app = app
-            .route("/v1/accounts", post(accounts::create_account))
-            .route("/v1/accounts/{account_id}", get(accounts::get_account))
-            .route("/v1/accounts/{account_id}/usage", get(accounts::get_usage));
-        tracing::info!("hosted mode: account management and billing routes enabled");
-    }
-
-    let app = app.layer(TraceLayer::new_for_http()).with_state(app_state);
 
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -160,7 +108,7 @@ fn main() {
             }
         };
         tracing::info!(addr = %args.bind, "listening");
-        if let Err(e) = axum::serve(listener, app).await {
+        if let Err(e) = tock_server::serve(listener, app_state).await {
             tracing::error!(error = %e, "server error");
         }
     });

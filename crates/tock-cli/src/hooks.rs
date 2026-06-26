@@ -69,7 +69,11 @@ pub fn hooks_dir() -> PathBuf {
 #[must_use]
 #[allow(clippy::cognitive_complexity)]
 pub fn run_hook(event: HookEvent, input_json: &str) -> Option<String> {
-    let script_path = hook_script_path(event)?;
+    // No hook installed for this event: pass the input through unchanged.
+    // `None` is reserved for an installed hook that *cancels* the operation.
+    let Some(script_path) = hook_script_path(event) else {
+        return Some(input_json.to_string());
+    };
 
     tracing::debug!(hook = event.script_name(), path = %script_path.display(), "running hook");
 

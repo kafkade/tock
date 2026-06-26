@@ -35,6 +35,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Allowed the `CDLA-Permissive-2.0` license in `deny.toml` for the Mozilla root-certificate data in `webpki-roots`, pulled in transitively by `reqwest` for the CLI's HTTP sync transport
 - Accessibility audit across iOS, macOS, watchOS, and CLI TUI: added VoiceOver labels for icon-only buttons, color-coded indicators, and stateful controls; decorative images hidden from assistive technology; task/time-block rows combined into single accessibility elements; disabled buttons include explanatory hints; theme files documented with WCAG AA contrast notes
 
+### Fixed
+
+- Lifecycle operations (`tock add`, `modify`, `done`, and other hooked commands) are no longer silently cancelled when no matching hook script is installed; cancellation is now reserved for an installed hook that explicitly exits non-zero
+
 ### Security
 
 - Hosted `tock-server` sync, device registration, and onboarding routes now require bearer-token authorization before a vault can be claimed or synchronized
