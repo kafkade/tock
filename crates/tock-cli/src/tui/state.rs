@@ -65,9 +65,7 @@ impl AppState {
             task_selected: 0,
             should_quit: false,
             show_help: false,
-            status_message: Some(String::from(
-                "Tab/←→: panes · j/k: move · Enter: select · d: done · x: delete · r: refresh · ?: help · q: quit",
-            )),
+            status_message: Some(crate::tr!("tui-status-hint")),
             project_names: HashMap::new(),
         };
         state.reload_sidebar(conn)?;
@@ -150,18 +148,18 @@ impl AppState {
             ActivePane::Sidebar => {
                 self.reload_tasks_with_selection(conn, None)?;
                 self.active_pane = ActivePane::TaskList;
-                self.status_message = Some(format!(
-                    "Loaded {} task(s) from {}",
-                    self.tasks.len(),
-                    self.current_sidebar_label()
+                self.status_message = Some(crate::tr!(
+                    "tui-loaded-tasks",
+                    count = self.tasks.len(),
+                    source = self.current_sidebar_label()
                 ));
             }
             ActivePane::TaskList => {
                 if let Some(task_sid) = self.selected_task().map(|task| task.sid) {
                     self.active_pane = ActivePane::Detail;
-                    self.status_message = Some(format!("Viewing task #{task_sid}"));
+                    self.status_message = Some(crate::tr!("tui-viewing-task", sid = task_sid));
                 } else {
-                    self.status_message = Some(String::from("No task selected"));
+                    self.status_message = Some(crate::tr!("tui-no-task-selected"));
                 }
             }
             ActivePane::Detail => {}
@@ -178,15 +176,16 @@ impl AppState {
         conn: &Connection,
     ) -> Result<(), Box<dyn Error>> {
         let Some(task) = self.selected_task().cloned() else {
-            self.status_message = Some(String::from("No task selected"));
+            self.status_message = Some(crate::tr!("tui-no-task-selected"));
             return Ok(());
         };
 
         let updated = tock_storage::repo::task_repo::set_status(conn, task.sid, TaskStatus::Done)?;
         self.reload_tasks_with_selection(conn, Some(updated.sid))?;
-        self.status_message = Some(format!(
-            "Completed task #{} — {}",
-            updated.sid, updated.title
+        self.status_message = Some(crate::tr!(
+            "tui-completed-task",
+            sid = updated.sid,
+            title = updated.title
         ));
         Ok(())
     }
@@ -197,13 +196,13 @@ impl AppState {
     /// Returns an error if the repository update fails.
     pub(crate) fn delete_selected_task(&mut self, conn: &Connection) -> Result<(), Box<dyn Error>> {
         let Some(task) = self.selected_task().cloned() else {
-            self.status_message = Some(String::from("No task selected"));
+            self.status_message = Some(crate::tr!("tui-no-task-selected"));
             return Ok(());
         };
 
         tock_storage::repo::task_repo::soft_delete(conn, task.sid)?;
         self.reload_tasks_with_selection(conn, Some(task.sid))?;
-        self.status_message = Some(format!("Deleted task #{}", task.sid));
+        self.status_message = Some(crate::tr!("tui-deleted-task", sid = task.sid));
         Ok(())
     }
 

@@ -47,6 +47,10 @@ ratatui = { workspace = true }
 tokio = { workspace = true }
 reqwest = { workspace = true }
 async-trait = { workspace = true }
+i18n-embed = { workspace = true }
+i18n-embed-fl = { workspace = true }
+rust-embed = { workspace = true }
+unic-langid = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
