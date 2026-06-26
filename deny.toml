@@ -26,6 +26,10 @@ ignore = [
     # paste crate is unmaintained but has no security vulnerabilities and
     # is a transitive dependency of ratatui/crossterm. No safe upgrade available.
     "RUSTSEC-2024-0436",
+    # proc-macro-error2 is unmaintained but has no security vulnerabilities. It
+    # is a build-time-only transitive dependency of i18n-embed-fl (the Fluent
+    # `fl!`/`tr!` macro). No safe upgrade available until i18n-embed-fl migrates.
+    "RUSTSEC-2026-0173",
 ]
 
 [licenses]
@@ -43,6 +47,10 @@ allow = [
     "Unicode-3.0",
     "MPL-2.0",
     "Zlib",
+    # CDLA-Permissive-2.0 covers the Mozilla root-certificate data in
+    # `webpki-roots`, pulled in transitively by `reqwest` (rustls TLS) for
+    # the CLI's HTTP sync transport. It is a permissive data license.
+    "CDLA-Permissive-2.0",
     # AGPL-3.0-only applies to tock-server itself. The license MUST be
     # the explicit SPDX identifier (cargo-deny ≥ 0.19 rejects the bare
     # `AGPL-3.0` form for GNU-family licenses).

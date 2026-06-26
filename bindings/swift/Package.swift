@@ -15,27 +15,28 @@ let package = Package(
         ),
     ],
     targets: [
-        // UniFFI-generated Swift bindings + C header.
+        // Pre-compiled Rust static library (libtock_uniffi.a) packaged as an
+        // XCFramework, exposing the C FFI module `tock_uniffiFFI` consumed by
+        // the generated Swift bindings. Built by `cargo xtask xcframework`
+        // (gitignored — regenerated on demand).
+        .binaryTarget(
+            name: "TockFFIBinary",
+            path: "TockFFI.xcframework"
+        ),
+
+        // UniFFI-generated Swift bindings. The single file
+        // `Sources/TockFFI/tock_uniffi.swift` is emitted by
+        // `cargo xtask xcframework` (gitignored). `Placeholder.swift` keeps
+        // the directory tracked before generation has run.
         //
-        // After building the Rust library, generate these files with:
+        // Regenerate with:
         //
-        //     cargo run -p tock-uniffi --features cli --bin uniffi-bindgen -- \
-        //         generate --library target/debug/libtock_uniffi.dylib \
-        //         --language swift \
-        //         --out-dir bindings/swift/Sources/TockFFI
+        //     cargo xtask xcframework
         //
-        // On macOS the library is `.dylib`, on Linux `.so`, on Windows `.dll`.
-        // The generated output includes:
-        //   - tock_uniffi.swift   (Swift types + FFI calls)
-        //   - tock_uniffiFFI.h    (C header)
-        //   - tock_uniffiFFI.modulemap
-        //
-        // Once an XCFramework is built (see docs), replace this source
-        // target with a binaryTarget pointing at the framework.
         .target(
             name: "TockFFI",
-            path: "Sources/TockFFI",
-            publicHeadersPath: "."
+            dependencies: ["TockFFIBinary"],
+            path: "Sources/TockFFI"
         ),
 
         // Idiomatic Swift wrapper: async/await, Sendable conformances,

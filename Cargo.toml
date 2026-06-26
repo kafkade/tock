@@ -65,7 +65,7 @@ thiserror = "2"
 uniffi = "0.31"
 
 # Domain & storage shared deps.
-uuid = { version = "1", features = ["v4", "v7", "serde"] }
+uuid = { version = "1", features = ["v4", "v5", "v7", "serde"] }
 time = { version = "0.3", default-features = false, features = ["std", "macros", "formatting", "parsing", "serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -75,6 +75,11 @@ rusqlite = { version = "0.40", features = ["bundled", "blob", "uuid", "time"] }
 axum = "0.8"
 tokio = { version = "1", features = ["full"] }
 tower-http = { version = "0.7", features = ["cors", "trace"] }
+
+# Async trait support for the sync Transport abstraction (no runtime,
+# WASM-safe) and the CLI's concrete HTTP transport (ADR-001).
+async-trait = "0.1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
 # Tracing / structured logging.
 tracing = "0.1"
@@ -90,9 +95,18 @@ tera = "1"
 ratatui = "0.30"
 toml = "1.1"
 
+# Localization / i18n (Fluent via i18n-embed). CLI-facing only.
+i18n-embed = { version = "0.16", features = ["fluent-system", "desktop-requester"] }
+i18n-embed-fl = "0.10"
+rust-embed = { version = "8", features = ["debug-embed"] }
+unic-langid = "0.9"
+
 # Test-only utilities.
 proptest = "1"
 tempfile = "3"
+
+# Fluent localization syntax parser (used by `xtask i18n-check`).
+fluent-syntax = "0.12"
 
 # Mandatory lint set per docs/architecture.md §4.1.1. Members opt in with
 # `[lints] workspace = true`. `tock-uniffi` overrides `unsafe_code` because
@@ -115,6 +129,15 @@ todo = "deny"
 lto = "thin"
 codegen-units = 1
 strip = "symbols"
+
+# Profile for the Apple FFI static libraries packaged into TockFFI.xcframework.
+# Inherits the optimised release settings but keeps symbols: stripping would
+# remove the `#[no_mangle]` UniFFI scaffolding functions, breaking linkage
+# from the generated Swift bindings. See xtask `xcframework` and issue #119.
+[profile.apple-ffi]
+inherits = "release"
+strip = false
+lto = false
 
 [profile.dev]
 # Faster incremental rebuilds during foundation work.

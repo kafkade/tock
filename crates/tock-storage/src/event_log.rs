@@ -175,6 +175,81 @@ impl<'a> EventLog<'a> {
         let max_u: u64 = max.unwrap_or(0).max(0).try_into().unwrap_or(0);
         Ok(max_u + 1)
     }
+
+    /// Highest lamport stored for the local device (0 if none). Used by
+    /// the sync layer to allocate a contiguous run of outgoing lamports.
+    pub(crate) fn local_lamport_high(&self) -> Result<u64, Error> {
+        Ok(self.next_local_lamport()? - 1)
+    }
+
+    /// AEAD-open the payload of an already-reconstructed signed event,
+    /// returning the zeroize-on-drop plaintext. Used when ingesting a
+    /// remote event whose signature has been verified.
+    ///
+    /// # Errors
+    /// [`Error::EventLogIntegrity`] if the payload fails authentication.
+    pub(crate) fn decrypt_payload(
+        &self,
+        signed: &SignedEvent,
+    ) -> Result<Zeroizing<Vec<u8>>, Error> {
+        let dk = KeyHierarchy::derive_domain_key(
+            self.vault.vault_key(),
+            signed.event.entity_kind.as_str(),
+        )?;
+        let ik = KeyHierarchy::derive_item_key(&dk, signed.event.entity_id.as_bytes())?;
+        let ik_key = AeadKey::from_secret(ik);
+        let nonce = AeadNonce::from_bytes(signed.event.payload_nonce);
+        aead::open(
+            &ik_key,
+            &nonce,
+            &signed.event.payload_aad,
+            &signed.event.payload_ct,
+        )
+        .map_err(|_| Error::EventLogIntegrity)
+    }
+}
+
+/// Insert a (foreign) signed event into the local log. Crate-internal
+/// hook for the sync ingest pipeline.
+///
+/// # Errors
+/// [`Error::Sqlite`] on persistence failure.
+pub(crate) fn insert_event(conn: &Connection, signed: &SignedEvent) -> Result<(), Error> {
+    insert_signed_event(conn, signed)
+}
+
+/// Whether an event id already exists in the local log.
+///
+/// # Errors
+/// [`Error::Sqlite`] on query failure.
+pub(crate) fn event_exists(conn: &Connection, id: Uuid) -> Result<bool, Error> {
+    let found: Option<i64> = conn
+        .query_row(
+            "SELECT 1 FROM events WHERE id = ?1",
+            params![id.as_bytes().to_vec()],
+            |r| r.get(0),
+        )
+        .optional()?;
+    Ok(found.is_some())
+}
+
+/// Load the metadata (not payload plaintext) of an event by id.
+///
+/// # Errors
+/// [`Error::Sqlite`] or [`Error::EventLogIntegrity`] on decode failure.
+pub(crate) fn load_event_meta(conn: &Connection, id: Uuid) -> Result<Option<Event>, Error> {
+    let mut stmt = conn.prepare(
+        "SELECT id, device_id, lamport, vector_clock, parent_event_id,
+                entity_kind, entity_id, op_tag, op_sub_tag,
+                payload_ct, payload_nonce, payload_aad,
+                signature, signer, created_at
+         FROM events WHERE id = ?1",
+    )?;
+    let mut rows = stmt.query(params![id.as_bytes().to_vec()])?;
+    match rows.next()? {
+        Some(row) => Ok(Some(row_to_signed_event(row)?.event)),
+        None => Ok(None),
+    }
 }
 
 /// Build the canonical event-payload AAD (architecture §5.3).
@@ -383,6 +458,9 @@ fn parse_kind(s: &str) -> Result<EntityKind, Error> {
         "focus_session" => EntityKind::FocusSession,
         "annotation" => EntityKind::Annotation,
         "device" => EntityKind::Device,
+        "tag" => EntityKind::Tag,
+        "tag_link" => EntityKind::TagLink,
+        "habit_skip" => EntityKind::HabitSkip,
         _ => return Err(Error::EventLogIntegrity),
     })
 }

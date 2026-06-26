@@ -39,7 +39,7 @@ fn draw_sidebar(frame: &mut Frame, state: &AppState, area: Rect) {
     let list = List::new(items)
         .block(
             Block::default()
-                .title(" Views / Projects ")
+                .title(format!(" {} ", crate::tr!("tui-sidebar-title")))
                 .borders(Borders::ALL)
                 .border_style(pane_border_style(matches!(
                     state.active_pane,
@@ -115,59 +115,109 @@ fn draw_task_list(frame: &mut Frame, state: &AppState, area: Rect) {
     frame.render_stateful_widget(list, area, &mut list_state);
 }
 
+#[allow(clippy::too_many_lines)]
 fn draw_detail(frame: &mut Frame, state: &AppState, area: Rect) {
     let content = if state.show_help {
+        let key_width = 18;
         [
-            "Keyboard Shortcuts",
-            "",
-            "Navigation:",
-            "  Tab / Shift+Tab    Switch panes",
-            "  ← / →              Switch panes",
-            "  1 / 2 / 3          Jump to pane",
-            "  j / ↓              Move down",
-            "  k / ↑              Move up",
-            "  g                  Go to top",
-            "  G                  Go to bottom",
-            "  Enter              Select / expand",
-            "",
-            "Actions:",
-            "  d                  Mark task done",
-            "  x                  Delete task",
-            "  r                  Refresh",
-            "",
-            "General:",
-            "  ?                  Toggle this help",
-            "  q / Esc            Quit",
-            "  Ctrl+C             Quit",
+            crate::tr!("tui-help-title"),
+            String::new(),
+            format!("{}:", crate::tr!("tui-help-section-navigation")),
+            format!(
+                "  {:<key_width$} {}",
+                "Tab / Shift+Tab",
+                crate::tr!("tui-help-switch-panes")
+            ),
+            format!(
+                "  {:<key_width$} {}",
+                "← / →",
+                crate::tr!("tui-help-switch-panes")
+            ),
+            format!(
+                "  {:<key_width$} {}",
+                "1 / 2 / 3",
+                crate::tr!("tui-help-jump-pane")
+            ),
+            format!(
+                "  {:<key_width$} {}",
+                "j / ↓",
+                crate::tr!("tui-help-move-down")
+            ),
+            format!(
+                "  {:<key_width$} {}",
+                "k / ↑",
+                crate::tr!("tui-help-move-up")
+            ),
+            format!("  {:<key_width$} {}", "g", crate::tr!("tui-help-go-top")),
+            format!("  {:<key_width$} {}", "G", crate::tr!("tui-help-go-bottom")),
+            format!(
+                "  {:<key_width$} {}",
+                "Enter",
+                crate::tr!("tui-help-select-expand")
+            ),
+            String::new(),
+            format!("{}:", crate::tr!("tui-help-section-actions")),
+            format!("  {:<key_width$} {}", "d", crate::tr!("tui-help-mark-done")),
+            format!(
+                "  {:<key_width$} {}",
+                "x",
+                crate::tr!("tui-help-delete-task")
+            ),
+            format!("  {:<key_width$} {}", "r", crate::tr!("tui-help-refresh")),
+            String::new(),
+            format!("{}:", crate::tr!("tui-help-section-general")),
+            format!(
+                "  {:<key_width$} {}",
+                "?",
+                crate::tr!("tui-help-toggle-help")
+            ),
+            format!(
+                "  {:<key_width$} {}",
+                "q / Esc",
+                crate::tr!("tui-help-quit")
+            ),
+            format!("  {:<key_width$} {}", "Ctrl+C", crate::tr!("tui-help-quit")),
         ]
         .join("\n")
     } else if let Some(task) = state.selected_task().cloned() {
         let mut lines = vec![
             format!("#{} {}", task.sid, task.title),
             String::new(),
-            format!("Status: {}", task.status.as_str()),
-            format!("Urgency: {:.2}", task.urgency),
+            format!(
+                "{}: {}",
+                crate::tr!("tui-detail-status"),
+                task.status.as_str()
+            ),
+            format!("{}: {:.2}", crate::tr!("tui-detail-urgency"), task.urgency),
         ];
         if let Some(project_id) = task.project_id.as_ref()
             && let Some(project_name) = state.project_name(project_id)
         {
-            lines.push(format!("Project: {project_name}"));
+            lines.push(format!(
+                "{}: {project_name}",
+                crate::tr!("tui-detail-project")
+            ));
         }
         if let Some(priority) = task.priority {
-            lines.push(format!("Priority: {}", priority.as_char()));
+            lines.push(format!(
+                "{}: {}",
+                crate::tr!("tui-detail-priority"),
+                priority.as_char()
+            ));
         }
         if let Some(start_date) = &task.start_date {
-            lines.push(format!("Start: {start_date}"));
+            lines.push(format!("{}: {start_date}", crate::tr!("tui-detail-start")));
         }
         if let Some(deadline) = &task.deadline {
-            lines.push(format!("Deadline: {deadline}"));
+            lines.push(format!("{}: {deadline}", crate::tr!("tui-detail-deadline")));
         }
         if task.evening {
-            lines.push(String::from("Evening: yes"));
+            lines.push(crate::tr!("tui-detail-evening"));
         }
         if !task.tags.is_empty() {
             lines.push(format!(
-                "Tags: {}",
+                "{}: {}",
+                crate::tr!("tui-detail-tags"),
                 task.tags
                     .iter()
                     .map(|tag| format!("#{tag}"))
@@ -177,22 +227,23 @@ fn draw_detail(frame: &mut Frame, state: &AppState, area: Rect) {
         }
         if let Some(notes) = &task.notes {
             lines.push(String::new());
-            lines.push(String::from("Notes:"));
+            lines.push(format!("{}:", crate::tr!("tui-detail-notes")));
             lines.push(notes.clone());
         }
         lines.join("\n")
     } else {
-        String::from("No task selected")
+        crate::tr!("tui-no-task-selected")
     };
 
+    let title = if state.show_help {
+        format!(" {} ", crate::tr!("tui-pane-help"))
+    } else {
+        format!(" {} ", crate::tr!("tui-pane-detail"))
+    };
     let paragraph = Paragraph::new(content)
         .block(
             Block::default()
-                .title(if state.show_help {
-                    " Help "
-                } else {
-                    " Detail "
-                })
+                .title(title)
                 .borders(Borders::ALL)
                 .border_style(pane_border_style(matches!(
                     state.active_pane,
@@ -204,10 +255,11 @@ fn draw_detail(frame: &mut Frame, state: &AppState, area: Rect) {
 }
 
 fn draw_status(frame: &mut Frame, state: &AppState, area: Rect) {
-    let message = state.status_message.as_deref().unwrap_or(
-        "Tab/←→: panes · j/k: move · Enter: select · d: done · x: delete · r: refresh · ?: help · q: quit",
-    );
-    let status = Paragraph::new(message).style(Style::default().fg(Color::Yellow));
+    let hint = state
+        .status_message
+        .clone()
+        .unwrap_or_else(|| crate::tr!("tui-status-hint"));
+    let status = Paragraph::new(hint).style(Style::default().fg(Color::Yellow));
     frame.render_widget(status, area);
 }
 

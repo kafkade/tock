@@ -132,6 +132,12 @@ pub enum EntityKind {
     Annotation,
     /// A device registration record.
     Device,
+    /// A tag definition.
+    Tag,
+    /// A tag-to-entity association (join row).
+    TagLink,
+    /// A habit skip/freeze record.
+    HabitSkip,
 }
 
 impl EntityKind {
@@ -149,6 +155,9 @@ impl EntityKind {
             Self::FocusSession => "focus_session",
             Self::Annotation => "annotation",
             Self::Device => "device",
+            Self::Tag => "tag",
+            Self::TagLink => "tag_link",
+            Self::HabitSkip => "habit_skip",
         }
     }
 }

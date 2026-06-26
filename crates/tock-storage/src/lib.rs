@@ -14,6 +14,7 @@ pub mod error;
 pub mod event_log;
 pub mod migrations;
 pub mod repo;
+pub mod sync;
 pub mod vault;
 
 pub use error::Error;

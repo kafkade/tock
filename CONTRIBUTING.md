@@ -63,6 +63,9 @@ cargo clippy --workspace --all-targets -- -D warnings
 # License + advisory audit (matches CI's `deny` job)
 cargo deny check
 
+# Localization catalogs (id parity + Fluent parse)
+cargo xtask i18n-check
+
 # Run the full test suite
 cargo test --workspace
 
@@ -135,6 +138,15 @@ domains — never introduce domain-specific silos.
 - Use `thiserror` for library errors in core crates.
 - Use `anyhow` only in binary crates (`tock-cli`, `tock-server`).
 - Crypto failures must never expose key material in error messages.
+
+### Localization
+
+User-facing CLI strings are localized with Fluent. Emit them with the `tr!`
+macro and add the message to `crates/tock-cli/i18n/en-US/tock-cli.ftl` (the
+`fl!` macro checks message ids at compile time). Keep `--format json` output and
+`tracing` logs in English. See [`docs/TRANSLATING.md`](docs/TRANSLATING.md) for
+the full guide and how to add a new language. Run `cargo xtask i18n-check` to
+validate catalogs.
 
 ## Developer Certificate of Origin (DCO)
 
