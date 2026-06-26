@@ -43,6 +43,10 @@ allow = [
     "Unicode-3.0",
     "MPL-2.0",
     "Zlib",
+    # CDLA-Permissive-2.0 covers the Mozilla root-certificate data in
+    # `webpki-roots`, pulled in transitively by `reqwest` (rustls TLS) for
+    # the CLI's HTTP sync transport. It is a permissive data license.
+    "CDLA-Permissive-2.0",
     # AGPL-3.0-only applies to tock-server itself. The license MUST be
     # the explicit SPDX identifier (cargo-deny ≥ 0.19 rejects the bare
     # `AGPL-3.0` form for GNU-family licenses).

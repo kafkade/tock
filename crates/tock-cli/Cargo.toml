@@ -25,6 +25,7 @@ workspace = true
 
 [dependencies]
 tock-core = { workspace = true }
+tock-crypto = { workspace = true }
 tock-storage = { workspace = true }
 tock-parse = { workspace = true }
 tock-sync = { workspace = true }
@@ -43,6 +44,9 @@ serde_json = { workspace = true }
 serde = { workspace = true }
 crossterm = { workspace = true }
 ratatui = { workspace = true }
+tokio = { workspace = true }
+reqwest = { workspace = true }
+async-trait = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

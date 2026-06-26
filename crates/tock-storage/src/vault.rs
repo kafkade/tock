@@ -220,7 +220,31 @@ pub fn open(path: &Path, password: &[u8]) -> Result<OpenVault, Error> {
 /// - [`Error::Io`] if `path` already exists.
 /// - [`Error::Sqlite`] / [`Error::Crypto`] on the usual failure modes.
 pub fn init(path: &Path, password: &[u8]) -> Result<OpenVault, Error> {
-    let _span = tracing::info_span!("vault::init", path = %path.display()).entered();
+    let vk = generate_vault_key().map_err(map_core_err)?;
+    init_with_key(path, password, Uuid::now_v7(), vk, Some("local"))
+}
+
+/// Initialize a fresh vault at `path` (must not exist) that adopts an
+/// **existing** vault id and Vault Key.
+///
+/// This is the storage primitive behind device onboarding: a new device
+/// recovers the Vault Key over the pairing channel, then materializes a
+/// local vault file that decrypts the same event payloads and syncs
+/// against the same server bucket (which is keyed by `vault_id`). The
+/// new device gets its own random `device_id` and Ed25519 signing key,
+/// and its own password-derived key wrapping of the shared VK.
+///
+/// # Errors
+/// - [`Error::Io`] if `path` already exists.
+/// - [`Error::Sqlite`] / [`Error::Crypto`] on the usual failure modes.
+pub fn init_with_key(
+    path: &Path,
+    password: &[u8],
+    vault_id: Uuid,
+    vk: VaultKey,
+    label: Option<&str>,
+) -> Result<OpenVault, Error> {
+    let _span = tracing::info_span!("vault::init_with_key", path = %path.display()).entered();
     if path.exists() {
         return Err(Error::Io(std::io::Error::new(
             std::io::ErrorKind::AlreadyExists,
@@ -231,7 +255,7 @@ pub fn init(path: &Path, password: &[u8]) -> Result<OpenVault, Error> {
     migrations::migrate(&mut conn)?;
     tracing::debug!("migrations applied");
 
-    // Build header with random salts, generate VK, wrap it.
+    // Build header with random salts, wrap the supplied VK.
     let mut kdf_salt = [0_u8; 16];
     let mut hkdf_salt = [0_u8; 32];
     tock_crypto::random::fill_random(&mut kdf_salt)?;
@@ -240,7 +264,7 @@ pub fn init(path: &Path, password: &[u8]) -> Result<OpenVault, Error> {
         magic: MAGIC,
         format_version: FORMAT_VERSION,
         min_compatible_version: MIN_COMPAT_VERSION,
-        vault_id: Uuid::now_v7(),
+        vault_id,
         kdf_salt,
         hkdf_salt,
         argon2: VAULT_INIT_ARGON2,
@@ -252,7 +276,6 @@ pub fn init(path: &Path, password: &[u8]) -> Result<OpenVault, Error> {
 
     let mk = KeyHierarchy::derive_master_key(password, &header_skel).map_err(map_core_err)?;
     let mek = KeyHierarchy::derive_mek(&mk, &header_skel).map_err(map_core_err)?;
-    let vk = generate_vault_key().map_err(map_core_err)?;
     let (nonce, ct) = KeyHierarchy::wrap_vk(&mek, &vk, &header_skel).map_err(map_core_err)?;
 
     let header = VaultHeader {
@@ -268,7 +291,7 @@ pub fn init(path: &Path, password: &[u8]) -> Result<OpenVault, Error> {
     let signing_key = SigningKey::try_generate().map_err(map_crypto_err)?;
     let verifying = signing_key.verifying_key();
     save_local_device(&conn, &vk, &device_id, &signing_key)?;
-    register_device(&conn, &device_id, &verifying, Some("local"))?;
+    register_device(&conn, &device_id, &verifying, label)?;
     tracing::info!(vault_id = %header.vault_id, "vault initialized");
 
     Ok(OpenVault {

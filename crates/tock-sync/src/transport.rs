@@ -1,45 +1,48 @@
 //! Sync transport types and trait.
 //!
-//! Defines the [`Transport`] trait (architecture §6.6) and the
+//! Defines the async [`Transport`] trait (architecture §6.6) and the
 //! associated data types: [`SyncCursor`], [`PushAck`], [`PullBatch`],
 //! [`SnapshotId`], [`EncryptedSnapshot`], and [`OnboardingBlob`].
 //!
-//! The trait is currently **synchronous** because the workspace has no
-//! async runtime. When transport implementations land (HTTP, WebSocket,
-//! LAN, file sync), this will evolve to `async_trait` — consumers
-//! should design for that.
-//!
-//! Implementations live outside `tock-sync` (in platform-specific
-//! crates) and are injected via the trait.
+//! The trait is `async` (via [`async_trait`]). `tock-sync` itself adds
+//! **no async runtime** — `async-trait` only desugars `async fn` in
+//! traits and is WASM-safe. Concrete transports (HTTP, WebSocket, LAN,
+//! file sync) live outside `tock-sync` in platform crates and bring
+//! their own runtime; per ADR-001 the CLI's HTTP transport lives in
+//! `tock-cli`, the only Rust crate allowed to do network I/O.
 
+use async_trait::async_trait;
 use time::OffsetDateTime;
-use tock_core::event::{DeviceId, SignedEvent, VectorClock};
+use tock_core::event::{DeviceId, SignedEvent};
 use tock_crypto::keyexchange::PublicKey;
 use uuid::Uuid;
 
 use crate::Error;
 
-/// Opaque cursor for delta-sync: tracks the last-seen vector clock so
-/// the server can return only events after that point.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// Opaque, monotonic server cursor for delta-sync.
+///
+/// The server assigns each stored event a monotonically increasing
+/// position (insertion order). A pull returns every event with a
+/// position greater than the cursor, which guarantees completeness even
+/// when devices push out of Lamport order (e.g. an offline device whose
+/// per-device Lamport lags behind the rest of the vault).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SyncCursor {
-    /// Vector clock snapshot at the time of the last successful pull.
-    pub vector_clock: VectorClock,
+    /// Highest server position consumed so far.
+    pub position: u64,
 }
 
 impl SyncCursor {
-    /// Construct from a vector clock.
+    /// Cursor for a fresh start (pull everything).
     #[must_use]
-    pub const fn new(vector_clock: VectorClock) -> Self {
-        Self { vector_clock }
+    pub const fn start() -> Self {
+        Self { position: 0 }
     }
 
-    /// Empty cursor (fresh start).
+    /// Cursor at a specific server position.
     #[must_use]
-    pub const fn empty() -> Self {
-        Self {
-            vector_clock: VectorClock::new(),
-        }
+    pub const fn at(position: u64) -> Self {
+        Self { position }
     }
 }
 
@@ -57,7 +60,7 @@ pub struct PushAck {
 /// A batch of events returned by a pull.
 #[derive(Clone, Debug)]
 pub struct PullBatch {
-    /// Events in this batch, in causal order.
+    /// Events in this batch, in server-assigned order.
     pub events: Vec<SignedEvent>,
     /// Cursor for the next pull (start from here).
     pub next_cursor: SyncCursor,
@@ -101,37 +104,95 @@ pub struct OnboardingBlob {
     pub created_at: OffsetDateTime,
 }
 
+impl OnboardingBlob {
+    /// Serialize to a self-describing byte frame for transport.
+    ///
+    /// Layout: `target_device[16] | nonce[12] | ephemeral_pubkey[32] |
+    /// created_at_unix[i64 BE, 8] | vk_len[u32 BE, 4] | encrypted_vk`.
+    #[must_use]
+    pub fn encode(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(16 + 12 + 32 + 8 + 4 + self.encrypted_vk.len());
+        out.extend_from_slice(self.target_device.as_bytes());
+        out.extend_from_slice(&self.nonce);
+        out.extend_from_slice(self.ephemeral_pubkey.as_bytes());
+        out.extend_from_slice(&self.created_at.unix_timestamp().to_be_bytes());
+        let len = u32::try_from(self.encrypted_vk.len()).unwrap_or(u32::MAX);
+        out.extend_from_slice(&len.to_be_bytes());
+        out.extend_from_slice(&self.encrypted_vk);
+        out
+    }
+
+    /// Parse a frame produced by [`OnboardingBlob::encode`].
+    ///
+    /// # Errors
+    /// [`Error::WireFormat`] if the frame is truncated or malformed.
+    pub fn decode(bytes: &[u8]) -> Result<Self, Error> {
+        const HEADER: usize = 16 + 12 + 32 + 8 + 4;
+        if bytes.len() < HEADER {
+            return Err(Error::WireFormat("onboarding blob too short"));
+        }
+        let mut target = [0_u8; 16];
+        target.copy_from_slice(&bytes[0..16]);
+        let mut nonce = [0_u8; 12];
+        nonce.copy_from_slice(&bytes[16..28]);
+        let mut pk = [0_u8; 32];
+        pk.copy_from_slice(&bytes[28..60]);
+        let mut ts = [0_u8; 8];
+        ts.copy_from_slice(&bytes[60..68]);
+        let mut len_b = [0_u8; 4];
+        len_b.copy_from_slice(&bytes[68..72]);
+        let vk_len = u32::from_be_bytes(len_b) as usize;
+        if bytes.len() - HEADER != vk_len {
+            return Err(Error::WireFormat("onboarding blob length mismatch"));
+        }
+        let encrypted_vk = bytes[HEADER..].to_vec();
+        let created_at = OffsetDateTime::from_unix_timestamp(i64::from_be_bytes(ts))
+            .map_err(|_| Error::WireFormat("onboarding blob bad timestamp"))?;
+        Ok(Self {
+            target_device: DeviceId::from_bytes(target),
+            encrypted_vk,
+            nonce,
+            ephemeral_pubkey: PublicKey::from_bytes(pk),
+            created_at,
+        })
+    }
+}
+
 /// Sync transport abstraction.
 ///
 /// Implementations handle the actual network/file I/O: HTTP + REST,
 /// WebSocket, LAN (mDNS), or file-based (Syncthing / iCloud Drive).
-///
-/// Currently synchronous; will evolve to `async_trait` when the first
-/// transport implementation lands.
+#[async_trait]
 pub trait Transport: Send + Sync {
+    /// Register this device's verifying key with the server so peers
+    /// can later look it up (idempotent).
+    ///
+    /// # Errors
+    /// Implementation-specific I/O or protocol errors.
+    async fn register_device(
+        &self,
+        device_id: DeviceId,
+        verifying_key: &[u8; 32],
+        label: Option<&str>,
+    ) -> Result<(), Error>;
+
     /// Push a batch of signed events to the server.
     ///
     /// # Errors
     /// Implementation-specific I/O or protocol errors.
-    fn push(&self, events: &[SignedEvent]) -> Result<PushAck, Error>;
+    async fn push(&self, events: &[SignedEvent]) -> Result<PushAck, Error>;
 
     /// Pull events after `cursor`, returning at most `limit` events.
     ///
     /// # Errors
     /// Implementation-specific I/O or protocol errors.
-    fn pull(&self, cursor: &SyncCursor, limit: usize) -> Result<PullBatch, Error>;
-
-    /// Fetch a snapshot by id for cold onboarding.
-    ///
-    /// # Errors
-    /// Implementation-specific I/O or protocol errors.
-    fn fetch_snapshot(&self, id: SnapshotId) -> Result<EncryptedSnapshot, Error>;
+    async fn pull(&self, cursor: SyncCursor, limit: usize) -> Result<PullBatch, Error>;
 
     /// Store an onboarding blob for a target device.
     ///
     /// # Errors
     /// Implementation-specific I/O or protocol errors.
-    fn put_onboarding_blob(
+    async fn put_onboarding_blob(
         &self,
         target_device: DeviceId,
         blob: OnboardingBlob,
@@ -143,5 +204,5 @@ pub trait Transport: Send + Sync {
     ///
     /// # Errors
     /// Implementation-specific I/O or protocol errors.
-    fn get_onboarding_blob(&self, device: DeviceId) -> Result<Option<OnboardingBlob>, Error>;
+    async fn get_onboarding_blob(&self, device: DeviceId) -> Result<Option<OnboardingBlob>, Error>;
 }

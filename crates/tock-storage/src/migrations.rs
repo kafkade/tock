@@ -77,6 +77,16 @@ pub const ALL: &[Migration] = &[
         name: "caldav_links",
         sql: include_str!("migrations/0010_caldav_links.sql"),
     },
+    Migration {
+        version: 11,
+        name: "sync_state",
+        sql: include_str!("migrations/0011_sync_state.sql"),
+    },
+    Migration {
+        version: 12,
+        name: "device_revocation",
+        sql: include_str!("migrations/0012_device_revocation.sql"),
+    },
 ];
 
 /// Compute the sha-256 hex digest of `sql`.

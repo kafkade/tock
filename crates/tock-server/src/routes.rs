@@ -132,9 +132,10 @@ pub async fn push_events(
 /// Query parameters for pull.
 #[derive(Deserialize)]
 pub struct PullQuery {
-    /// Return events with lamport > this value. Defaults to 0.
+    /// Return events after this opaque cursor position (server rowid).
+    /// Defaults to 0 (from the beginning).
     #[serde(default)]
-    pub after_lamport: i64,
+    pub after: i64,
     /// Maximum events to return. Defaults to 256.
     #[serde(default = "default_limit")]
     pub limit: usize,
@@ -164,6 +165,9 @@ pub struct PullEventItem {
 pub struct PullResponse {
     /// Events in this batch.
     pub events: Vec<PullEventItem>,
+    /// Opaque cursor to pass as `after` on the next pull to resume after
+    /// the last event in this batch.
+    pub cursor: i64,
     /// Whether there are more events.
     pub more: bool,
 }
@@ -180,21 +184,26 @@ pub async fn pull_events(
     let db = state.db.clone();
     let result = tokio::task::spawn_blocking(move || {
         // Request limit+1 to detect "more".
-        let events = db.pull_events(&vault_bytes, query.after_lamport, limit + 1)?;
+        let events = db.pull_events(&vault_bytes, query.after, limit + 1)?;
         let more = events.len() > limit;
+        let mut cursor = query.after;
         let items: Vec<PullEventItem> = events
             .into_iter()
             .take(limit)
-            .map(|e| PullEventItem {
-                event_id: hex_encode(&e.id),
-                device_id: hex_encode(&e.device_id),
-                lamport: e.lamport,
-                payload: base64_encode(&e.payload),
-                created_at: e.created_at,
+            .map(|e| {
+                cursor = e.rowid;
+                PullEventItem {
+                    event_id: hex_encode(&e.id),
+                    device_id: hex_encode(&e.device_id),
+                    lamport: e.lamport,
+                    payload: base64_encode(&e.payload),
+                    created_at: e.created_at,
+                }
             })
             .collect();
         Ok::<_, Error>(PullResponse {
             events: items,
+            cursor,
             more,
         })
     })

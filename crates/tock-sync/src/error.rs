@@ -41,4 +41,8 @@ pub enum Error {
     /// Error from `tock-core`.
     #[error("core: {0}")]
     Core(#[from] tock_core::Error),
+
+    /// A transport (network / protocol) operation failed.
+    #[error("transport: {0}")]
+    Transport(String),
 }

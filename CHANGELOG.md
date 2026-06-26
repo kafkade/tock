@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Multi-device sync over HTTP: `tock sync` pushes local changes and pulls remote ones against a self-hosted `tock-server`, runs the conflict-resolution engine, and prints a `pushed N, pulled M, conflicts K` summary. `--server <url>` configures and persists the server on first use; `--dry-run` reports pending local changes without contacting the server
+- Sync conflict review: `tock sync conflicts` lists unresolved concurrent-edit conflicts and `tock sync resolve <id>` acknowledges one — no silent last-write-wins for productivity data (ADR-003)
+- Device pairing: `tock onboard invite` (existing device) and `tock onboard accept` (new device) transfer the vault key over an end-to-end-encrypted X25519 channel with an out-of-band fingerprint check, then create and back-fill a local vault for the new device
+- Device management: `tock device ls` lists registered devices with status and `tock device revoke <id>` revokes one; the revocation propagates to peers on the next sync
+- `HttpTransport` (in `tock-cli`, per ADR-001): a concrete `tock_sync::Transport` implementation over the server's `push`/`pull`/`devices`/`onboarding` REST endpoints; the server only ever stores ciphertext
+- Event-sourcing sync substrate (`tock-storage::sync`): synthesizes signed, AEAD-encrypted events by diffing domain state against a journal at sync time, covering tasks, projects, areas, headings, tags, time blocks, focus sessions, habits, and devices through one code path
 - Markdown export with Tera templates: `tock export md` with three built-in templates (`--builtin task-list`, `habit-report`, `time-report`), custom template support (`--template <path>`), and optional task filtering (`--filter <expr>`)
 - Taskwarrior import: `tock import taskwarrior -f <file>` parses `task export` JSON with field mapping (status, priority, dates, annotations), project creation, dependency linking, recurrence conversion, and UDA registration
 - CSV import: `tock import csv -f <file>` with automatic column detection from headers and optional TOML mapping file (`--map config.toml`) for custom column assignments, date formats, and field overrides
@@ -20,6 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `tock_sync::Transport` is now an `async` trait (`async-trait`), enabling real network transports; the CLI drives it via a Tokio runtime for sync commands. `tock-sync` itself stays runtime-free and WASM-safe
+- Sync server pull cursor is now a monotonic server-assigned position (row order) instead of a per-device Lamport value, so an offline device whose Lamport lags can no longer miss events on pull
+- Allowed the `CDLA-Permissive-2.0` license in `deny.toml` for the Mozilla root-certificate data in `webpki-roots`, pulled in transitively by `reqwest` for the CLI's HTTP sync transport
 - Accessibility audit across iOS, macOS, watchOS, and CLI TUI: added VoiceOver labels for icon-only buttons, color-coded indicators, and stateful controls; decorative images hidden from assistive technology; task/time-block rows combined into single accessibility elements; disabled buttons include explanatory hints; theme files documented with WCAG AA contrast notes
 
 ## [0.3.0] - 2026-05-30

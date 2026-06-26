@@ -6,6 +6,7 @@
 mod commands;
 mod display;
 mod hooks;
+mod http_transport;
 mod notify;
 mod tracing_setup;
 mod tui;
@@ -83,6 +84,7 @@ fn main() {
 }
 
 fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
+    #![allow(clippy::too_many_lines)]
     match &cli.command {
         Commands::Completions { shell } => {
             let mut cmd = Cli::command();
@@ -92,6 +94,9 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         Commands::Hooks(args) => {
             run_hooks_cmd(&args.command);
             return Ok(());
+        }
+        Commands::Onboard(args) => {
+            return run_onboard_cmd(cli, &args.cmd);
         }
         _ => {}
     }
@@ -110,6 +115,14 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         && run_transactional_import(&mut vault, format, file, map.as_deref())?
     {
         return Ok(());
+    }
+
+    // Sync and device commands need the whole `OpenVault`, not just the
+    // connection, so handle them before the connection borrow below.
+    match &cli.command {
+        Commands::Sync(args) => return commands::sync_cmd::run_sync(&vault, args),
+        Commands::Device(args) => return commands::sync_cmd::run_device(&vault, &args.cmd),
+        _ => {}
     }
 
     let conn = vault.connection();
@@ -178,6 +191,44 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         }
         Commands::Completions { .. } => unreachable!("completions handled before vault open"),
         Commands::Hooks(_) => unreachable!("hooks handled before vault open"),
+        Commands::Onboard(_) => unreachable!("onboard handled before vault open"),
+        Commands::Sync(_) | Commands::Device(_) => {
+            unreachable!("sync/device handled before connection borrow")
+        }
+    }
+}
+
+/// Handle `tock onboard` subcommands. Invite opens the existing vault;
+/// Accept creates a fresh vault, so this runs before the normal
+/// open-or-init path in [`run`].
+fn run_onboard_cmd(
+    cli: &Cli,
+    cmd: &commands::sync_cmd::OnboardCmd,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use commands::sync_cmd::OnboardCmd;
+
+    let password = cli.password.as_deref().map_or(b"" as &[u8], str::as_bytes);
+    match cmd {
+        OnboardCmd::Invite { server } => {
+            if !cli.vault.exists() {
+                return Err("vault does not exist; nothing to invite from".into());
+            }
+            let vault = tock_storage::open(&cli.vault, password)?;
+            commands::sync_cmd::run_onboard_invite(&vault, server.as_deref())
+        }
+        OnboardCmd::Accept {
+            server,
+            vault_id,
+            inviter_pubkey,
+            inviter_fingerprint,
+        } => commands::sync_cmd::run_onboard_accept(
+            &cli.vault,
+            password,
+            server,
+            vault_id,
+            inviter_pubkey,
+            inviter_fingerprint,
+        ),
     }
 }
 
@@ -2760,5 +2811,35 @@ impl tock_parse::filter::Filterable for TaskFilterable<'_> {
 
     fn uda_value(&self, key: &str) -> Option<String> {
         self.task.udas.get_str(key)
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used)]
+mod cli_tests {
+    use super::Cli;
+    use clap::CommandFactory as _;
+
+    /// Validate the full clap command tree, including the new `sync`,
+    /// `onboard`, and `device` subcommands and their arguments.
+    #[test]
+    fn command_tree_is_valid() {
+        Cli::command().debug_assert();
+    }
+
+    /// The sync command group must expose the documented subcommands.
+    #[test]
+    fn sync_subcommands_parse() {
+        let cmd = Cli::command();
+        let sync = cmd
+            .get_subcommands()
+            .find(|c| c.get_name() == "sync")
+            .expect("sync subcommand present");
+        let names: Vec<&str> = sync
+            .get_subcommands()
+            .map(clap::Command::get_name)
+            .collect();
+        assert!(names.contains(&"conflicts"), "sync conflicts present");
+        assert!(names.contains(&"resolve"), "sync resolve present");
     }
 }
