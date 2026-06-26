@@ -29,6 +29,11 @@ updates:
       - "ci"
       - "dependencies"
     open-pull-requests-limit: 5
+    ignore:
+      # The dtolnay/rust-toolchain "version" is the project's MSRV pin in the
+      # MSRV CI job, not a real action release. Dependabot must not bump it or
+      # the MSRV check would test the wrong toolchain.
+      - dependency-name: "dtolnay/rust-toolchain"
     groups:
       github-actions:
         patterns:
