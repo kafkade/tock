@@ -90,9 +90,18 @@ tera = "1"
 ratatui = "0.30"
 toml = "1.1"
 
+# Localization / i18n (Fluent via i18n-embed). CLI-facing only.
+i18n-embed = { version = "0.16", features = ["fluent-system", "desktop-requester"] }
+i18n-embed-fl = "0.10"
+rust-embed = { version = "8", features = ["debug-embed"] }
+unic-langid = "0.9"
+
 # Test-only utilities.
 proptest = "1"
 tempfile = "3"
+
+# Fluent localization syntax parser (used by `xtask i18n-check`).
+fluent-syntax = "0.12"
 
 # Mandatory lint set per docs/architecture.md §4.1.1. Members opt in with
 # `[lints] workspace = true`. `tock-uniffi` overrides `unsafe_code` because

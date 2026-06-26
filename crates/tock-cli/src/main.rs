@@ -3,9 +3,11 @@
 //! Command-line interface for tock — unified task, habit, time, and
 //! focus engine. Phase 1 implements the task management commands.
 
+mod clap_i18n;
 mod commands;
 mod display;
 mod hooks;
+mod i18n;
 mod notify;
 mod tracing_setup;
 mod tui;
@@ -14,7 +16,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process;
 
-use clap::{CommandFactory, Parser};
+use clap::{CommandFactory, FromArgMatches, Parser};
 use commands::{
     Commands, context::ContextCommand, focus::FocusCommand, habit::HabitCommand,
     hooks_cmd::HooksCommand, time::TimeCommand, uda::UdaCommand,
@@ -48,6 +50,10 @@ struct Cli {
     #[arg(long, default_value = "table")]
     format: String,
 
+    /// Language for messages (BCP-47, e.g. `en-US`); overrides `TOCK_LANG`.
+    #[arg(long, env = "TOCK_LANG", global = true)]
+    lang: Option<String>,
+
     /// Subcommand to execute.
     #[command(subcommand)]
     command: Commands,
@@ -73,13 +79,37 @@ struct RelatedTaskSummary {
 }
 
 fn main() {
-    let cli = Cli::parse();
+    // Resolve the locale before building the command so `--help` output is
+    // localized too (clap renders and exits during argument parsing).
+    let lang = prescan_lang();
+    i18n::init(lang.as_deref());
+
+    let matches = clap_i18n::localize(Cli::command()).get_matches();
+    let cli = match Cli::from_arg_matches(&matches) {
+        Ok(cli) => cli,
+        Err(error) => error.exit(),
+    };
     tracing_setup::init_tracing(cli.log_format == "json");
 
     if let Err(error) = run(&cli) {
-        eprintln!("error: {error}");
+        eprintln!("{}", tr!("error-prefix", message = error.to_string()));
         process::exit(1);
     }
+}
+
+/// Scan raw arguments for an explicit `--lang`/`--lang=<value>` so the locale is
+/// known before clap renders any (localized) help or error output.
+fn prescan_lang() -> Option<String> {
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        if let Some(value) = arg.strip_prefix("--lang=") {
+            return Some(value.to_owned());
+        }
+        if arg == "--lang" {
+            return args.next();
+        }
+    }
+    None
 }
 
 fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
@@ -170,9 +200,9 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
             if format.eq_ignore_ascii_case("json") {
                 let contents = std::fs::read_to_string(file)?;
                 let count = tock_import::json::import_tasks(conn, &contents)?;
-                println!("Imported {count} task(s)");
+                println!("{}", tr!("import-done", count = usize_to_i64(count)));
             } else {
-                eprintln!("unsupported format: {format} (supported: json, taskwarrior, csv)");
+                eprintln!("{}", tr!("import-unsupported-format", format = format));
             }
             Ok(())
         }
@@ -232,8 +262,8 @@ fn run_caldav_cmd(
         CalDavCmd::Status => caldav_status(conn),
         CalDavCmd::Remove { url } => {
             caldav_link_repo::delete_collection(conn, url)?;
-            println!("Removed CalDAV collection: {url}");
-            println!("All links to this collection have been deleted.");
+            println!("{}", tr!("caldav-collection-removed", url = url));
+            println!("{}", tr!("caldav-all-links-deleted"));
             Ok(())
         }
     }
@@ -258,12 +288,15 @@ fn caldav_setup(
     };
     caldav_link_repo::upsert_collection(conn, &row)?;
     println!(
-        "CalDAV collection configured: {}",
-        name.unwrap_or(collection)
+        "{}",
+        tr!(
+            "caldav-collection-configured",
+            name = name.unwrap_or(collection)
+        )
     );
-    println!("  URL: {collection}");
-    println!("  User: {user}");
-    println!("\nRun `tock caldav sync` to start syncing.");
+    println!("  {}", tr!("caldav-setup-url", url = collection));
+    println!("  {}", tr!("caldav-setup-user", user = user));
+    println!("\n{}", tr!("caldav-setup-hint"));
     Ok(())
 }
 
@@ -278,8 +311,8 @@ fn caldav_sync(
 
     let collections = if let Some(url) = collection {
         let Some(c) = caldav_link_repo::get_collection(conn, url)? else {
-            eprintln!("No collection configured at: {url}");
-            eprintln!("Run `tock caldav setup` first.");
+            eprintln!("{}", tr!("caldav-no-collection-at", url = url));
+            eprintln!("{}", tr!("caldav-run-setup-first"));
             return Ok(());
         };
         vec![c]
@@ -288,14 +321,14 @@ fn caldav_sync(
     };
 
     if collections.is_empty() {
-        eprintln!("No CalDAV collections configured.");
-        eprintln!("Run `tock caldav setup` to add one.");
+        eprintln!("{}", tr!("caldav-no-collections"));
+        eprintln!("{}", tr!("caldav-run-setup-to-add"));
         return Ok(());
     }
 
     for col in &collections {
         let name = col.display_name.as_deref().unwrap_or(&col.url);
-        println!("Syncing collection: {name}");
+        println!("{}", tr!("caldav-syncing-collection", name = name));
 
         let tasks = tock_storage::repo::task_repo::list(conn, false)?;
         let time_blocks = tock_storage::repo::time_block_repo::list(conn, true)?;
@@ -323,7 +356,13 @@ fn caldav_sync(
             tock_caldav::sync::compute_push_actions(&tasks, &time_blocks, &sync_links, &col.url);
 
         if dry_run {
-            println!("  Would push {} resource(s)", push_actions.len());
+            println!(
+                "  {}",
+                tr!(
+                    "caldav-dry-run-push-count",
+                    count = usize_to_i64(push_actions.len())
+                )
+            );
             for action in &push_actions {
                 if let tock_caldav::sync::SyncAction::Push {
                     entity_type,
@@ -332,21 +371,34 @@ fn caldav_sync(
                     ..
                 } = action
                 {
-                    let op = if etag.is_some() { "update" } else { "create" };
+                    let op = if etag.is_some() {
+                        tr!("caldav-sync-op-update")
+                    } else {
+                        tr!("caldav-sync-op-create")
+                    };
                     println!("    {op} {} → {href}", entity_type.as_str());
                 }
             }
-            println!("  (dry run — no changes applied)");
+            println!("  {}", tr!("caldav-dry-run-note"));
         } else {
             println!(
-                "  {} task(s), {} time block(s), {} existing link(s)",
-                tasks.len(),
-                time_blocks.len(),
-                sync_links.len()
+                "  {}",
+                tr!(
+                    "caldav-sync-summary",
+                    tasks = usize_to_i64(tasks.len()),
+                    blocks = usize_to_i64(time_blocks.len()),
+                    links = usize_to_i64(sync_links.len())
+                )
             );
-            println!("  {} resource(s) to push", push_actions.len());
-            eprintln!("  Note: CalDAV sync requires a network transport implementation.");
-            eprintln!("  The sync engine is ready but HTTP transport is not yet wired.");
+            println!(
+                "  {}",
+                tr!(
+                    "caldav-sync-push-count",
+                    count = usize_to_i64(push_actions.len())
+                )
+            );
+            eprintln!("  {}", tr!("caldav-sync-transport-note"));
+            eprintln!("  {}", tr!("caldav-sync-transport-not-wired"));
         }
     }
     Ok(())
@@ -358,26 +410,33 @@ fn caldav_status(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
 
     let collections = caldav_link_repo::list_collections(conn)?;
     if collections.is_empty() {
-        println!("No CalDAV collections configured.");
-        println!("Run `tock caldav setup` to add one.");
+        println!("{}", tr!("caldav-no-collections"));
+        println!("{}", tr!("caldav-run-setup-to-add"));
         return Ok(());
     }
-    println!("CalDAV collections:\n");
+    println!("{}\n", tr!("caldav-collections-header"));
     for col in &collections {
-        let name = col.display_name.as_deref().unwrap_or("(unnamed)");
+        let unnamed = tr!("caldav-unnamed");
+        let name = col.display_name.as_deref().unwrap_or(&unnamed);
         println!("  {name}");
-        println!("    URL:        {}", col.url);
-        println!("    User:       {}", col.username);
+        println!("    {}", tr!("caldav-status-url", url = col.url.as_str()));
+        println!(
+            "    {}",
+            tr!("caldav-status-user", user = col.username.as_str())
+        );
         if let Some(ref token) = col.sync_token {
-            println!("    Sync token: {token}");
+            println!("    {}", tr!("caldav-status-sync-token", token = token));
         }
         if let Some(ref last) = col.last_sync_at {
-            println!("    Last sync:  {last}");
+            println!("    {}", tr!("caldav-status-last-sync", time = last));
         } else {
-            println!("    Last sync:  never");
+            println!("    {}", tr!("caldav-status-last-sync-never"));
         }
         let links = caldav_link_repo::list_links(conn, &col.url)?;
-        println!("    Linked:     {} resource(s)", links.len());
+        println!(
+            "    {}",
+            tr!("caldav-status-linked", count = usize_to_i64(links.len()))
+        );
         println!();
     }
     Ok(())
@@ -402,7 +461,7 @@ fn run_export_cmd(
     } else if format.eq_ignore_ascii_case("md") || format.eq_ignore_ascii_case("markdown") {
         run_export_md(conn, out, builtin, template_path, filter)?;
     } else {
-        eprintln!("unsupported format: {format} (supported: json, md)");
+        eprintln!("{}", tr!("export-unsupported-format", format = format));
     }
     Ok(())
 }
@@ -499,6 +558,7 @@ fn apply_list_filter(
         .collect()
 }
 
+#[allow(clippy::too_many_lines)]
 fn run_task_cmd(
     conn: &Connection,
     cmd: &Commands,
@@ -510,7 +570,14 @@ fn run_task_cmd(
         Commands::Modify { sid, args } => {
             let patch = commands::modify::parse_modify_args(args);
             let task = tock_storage::repo::task_repo::update(conn, *sid, &patch)?;
-            println!("Modified task #{} — {}", task.sid, task.title);
+            println!(
+                "{}",
+                tr!(
+                    "task-modified",
+                    sid = i64::from(task.sid),
+                    title = task.title.as_str()
+                )
+            );
         }
         Commands::Done { sids } => {
             for sid in sids {
@@ -524,16 +591,29 @@ fn run_task_cmd(
                     && active.task_id == Some(task.id)
                 {
                     let _ = tock_storage::repo::focus_repo::abort(conn, active.sid);
-                    println!("  (auto-stopped focus session #{})", active.sid);
+                    println!(
+                        "  {}",
+                        tr!("task-auto-stopped-focus", sid = i64::from(active.sid))
+                    );
                 }
                 // Auto-stop any running time block linked to this task.
                 if let Some(running) = tock_storage::repo::time_block_repo::get_current(conn)?
                     && running.task_id == Some(task.id)
                 {
                     let _ = tock_storage::repo::time_block_repo::stop(conn, running.sid);
-                    println!("  (auto-stopped timer #{})", running.sid);
+                    println!(
+                        "  {}",
+                        tr!("task-auto-stopped-timer", sid = i64::from(running.sid))
+                    );
                 }
-                println!("Completed task #{} — {}", task.sid, task.title);
+                println!(
+                    "{}",
+                    tr!(
+                        "task-completed",
+                        sid = i64::from(task.sid),
+                        title = task.title.as_str()
+                    )
+                );
                 let _ = hooks::run_hook(hooks::HookEvent::OnComplete, &task_to_hook_json(&task));
             }
         }
@@ -544,22 +624,39 @@ fn run_task_cmd(
                     *sid,
                     commands::done::cancel_status(),
                 )?;
-                println!("Cancelled task #{} — {}", task.sid, task.title);
+                println!(
+                    "{}",
+                    tr!(
+                        "task-cancelled",
+                        sid = i64::from(task.sid),
+                        title = task.title.as_str()
+                    )
+                );
             }
         }
         Commands::Delete { sids } => {
             for sid in sids {
                 tock_storage::repo::task_repo::soft_delete(conn, *sid)?;
-                println!("Deleted task #{sid}");
+                println!("{}", tr!("task-deleted", sid = i64::from(*sid)));
             }
         }
         Commands::Depend { sid, on } => {
             tock_storage::repo::task_repo::add_dependency(conn, *sid, *on)?;
-            println!("Task #{sid} now depends on #{on}");
+            println!(
+                "{}",
+                tr!("depend-added", sid = i64::from(*sid), on = i64::from(*on))
+            );
         }
         Commands::Undepend { sid, from } => {
             tock_storage::repo::task_repo::remove_dependency(conn, *sid, *from)?;
-            println!("Task #{sid} no longer depends on #{from}");
+            println!(
+                "{}",
+                tr!(
+                    "depend-removed",
+                    sid = i64::from(*sid),
+                    from = i64::from(*from)
+                )
+            );
         }
         Commands::List { filter, json } => {
             let today = today_string();
@@ -582,7 +679,7 @@ fn run_task_cmd(
                 let format = selected_output_format(global_format, *json);
                 print_task_show(conn, &task, format)?;
             } else {
-                eprintln!("task #{sid} not found");
+                eprintln!("{}", tr!("task-not-found", sid = i64::from(*sid)));
             }
         }
         Commands::Urgency { sid } => run_urgency_cmd(conn, *sid)?,
@@ -601,12 +698,19 @@ fn run_add_cmd(
         commands::add::parse_recur_flag(recur).map_err(std::io::Error::other)?;
     let hook_input = new_task_to_hook_json(&parsed_task);
     let Some(hooked_json) = hooks::run_hook(hooks::HookEvent::OnAdd, &hook_input) else {
-        println!("Add cancelled by hook");
+        println!("{}", tr!("task-add-cancelled-by-hook"));
         return Ok(());
     };
     let new_task = new_task_from_hook_json(&parsed_task, &hooked_json)?;
     let task = tock_storage::repo::task_repo::insert(conn, &new_task)?;
-    println!("Created task #{} — {}", task.sid, task.title);
+    println!(
+        "{}",
+        tr!(
+            "task-created",
+            sid = i64::from(task.sid),
+            title = task.title.as_str()
+        )
+    );
     Ok(())
 }
 
@@ -620,15 +724,25 @@ fn run_urgency_cmd(conn: &Connection, sid: u32) -> Result<(), Box<dyn std::error
             .iter()
             .map(|(_, _, _, contribution)| contribution)
             .sum();
-        println!("Urgency for task #{} — {}", task.sid, task.title);
+        println!(
+            "{}",
+            tr!(
+                "task-urgency-header",
+                sid = i64::from(task.sid),
+                title = task.title.as_str()
+            )
+        );
+        let w_label = tr!("task-urgency-weight-label");
+        let f_label = tr!("task-urgency-factor-label");
+        let c_label = tr!("task-urgency-contribution-label");
         for (component, weight, factor, contribution) in breakdown {
             println!(
-                "  {component:<12} weight={weight:>6.2} factor={factor:>6.2} contribution={contribution:>7.2}"
+                "  {component:<12} {w_label}={weight:>6.2} {f_label}={factor:>6.2} {c_label}={contribution:>7.2}"
             );
         }
-        println!("  {:<12} {:>30.2}", "total", total);
+        println!("  {:<12} {:>30.2}", tr!("task-urgency-total-label"), total);
     } else {
-        eprintln!("task #{sid} not found");
+        eprintln!("{}", tr!("task-not-found", sid = i64::from(sid)));
     }
     Ok(())
 }
@@ -640,21 +754,21 @@ fn run_context_cmd(
     match cmd {
         ContextCommand::Set { name } => {
             tock_storage::repo::context_repo::set_active(conn, Some(name))?;
-            println!("Activated context {name}");
+            println!("{}", tr!("context-activated", name = name));
         }
         ContextCommand::Clear => {
             tock_storage::repo::context_repo::set_active(conn, None)?;
-            println!("Cleared active context");
+            println!("{}", tr!("context-cleared"));
         }
         ContextCommand::Define { name, filter } => {
             tock_storage::repo::context_repo::define(conn, name, filter)?;
-            println!("Defined context {name}");
+            println!("{}", tr!("context-defined", name = name));
         }
         ContextCommand::List => {
             let active = tock_storage::repo::context_repo::get_active(conn)?;
             let contexts = tock_storage::repo::context_repo::list(conn)?;
             if contexts.is_empty() {
-                println!("No contexts defined");
+                println!("{}", tr!("context-none-defined"));
             } else {
                 for (name, filter) in contexts {
                     let marker = if active.as_deref() == Some(name.as_str()) {
@@ -668,7 +782,7 @@ fn run_context_cmd(
         }
         ContextCommand::Rm { name } => {
             tock_storage::repo::context_repo::delete(conn, name)?;
-            println!("Removed context {name}");
+            println!("{}", tr!("context-removed", name = name));
         }
     }
     Ok(())
@@ -679,7 +793,7 @@ fn run_hooks_cmd(cmd: &HooksCommand) {
         HooksCommand::List => {
             let installed = hooks::list_hooks();
             if installed.is_empty() {
-                println!("No hooks installed");
+                println!("{}", tr!("hooks-none-installed"));
             } else {
                 for (event, path) in installed {
                     println!("{:<16} {}", event.script_name(), path.display());
@@ -763,11 +877,14 @@ fn run_habit_cmd(conn: &Connection, cmd: &HabitCommand) -> Result<(), Box<dyn st
             let habit =
                 tock_storage::repo::habit_repo::get_by_sid(conn, *sid)?.ok_or("habit not found")?;
             println!(
-                "🚫 Slip logged for #{} — {} ({} {})",
-                habit.sid,
-                habit.title,
-                habit.streak_current,
-                habit.streak_label()
+                "🚫 {}",
+                tr!(
+                    "habit-slip-logged",
+                    sid = i64::from(habit.sid),
+                    title = habit.title.as_str(),
+                    streak = i64::from(habit.streak_current),
+                    label = habit.streak_label()
+                )
             );
             let _ = entry;
             Ok(())
@@ -792,13 +909,13 @@ fn run_habit_remind(
 ) -> Result<(), Box<dyn std::error::Error>> {
     if clear {
         tock_storage::repo::habit_repo::set_reminders(conn, sid, &[])?;
-        println!("Cleared all reminders for habit #{sid}");
+        println!("{}", tr!("habit-reminders-cleared", sid = i64::from(sid)));
         return Ok(());
     }
     if list {
         let reminders = tock_storage::repo::habit_repo::get_reminders(conn, sid)?;
         if reminders.is_empty() {
-            println!("No reminders set for habit #{sid}");
+            println!("{}", tr!("habit-no-reminders", sid = i64::from(sid)));
         } else {
             for r in &reminders {
                 println!("  🔔 {}", r.display());
@@ -816,9 +933,12 @@ fn run_habit_remind(
             days: day_list,
         });
         tock_storage::repo::habit_repo::set_reminders(conn, sid, &reminders)?;
-        println!("Added reminder at {time} for habit #{sid}");
+        println!(
+            "{}",
+            tr!("habit-reminder-added", time = time, sid = i64::from(sid))
+        );
     } else {
-        eprintln!("Specify --at <HH:MM>, --list, or --clear");
+        eprintln!("{}", tr!("habit-remind-usage"));
     }
     Ok(())
 }
@@ -853,34 +973,57 @@ fn run_habit_add(
         project_id: None,
     };
     let habit = tock_storage::repo::habit_repo::insert(conn, &new_habit)?;
-    println!("Created habit #{} — {}", habit.sid, habit.title);
+    println!(
+        "{}",
+        tr!(
+            "habit-created",
+            sid = i64::from(habit.sid),
+            title = habit.title.as_str()
+        )
+    );
     Ok(())
 }
 
 fn run_habit_list(conn: &Connection, all: bool) -> Result<(), Box<dyn std::error::Error>> {
     let habits = tock_storage::repo::habit_repo::list(conn, all)?;
     println!(
-        "{:>4}  {:<7}  {:<12}  {:>8}  {:<28}  Identity",
-        "SID", "Dir", "Level", "Streak", "Title"
+        "{:>4}  {:<7}  {:<12}  {:>8}  {:<28}  {}",
+        tr!("habit-col-sid"),
+        tr!("habit-col-dir"),
+        tr!("habit-col-level"),
+        tr!("habit-col-streak"),
+        tr!("habit-col-title"),
+        tr!("habit-col-identity")
     );
     for habit in &habits {
         println!(
             "{:>4}  {:<7}  {:<12}  {:>8}  {:<28}  {}",
             habit.sid,
             habit.direction.as_str(),
-            format!("L{} ({})", habit.level, habit.level_name()),
-            format!("{}d", habit.streak_current),
+            tr!(
+                "habit-level-display",
+                level = i64::from(habit.level),
+                name = habit.level_name()
+            ),
+            tr!(
+                "habit-streak-display",
+                days = i64::from(habit.streak_current)
+            ),
             truncate_str(&habit.title, 28),
             truncate_str(habit.identity.as_deref().unwrap_or("—"), 40)
         );
     }
-    println!("\n{} habit(s)", habits.len());
+    println!(
+        "\n{}",
+        tr!("habit-count", count = usize_to_i64(habits.len()))
+    );
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)]
 fn run_habit_show(conn: &Connection, sid: u32) -> Result<(), Box<dyn std::error::Error>> {
     let Some(habit) = tock_storage::repo::habit_repo::get_by_sid(conn, sid)? else {
-        eprintln!("habit #{sid} not found");
+        eprintln!("{}", tr!("habit-not-found", sid = i64::from(sid)));
         return Ok(());
     };
     let all_habits = tock_storage::repo::habit_repo::list(conn, true)?;
@@ -902,57 +1045,135 @@ fn run_habit_show(conn: &Connection, sid: u32) -> Result<(), Box<dyn std::error:
     };
 
     println!("#{} — {}", habit.sid, habit.title);
-    println!("Direction: {}", habit.direction.as_str());
-    println!("Identity: {}", habit.identity.as_deref().unwrap_or("—"));
-    println!("Cue: {}", habit.cue.as_deref().unwrap_or("—"));
-    println!("Craving: {}", habit.craving.as_deref().unwrap_or("—"));
-    println!("Response: {}", habit.response.as_deref().unwrap_or("—"));
-    println!("Reward: {}", habit.reward.as_deref().unwrap_or("—"));
-    println!("Cadence: {}", habit_cadence_display(&habit.cadence));
-    println!("Minimum: {}", habit.minimum);
-    println!("Level: L{} ({})", habit.level, habit.level_name());
-    println!("XP: {}", format_habit_xp(habit.level, habit.xp));
     println!(
-        "Streaks: current {}d / best {}d",
-        habit.streak_current, habit.streak_best
+        "{}",
+        tr!("habit-show-direction", value = habit.direction.as_str())
     );
     println!(
-        "Stacking: {}",
-        parent.map_or_else(
-            || String::from("none"),
-            |label| {
-                if habit.stack_delay_s == 0 {
-                    label
-                } else {
-                    format!("{label} + {}", format_stack_delay(habit.stack_delay_s))
-                }
-            }
+        "{}",
+        tr!(
+            "habit-show-identity",
+            value = habit.identity.as_deref().unwrap_or("—")
         )
     );
     println!(
-        "Area: {}",
-        habit
-            .area_id
-            .map_or_else(|| String::from("—"), |id| id.to_string())
+        "{}",
+        tr!(
+            "habit-show-cue",
+            value = habit.cue.as_deref().unwrap_or("—")
+        )
     );
     println!(
-        "Project: {}",
-        habit
-            .project_id
-            .map_or_else(|| String::from("—"), |id| id.to_string())
+        "{}",
+        tr!(
+            "habit-show-craving",
+            value = habit.craving.as_deref().unwrap_or("—")
+        )
     );
-    println!("Created: {}", format_timestamp_full(habit.created_at)?);
-    println!("Modified: {}", format_timestamp_full(habit.modified_at)?);
-    println!("Archived: {archived}");
     println!(
-        "Entries: {} (next: {})",
-        entries.len(),
-        next_due_text(&habit, &entries, &sid_by_id)
+        "{}",
+        tr!(
+            "habit-show-response",
+            value = habit.response.as_deref().unwrap_or("—")
+        )
+    );
+    println!(
+        "{}",
+        tr!(
+            "habit-show-reward",
+            value = habit.reward.as_deref().unwrap_or("—")
+        )
+    );
+    println!(
+        "{}",
+        tr!(
+            "habit-show-cadence",
+            value = habit_cadence_display(&habit.cadence)
+        )
+    );
+    println!(
+        "{}",
+        tr!("habit-show-minimum", value = habit.minimum.as_str())
+    );
+    println!(
+        "{}",
+        tr!(
+            "habit-show-level",
+            level = i64::from(habit.level),
+            name = habit.level_name()
+        )
+    );
+    println!(
+        "{}",
+        tr!(
+            "habit-show-xp",
+            value = format_habit_xp(habit.level, habit.xp)
+        )
+    );
+    println!(
+        "{}",
+        tr!(
+            "habit-show-streaks",
+            current = i64::from(habit.streak_current),
+            best = i64::from(habit.streak_best)
+        )
+    );
+    let stacking_value = parent.map_or_else(
+        || tr!("habit-stacking-none"),
+        |label| {
+            if habit.stack_delay_s == 0 {
+                label
+            } else {
+                format!("{label} + {}", format_stack_delay(habit.stack_delay_s))
+            }
+        },
+    );
+    println!("{}", tr!("habit-show-stacking", value = stacking_value));
+    println!(
+        "{}",
+        tr!(
+            "habit-show-area",
+            value = habit
+                .area_id
+                .map_or_else(|| String::from("—"), |id| id.to_string())
+        )
+    );
+    println!(
+        "{}",
+        tr!(
+            "habit-show-project",
+            value = habit
+                .project_id
+                .map_or_else(|| String::from("—"), |id| id.to_string())
+        )
+    );
+    println!(
+        "{}",
+        tr!(
+            "habit-show-created",
+            value = format_timestamp_full(habit.created_at)?
+        )
+    );
+    println!(
+        "{}",
+        tr!(
+            "habit-show-modified",
+            value = format_timestamp_full(habit.modified_at)?
+        )
+    );
+    println!("{}", tr!("habit-show-archived", value = archived.as_str()));
+    println!(
+        "{}",
+        tr!(
+            "habit-show-entries",
+            count = usize_to_i64(entries.len()),
+            next = next_due_text(&habit, &entries, &sid_by_id)
+        )
     );
     if stacked.is_empty() {
-        println!("Stacked children: none");
+        println!("{}", tr!("habit-show-stacked-none"));
     } else {
-        println!("Stacked children:");
+        println!("{}", tr!("habit-show-stacked-header"));
         for child in &stacked {
             if child.stack_delay_s == 0 {
                 println!("  #{} — {}", child.sid, child.title);
@@ -980,16 +1201,19 @@ fn run_habit_log(
     let habit = tock_storage::repo::habit_repo::get_by_sid(conn, sid)?
         .ok_or_else(|| std::io::Error::other(format!("habit #{sid} not found after logging")))?;
     let outcome = if entry.slip {
-        "Logged slip"
+        tr!("habit-logged-slip")
     } else {
-        "Logged habit"
+        tr!("habit-logged-habit")
     };
     println!(
-        "{} #{} — streak {}d, {}",
-        outcome,
-        habit.sid,
-        habit.streak_current,
-        format_habit_xp(habit.level, habit.xp)
+        "{}",
+        tr!(
+            "habit-log-result",
+            outcome = outcome,
+            sid = i64::from(habit.sid),
+            streak = i64::from(habit.streak_current),
+            xp = format_habit_xp(habit.level, habit.xp)
+        )
     );
     Ok(())
 }
@@ -1005,8 +1229,13 @@ fn run_habit_skip(
     let habit = tock_storage::repo::habit_repo::get_by_sid(conn, sid)?
         .ok_or_else(|| std::io::Error::other(format!("habit #{sid} not found after skip")))?;
     println!(
-        "Skipped habit #{} on {} — streak {}d",
-        habit.sid, skip_date, habit.streak_current
+        "{}",
+        tr!(
+            "habit-skipped",
+            sid = i64::from(habit.sid),
+            date = skip_date.as_str(),
+            streak = i64::from(habit.streak_current)
+        )
     );
     Ok(())
 }
@@ -1021,8 +1250,13 @@ fn run_habit_freeze(
     let habit = tock_storage::repo::habit_repo::get_by_sid(conn, sid)?
         .ok_or_else(|| std::io::Error::other(format!("habit #{sid} not found after freeze")))?;
     println!(
-        "Froze habit #{} on {} — streak {}d",
-        habit.sid, freeze_date, habit.streak_current
+        "{}",
+        tr!(
+            "habit-frozen",
+            sid = i64::from(habit.sid),
+            date = freeze_date.as_str(),
+            streak = i64::from(habit.streak_current)
+        )
     );
     Ok(())
 }
@@ -1037,39 +1271,55 @@ fn run_habit_backfill(
     let habit = tock_storage::repo::habit_repo::get_by_sid(conn, sid)?
         .ok_or_else(|| std::io::Error::other(format!("habit #{sid} not found after backfill")))?;
     println!(
-        "Backfilled habit #{} on {} — streak {}d, {}",
-        habit.sid,
-        date,
-        habit.streak_current,
-        format_habit_xp(habit.level, habit.xp)
+        "{}",
+        tr!(
+            "habit-backfilled",
+            sid = i64::from(habit.sid),
+            date = date,
+            streak = i64::from(habit.streak_current),
+            xp = format_habit_xp(habit.level, habit.xp)
+        )
     );
     Ok(())
 }
 
 fn run_habit_streaks(conn: &Connection, sid: u32) -> Result<(), Box<dyn std::error::Error>> {
     let Some(habit) = tock_storage::repo::habit_repo::get_by_sid(conn, sid)? else {
-        eprintln!("habit #{sid} not found");
+        eprintln!("{}", tr!("habit-not-found", sid = i64::from(sid)));
         return Ok(());
     };
     let entries = tock_storage::repo::habit_repo::get_entries(conn, sid)?;
 
     println!("#{} — {}", habit.sid, habit.title);
-    println!("Current streak: {}d", habit.streak_current);
-    println!("Best streak: {}d", habit.streak_best);
+    println!(
+        "{}",
+        tr!(
+            "habit-streak-current",
+            days = i64::from(habit.streak_current)
+        )
+    );
+    println!(
+        "{}",
+        tr!("habit-streak-best", days = i64::from(habit.streak_best))
+    );
     if entries.is_empty() {
-        println!("Recent entries: none");
+        println!("{}", tr!("habit-entries-none"));
         return Ok(());
     }
 
-    println!("Recent entries:");
+    println!("{}", tr!("habit-entries-header"));
     for entry in entries.iter().take(10) {
         let date = entry.occurred_at.date();
+        let slip_suffix = if entry.slip {
+            format!(" ({})", tr!("habit-slip-label"))
+        } else {
+            String::new()
+        };
         println!(
-            "  {:04}-{:02}-{:02}{}",
+            "  {:04}-{:02}-{:02}{slip_suffix}",
             date.year(),
             u8::from(date.month()),
             date.day(),
-            if entry.slip { " (slip)" } else { "" }
         );
     }
     Ok(())
@@ -1113,26 +1363,36 @@ fn run_habit_modify(
         stack_delay_s: None,
     };
     let habit = tock_storage::repo::habit_repo::update(conn, sid, &patch)?;
-    println!("Modified habit #{} — {}", habit.sid, habit.title);
+    println!(
+        "{}",
+        tr!(
+            "habit-modified",
+            sid = i64::from(habit.sid),
+            title = habit.title.as_str()
+        )
+    );
     Ok(())
 }
 
 fn run_habit_archive(conn: &Connection, sid: u32) -> Result<(), Box<dyn std::error::Error>> {
     tock_storage::repo::habit_repo::archive(conn, sid)?;
-    println!("Archived habit #{sid}");
+    println!("{}", tr!("habit-archived", sid = i64::from(sid)));
     Ok(())
 }
 
 fn run_habit_status(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
     let habits = tock_storage::repo::habit_repo::list(conn, false)?;
     if habits.is_empty() {
-        println!("No active habits");
+        println!("{}", tr!("habit-none-active"));
         return Ok(());
     }
     for habit in &habits {
         println!("{}", format_habit_status_line(habit));
     }
-    println!("\n{} habit(s)", habits.len());
+    println!(
+        "\n{}",
+        tr!("habit-count", count = usize_to_i64(habits.len()))
+    );
     Ok(())
 }
 
@@ -1169,9 +1429,12 @@ fn run_focus_start(
 ) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(active) = tock_storage::repo::focus_repo::get_active(conn)? {
         eprintln!(
-            "Focus session #{} is already active ({})",
-            active.sid,
-            active.state.as_str()
+            "{}",
+            tr!(
+                "focus-already-active",
+                sid = i64::from(active.sid),
+                state = active.state.as_str()
+            )
         );
         return Ok(());
     }
@@ -1195,19 +1458,27 @@ fn run_focus_start(
     };
     let session = tock_storage::repo::focus_repo::insert(conn, &new)?;
     notify(
-        "Focus started",
-        &format!("🍅 Work for {} minutes", session.config.work_minutes),
+        &tr!("focus-notify-started-title"),
+        &tr!(
+            "focus-notify-started-body",
+            minutes = i64::from(session.config.work_minutes)
+        ),
     );
     println!(
-        "🍅 Focus #{} started — {} min work × {} cycles",
-        session.sid, session.config.work_minutes, session.planned_cycles
+        "🍅 {}",
+        tr!(
+            "focus-started",
+            sid = i64::from(session.sid),
+            minutes = i64::from(session.config.work_minutes),
+            cycles = i64::from(session.planned_cycles)
+        )
     );
     Ok(())
 }
 
 fn run_focus_done(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
     let Some(active) = tock_storage::repo::focus_repo::get_active(conn)? else {
-        println!("No active focus session");
+        println!("{}", tr!("focus-none-active"));
         return Ok(());
     };
 
@@ -1215,12 +1486,19 @@ fn run_focus_done(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
     log_focus_time_block(conn, &active)?;
     if session.state.is_terminal() {
         notify(
-            "Focus complete!",
-            &format!("🎉 {} cycles done", session.completed_cycles),
+            &tr!("focus-notify-complete-title"),
+            &tr!(
+                "focus-notify-complete-body",
+                cycles = i64::from(session.completed_cycles)
+            ),
         );
         println!(
-            "🎉 Focus #{} complete! {} cycles",
-            session.sid, session.completed_cycles
+            "🎉 {}",
+            tr!(
+                "focus-complete",
+                sid = i64::from(session.sid),
+                cycles = i64::from(session.completed_cycles)
+            )
         );
         return Ok(());
     }
@@ -1230,87 +1508,112 @@ fn run_focus_done(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
     } else {
         session.config.short_break_minutes
     };
-    notify("Pomodoro done!", &format!("Take a {break_mins} min break"));
+    notify(
+        &tr!("focus-notify-pomodoro-done-title"),
+        &tr!(
+            "focus-notify-pomodoro-done-body",
+            minutes = i64::from(break_mins)
+        ),
+    );
     println!(
-        "✅ Cycle {}/{} done — {} min {} break",
-        session.completed_cycles,
-        session.planned_cycles,
-        break_mins,
-        session.state.as_str()
+        "✅ {}",
+        tr!(
+            "focus-cycle-done",
+            completed = i64::from(session.completed_cycles),
+            planned = i64::from(session.planned_cycles),
+            minutes = i64::from(break_mins),
+            state = session.state.as_str()
+        )
     );
     Ok(())
 }
 
 fn run_focus_skip_break(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
     let Some(active) = tock_storage::repo::focus_repo::get_active(conn)? else {
-        println!("No active focus session");
+        println!("{}", tr!("focus-none-active"));
         return Ok(());
     };
 
     let session = tock_storage::repo::focus_repo::start_work(conn, active.sid)?;
     println!(
-        "⏩ Skipped break — working (cycle {})",
-        session.completed_cycles + 1
+        "⏩ {}",
+        tr!(
+            "focus-skip-break",
+            cycle = i64::from(session.completed_cycles + 1)
+        )
     );
     Ok(())
 }
 
 fn run_focus_pause(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
     let Some(active) = tock_storage::repo::focus_repo::get_active(conn)? else {
-        println!("No active focus session");
+        println!("{}", tr!("focus-none-active"));
         return Ok(());
     };
 
     let session = tock_storage::repo::focus_repo::pause(conn, active.sid)?;
-    println!("⏸ Focus #{} paused", session.sid);
+    println!("⏸ {}", tr!("focus-paused", sid = i64::from(session.sid)));
     Ok(())
 }
 
 fn run_focus_resume(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
     let Some(active) = tock_storage::repo::focus_repo::get_active(conn)? else {
-        println!("No active focus session");
+        println!("{}", tr!("focus-none-active"));
         return Ok(());
     };
 
     let session = tock_storage::repo::focus_repo::resume(conn, active.sid)?;
-    println!("▶ Focus #{} resumed", session.sid);
+    println!("▶ {}", tr!("focus-resumed", sid = i64::from(session.sid)));
     Ok(())
 }
 
 fn run_focus_stop(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
     let Some(active) = tock_storage::repo::focus_repo::get_active(conn)? else {
-        println!("No active focus session");
+        println!("{}", tr!("focus-none-active"));
         return Ok(());
     };
 
     let session = tock_storage::repo::focus_repo::abort(conn, active.sid)?;
     println!(
-        "⏹ Focus #{} aborted after {} cycles",
-        session.sid, session.completed_cycles
+        "⏹ {}",
+        tr!(
+            "focus-aborted",
+            sid = i64::from(session.sid),
+            cycles = i64::from(session.completed_cycles)
+        )
     );
     Ok(())
 }
 
 fn run_focus_status(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
     let Some(session) = tock_storage::repo::focus_repo::get_active(conn)? else {
-        println!("No active focus session");
+        println!("{}", tr!("focus-none-active"));
         return Ok(());
     };
 
     let elapsed = time::OffsetDateTime::now_utc() - session.started_at;
     println!(
-        "🍅 Focus #{} — {} ({}/{})",
-        session.sid,
-        session.state.as_str(),
-        session.completed_cycles,
-        session.planned_cycles
+        "🍅 {}",
+        tr!(
+            "focus-status-line",
+            sid = i64::from(session.sid),
+            state = session.state.as_str(),
+            completed = i64::from(session.completed_cycles),
+            planned = i64::from(session.planned_cycles)
+        )
     );
-    println!("   Elapsed: {}", format_duration(elapsed));
     println!(
-        "   Config: {} work / {} short / {} long",
-        session.config.work_minutes,
-        session.config.short_break_minutes,
-        session.config.long_break_minutes
+        "   {}",
+        tr!("focus-status-elapsed", duration = format_duration(elapsed))
+    );
+    println!(
+        "   {}",
+        tr!(
+            "focus-status-config",
+            work = i64::from(session.config.work_minutes),
+            short = i64::from(session.config.short_break_minutes),
+            long = i64::from(session.config.long_break_minutes)
+        )
     );
     Ok(())
 }
@@ -1334,13 +1637,26 @@ fn run_focus_stats(conn: &Connection, period: &str) -> Result<(), Box<dyn std::e
         .iter()
         .map(|session| session.completed_cycles * session.config.work_minutes)
         .sum();
-    println!("Focus stats: {period}");
-    println!("  Completed: {total_cycles} cycles ({completed} sessions)");
-    println!("  Aborted:   {aborted} sessions");
+    println!("{}", tr!("focus-stats-header", period = period));
     println!(
-        "  Focus time: {}h {}m",
-        total_work_mins / 60,
-        total_work_mins % 60
+        "  {}",
+        tr!(
+            "focus-stats-completed",
+            cycles = i64::from(total_cycles),
+            sessions = usize_to_i64(completed)
+        )
+    );
+    println!(
+        "  {}",
+        tr!("focus-stats-aborted", sessions = usize_to_i64(aborted))
+    );
+    println!(
+        "  {}",
+        tr!(
+            "focus-stats-time",
+            hours = i64::from(total_work_mins / 60),
+            minutes = i64::from(total_work_mins % 60)
+        )
     );
     Ok(())
 }
@@ -1350,8 +1666,21 @@ fn run_focus_history(conn: &Connection, task_sid: u32) -> Result<(), Box<dyn std
         tock_storage::repo::task_repo::get_by_sid(conn, task_sid)?.ok_or("task not found")?;
     let sessions = tock_storage::repo::focus_repo::list_for_task(conn, task.id)?;
     let blocks = tock_storage::repo::time_block_repo::list_for_task(conn, task.id)?;
-    println!("Focus history for task #{} — {}", task.sid, task.title);
-    println!("\n  Focus sessions ({}):", sessions.len());
+    println!(
+        "{}",
+        tr!(
+            "focus-history-header",
+            sid = i64::from(task.sid),
+            title = task.title.as_str()
+        )
+    );
+    println!(
+        "\n  {}",
+        tr!(
+            "focus-history-sessions",
+            count = usize_to_i64(sessions.len())
+        )
+    );
     for s in &sessions {
         let cycles = format!("{}/{}", s.completed_cycles, s.planned_cycles);
         println!(
@@ -1362,11 +1691,14 @@ fn run_focus_history(conn: &Connection, task_sid: u32) -> Result<(), Box<dyn std
             format_time(s.started_at),
         );
     }
-    println!("\n  Time blocks ({}):", blocks.len());
+    println!(
+        "\n  {}",
+        tr!("focus-history-blocks", count = usize_to_i64(blocks.len()))
+    );
     for b in &blocks {
         let dur = b
             .duration()
-            .map_or_else(|| "running".to_string(), format_duration);
+            .map_or_else(|| tr!("time-running"), format_duration);
         println!(
             "    #{:<4}  {:<10}  {:<8}  {}",
             b.sid,
@@ -1446,7 +1778,14 @@ fn run_time_start(conn: &Connection, words: &[String]) -> Result<(), Box<dyn std
 
     if let Some(running) = tock_storage::repo::time_block_repo::get_current(conn)? {
         tock_storage::repo::time_block_repo::stop(conn, running.sid)?;
-        println!("Stopped #{} — {}", running.sid, running.title);
+        println!(
+            "{}",
+            tr!(
+                "time-stopped",
+                sid = i64::from(running.sid),
+                title = running.title.as_str()
+            )
+        );
     }
 
     let new_block = tock_core::domain::time_block::NewTimeBlock {
@@ -1458,10 +1797,13 @@ fn run_time_start(conn: &Connection, words: &[String]) -> Result<(), Box<dyn std
     };
     let block = tock_storage::repo::time_block_repo::insert(conn, &new_block)?;
     println!(
-        "Started #{} — {} ({})",
-        block.sid,
-        block.title,
-        format_time(block.start_ts)
+        "{}",
+        tr!(
+            "time-started",
+            sid = i64::from(block.sid),
+            title = block.title.as_str(),
+            time = format_time(block.start_ts)
+        )
     );
     Ok(())
 }
@@ -1470,16 +1812,31 @@ fn run_time_stop(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(running) = tock_storage::repo::time_block_repo::get_current(conn)? {
         let block = tock_storage::repo::time_block_repo::stop(conn, running.sid)?;
         let duration = block.duration().map_or_else(String::new, format_duration);
-        println!("Stopped #{} — {} ({})", block.sid, block.title, duration);
+        println!(
+            "{}",
+            tr!(
+                "time-stopped-duration",
+                sid = i64::from(block.sid),
+                title = block.title.as_str(),
+                duration = duration.as_str()
+            )
+        );
     } else {
-        println!("No timer running");
+        println!("{}", tr!("time-no-timer"));
     }
     Ok(())
 }
 
 fn run_time_resume(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
     let block = tock_storage::repo::time_block_repo::resume(conn)?;
-    println!("Resumed #{} — {}", block.sid, block.title);
+    println!(
+        "{}",
+        tr!(
+            "time-resumed",
+            sid = i64::from(block.sid),
+            title = block.title.as_str()
+        )
+    );
     Ok(())
 }
 
@@ -1487,13 +1844,16 @@ fn run_time_current(conn: &Connection) -> Result<(), Box<dyn std::error::Error>>
     if let Some(block) = tock_storage::repo::time_block_repo::get_current(conn)? {
         let elapsed = time::OffsetDateTime::now_utc() - block.start_ts;
         println!(
-            "#{} — {} (running {})",
-            block.sid,
-            block.title,
-            format_duration(elapsed)
+            "{}",
+            tr!(
+                "time-current-running",
+                sid = i64::from(block.sid),
+                title = block.title.as_str(),
+                duration = format_duration(elapsed)
+            )
         );
     } else {
-        println!("No timer running");
+        println!("{}", tr!("time-no-timer"));
     }
     Ok(())
 }
@@ -1523,12 +1883,15 @@ fn run_time_blocks(
     } else {
         println!(
             "{:>4}  {:<30}  {:<20}  {:>8}",
-            "SID", "Title", "Started", "Duration"
+            tr!("time-blocks-col-sid"),
+            tr!("time-blocks-col-title"),
+            tr!("time-blocks-col-started"),
+            tr!("time-blocks-col-duration")
         );
         for block in &blocks {
             let duration = block
                 .duration()
-                .map_or_else(|| String::from("running"), format_duration);
+                .map_or_else(|| tr!("time-running"), format_duration);
             println!(
                 "{:>4}  {:<30}  {:<20}  {:>8}",
                 block.sid,
@@ -1537,7 +1900,10 @@ fn run_time_blocks(
                 duration
             );
         }
-        println!("\n{} block(s)", blocks.len());
+        println!(
+            "\n{}",
+            tr!("time-blocks-count", count = usize_to_i64(blocks.len()))
+        );
     }
     Ok(())
 }
@@ -1576,8 +1942,12 @@ fn run_time_report(
         });
         println!("{}", serde_json::to_string_pretty(&payload)?);
     } else {
-        println!("Time report: {period}");
-        println!("{:<40}  {:>10}", "Title", "Duration");
+        println!("{}", tr!("time-report-header", period = period));
+        println!(
+            "{:<40}  {:>10}",
+            tr!("time-report-col-title"),
+            tr!("time-report-col-duration")
+        );
         println!("{}", "-".repeat(52));
         for (title, seconds) in &by_title {
             println!(
@@ -1587,7 +1957,11 @@ fn run_time_report(
             );
         }
         println!("{}", "-".repeat(52));
-        println!("{:<40}  {:>10}", "Total", format_duration_secs(total_secs));
+        println!(
+            "{:<40}  {:>10}",
+            tr!("time-report-col-total"),
+            format_duration_secs(total_secs)
+        );
     }
     Ok(())
 }
@@ -1608,7 +1982,14 @@ fn resolve_time_start_input(
 
     let new_task = commands::add::parse_add_input(words);
     let task = tock_storage::repo::task_repo::insert(conn, &new_task)?;
-    println!("Created task #{} — {}", task.sid, task.title);
+    println!(
+        "{}",
+        tr!(
+            "task-created",
+            sid = i64::from(task.sid),
+            title = task.title.as_str()
+        )
+    );
     Ok((task.title.clone(), Some(task.id)))
 }
 
@@ -1739,7 +2120,14 @@ fn run_time_edit(
         billable,
     };
     let block = tock_storage::repo::time_block_repo::update(conn, sid, &patch)?;
-    println!("Updated block #{} — {}", block.sid, block.title);
+    println!(
+        "{}",
+        tr!(
+            "time-block-updated",
+            sid = i64::from(block.sid),
+            title = block.title.as_str()
+        )
+    );
     Ok(())
 }
 
@@ -1756,7 +2144,14 @@ fn run_project_cmd(
                 deadline: None,
             };
             let proj = tock_storage::repo::project_repo::insert(conn, &new_proj)?;
-            println!("Created project #{} — {}", proj.sid, proj.name);
+            println!(
+                "{}",
+                tr!(
+                    "project-created",
+                    sid = i64::from(proj.sid),
+                    name = proj.name.as_str()
+                )
+            );
         }
         commands::project::ProjectCommand::List { all } => {
             let projects = tock_storage::repo::project_repo::list(conn, *all)?;
@@ -1768,11 +2163,14 @@ fn run_project_cmd(
                     project.name
                 );
             }
-            println!("\n{} project(s)", projects.len());
+            println!(
+                "\n{}",
+                tr!("project-count", count = usize_to_i64(projects.len()))
+            );
         }
         commands::project::ProjectCommand::Archive { sid } => {
             tock_storage::repo::project_repo::archive(conn, *sid)?;
-            println!("Archived project #{sid}");
+            println!("{}", tr!("project-archived", sid = i64::from(*sid)));
         }
     }
     Ok(())
@@ -1789,14 +2187,14 @@ fn run_area_cmd(
                 color: None,
             };
             let area = tock_storage::repo::area_repo::insert(conn, &new_area)?;
-            println!("Created area — {}", area.name);
+            println!("{}", tr!("area-created", name = area.name.as_str()));
         }
         commands::project::AreaCommand::List { all } => {
             let areas = tock_storage::repo::area_repo::list(conn, *all)?;
             for area in &areas {
                 println!("  {}", area.name);
             }
-            println!("\n{} area(s)", areas.len());
+            println!("\n{}", tr!("area-count", count = usize_to_i64(areas.len())));
         }
     }
     Ok(())
@@ -1812,11 +2210,11 @@ fn run_tag_cmd(
             for tag in &tags {
                 println!("  #{}", tag.name);
             }
-            println!("\n{} tag(s)", tags.len());
+            println!("\n{}", tr!("tag-count", count = usize_to_i64(tags.len())));
         }
         commands::tag::TagCommand::Rename { old, new } => {
             tock_storage::repo::tag_repo::rename(conn, old, new)?;
-            println!("Renamed #{old} → #{new}");
+            println!("{}", tr!("tag-renamed", old = old, new = new));
         }
     }
     Ok(())
@@ -1846,9 +2244,12 @@ fn run_uda_cmd(conn: &Connection, cmd: &UdaCommand) -> Result<(), Box<dyn std::e
             };
             tock_storage::repo::uda_repo::add_definition(conn, &definition)?;
             println!(
-                "Created UDA '{}' ({})",
-                definition.key,
-                definition.uda_type.as_str()
+                "{}",
+                tr!(
+                    "uda-created",
+                    key = definition.key.as_str(),
+                    type_name = definition.uda_type.as_str()
+                )
             );
         }
         UdaCommand::List => {
@@ -1862,11 +2263,14 @@ fn run_uda_cmd(conn: &Connection, cmd: &UdaCommand) -> Result<(), Box<dyn std::e
                     definition.default.as_deref().unwrap_or("—")
                 );
             }
-            println!("\n{} UDA definition(s)", definitions.len());
+            println!(
+                "\n{}",
+                tr!("uda-count", count = usize_to_i64(definitions.len()))
+            );
         }
         UdaCommand::Rm { key } => {
             tock_storage::repo::uda_repo::remove_definition(conn, key)?;
-            println!("Removed UDA '{key}'");
+            println!("{}", tr!("uda-removed", key = key));
         }
     }
     Ok(())
@@ -1897,33 +2301,43 @@ fn run_report_cmd(
                 columns: cols,
             };
             let report = tock_storage::repo::report_repo::insert(conn, &new)?;
-            println!("Defined report '{}' — query: {}", report.name, report.query);
+            println!(
+                "{}",
+                tr!(
+                    "report-defined",
+                    name = report.name.as_str(),
+                    query = report.query.as_str()
+                )
+            );
         }
         commands::report::ReportCommand::List => {
             let reports = tock_storage::repo::report_repo::list(conn)?;
             if reports.is_empty() {
-                println!("No saved reports. Examples:");
-                println!("  tock report define overdue --query '+OVERDUE' --sort deadline");
-                println!(
-                    "  tock report define urgent  --query 'status:pending priority:H' --sort urgency"
-                );
-                println!(
-                    "  tock report define work    --query 'tag:work status:pending' --columns sid,title,deadline"
-                );
+                println!("{}", tr!("report-none-saved"));
+                println!("  {}", tr!("report-example-overdue"));
+                println!("  {}", tr!("report-example-urgent"));
+                println!("  {}", tr!("report-example-work"));
             } else {
                 for report in &reports {
                     let sort_info = report.sort.as_deref().unwrap_or("urgency");
                     println!(
-                        "  {:<20}  query: {:<30}  sort: {}",
-                        report.name, report.query, sort_info
+                        "  {:<20}  {} {:<30}  {} {}",
+                        report.name,
+                        tr!("report-list-query-label"),
+                        report.query,
+                        tr!("report-list-sort-label"),
+                        sort_info
                     );
                 }
-                println!("\n{} report(s)", reports.len());
+                println!(
+                    "\n{}",
+                    tr!("report-count", count = usize_to_i64(reports.len()))
+                );
             }
         }
         commands::report::ReportCommand::Show { name, json } => {
             let Some(report) = tock_storage::repo::report_repo::get_by_name(conn, name)? else {
-                eprintln!("report '{name}' not found");
+                eprintln!("{}", tr!("report-not-found", name = name));
                 return Ok(());
             };
             let today = today_string();
@@ -1951,7 +2365,7 @@ fn run_report_cmd(
         }
         commands::report::ReportCommand::Rm { name } => {
             tock_storage::repo::report_repo::delete(conn, name)?;
-            println!("Deleted report '{name}'");
+            println!("{}", tr!("report-removed", name = name));
         }
     }
     Ok(())
@@ -1967,13 +2381,14 @@ fn run_view_cmd(
     let today_str = today_string();
     let views = commands::views::all_views(&today_str);
     let Some(view) = views.iter().find(|candidate| candidate.name == name) else {
+        let available = views
+            .iter()
+            .map(|candidate| candidate.name)
+            .collect::<Vec<_>>()
+            .join(", ");
         eprintln!(
-            "unknown view '{name}'. Available: {}",
-            views
-                .iter()
-                .map(|candidate| candidate.name)
-                .collect::<Vec<_>>()
-                .join(", ")
+            "{}",
+            tr!("views-unknown", name = name, available = available)
         );
         return Ok(());
     };
@@ -2340,13 +2755,13 @@ fn print_task_listing(
     if !matches!(format, OutputFormat::Json)
         && let Some(active_context) = active_context
     {
-        println!("[ctx: {active_context}]");
+        println!("{}", tr!("context-active-banner", name = active_context));
     }
     if !rendered.is_empty() {
         println!("{rendered}");
     }
     if !matches!(format, OutputFormat::Json) {
-        println!("\n{count} task(s)");
+        println!("\n{}", tr!("task-count", count = usize_to_i64(count)));
     }
 }
 
@@ -2453,16 +2868,28 @@ fn print_task_show(
 
     println!("{}", format_task_detail(task, format));
     if let Some(recurrence) = task.recurrence.as_deref() {
-        println!("  Recurs:   {}", describe_recurrence(recurrence));
+        println!(
+            "  {}",
+            tr!("task-show-recurs", value = describe_recurrence(recurrence))
+        );
     }
     if !dependencies.is_empty() {
         println!(
-            "  Depends:  {}",
-            format_related_task_summaries(&dependencies)
+            "  {}",
+            tr!(
+                "task-show-depends",
+                value = format_related_task_summaries(&dependencies)
+            )
         );
     }
     if !dependents.is_empty() {
-        println!("  Blocking: {}", format_related_task_summaries(&dependents));
+        println!(
+            "  {}",
+            tr!(
+                "task-show-blocking",
+                value = format_related_task_summaries(&dependents)
+            )
+        );
     }
     Ok(())
 }
@@ -2691,6 +3118,12 @@ fn hook_json_error(message: impl Into<String>) -> std::io::Error {
 fn task_age_days(created_at: time::OffsetDateTime, now: time::OffsetDateTime) -> f64 {
     let days = (now - created_at).whole_days().clamp(0, 365);
     f64::from(u16::try_from(days).unwrap_or(365))
+}
+
+/// Convert a `usize` to `i64` for Fluent message interpolation.
+#[allow(clippy::cast_possible_wrap)]
+const fn usize_to_i64(n: usize) -> i64 {
+    n as i64
 }
 
 fn today_string() -> String {

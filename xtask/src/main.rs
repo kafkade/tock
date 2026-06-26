@@ -8,6 +8,9 @@
 //! * `xcframework` — regenerate the `UniFFI` Swift bindings and build the
 //!   `TockFFI.xcframework` consumed by `bindings/swift`. See issue #119 and
 //!   ADR-005.
+//! * `i18n-check` — validate localization catalogs (id parity + parse).
+
+mod i18n_check;
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -34,6 +37,12 @@ fn main() {
         None | Some("help" | "-h" | "--help") => {
             print_help();
         }
+        Some("i18n-check") => {
+            if let Err(report) = i18n_check::run() {
+                eprintln!("i18n-check: FAILED\n{report}");
+                std::process::exit(1);
+            }
+        }
         Some("xcframework") => {
             if let Err(err) = run_xcframework() {
                 eprintln!("xtask: xcframework failed: {err}");
@@ -54,6 +63,7 @@ fn print_help() {
          USAGE:\n    cargo xtask <SUBCOMMAND>\n\n\
          SUBCOMMANDS:\n  \
            help           Show this message\n  \
+           i18n-check     Validate localization catalogs (id parity + parse)\n  \
            xcframework    Regenerate UniFFI Swift bindings + build TockFFI.xcframework\n\n\
          Future subcommands (per docs/architecture.md §4.4):\n  \
          check-purity, cli-snapshot, wasm-build"

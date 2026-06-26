@@ -1,0 +1,7 @@
+# Configuration for cargo-i18n / i18n-embed.
+# The fallback language is always fully translated and ships with every build.
+fallback_language = "en-US"
+
+[fluent]
+# Directory (relative to this crate root) holding `<lang>/*.ftl` assets.
+assets_dir = "i18n"
