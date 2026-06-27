@@ -1,7 +1,19 @@
 # ADR-010: SRP-6a authentication
 
-**Status:** Accepted  
+**Status:** Accepted (amended by [ADR-011](ADR-011-account-based-self-host-two-secret-auth.md))  
 **Date:** 2026-05-20
+
+> **Amended by [ADR-011](ADR-011-account-based-self-host-two-secret-auth.md):**
+> - The SRP private exponent `x` (and thus verifier `v = g^x`) now derives from the two-secret
+>   **Unlock Root Key (URK)** — `x = HKDF(URK, salt_srp, "Tock/v1/srp-x")` — instead of
+>   `x = H(salt_srp || H(username:password))`. A stolen verifier is therefore offline-crackable
+>   only by an attacker who also holds the 128-bit Secret Key.
+> - SRP-based accounts and sessions are now available in **self-hosted mode** (multi-user:
+>   admin + N users), not hosted mode only.
+> - The "out-of-band recovery (24-word recovery key)" note below is **superseded** by the
+>   Emergency Kit (see ADR-011).
+>
+> The SRP-6a protocol mechanics (registration, mutual-auth login, session key `K`) are unchanged.
 
 ## Context
 

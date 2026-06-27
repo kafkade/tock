@@ -1,7 +1,18 @@
 # ADR-002: End-to-end encryption with per-item envelope encryption
 
-**Status:** Accepted  
+**Status:** Accepted (amended by [ADR-011](ADR-011-account-based-self-host-two-secret-auth.md))  
 **Date:** 2026-05-20
+
+> **Amended by [ADR-011](ADR-011-account-based-self-host-two-secret-auth.md):**
+> - The password-only **Master Key** at the top of the hierarchy is **superseded** by a
+>   two-secret **Unlock Root Key (URK)** = `Argon2id(password) XOR HKDF(secret_key)`. MEK now
+>   derives from the URK, not from a password-only MK.
+> - The **24-word recovery key** and the vault-header `vk_recover_ct` escrow path described below
+>   are **superseded and removed**. The sole recovery path is the 1Password-style **Emergency Kit**
+>   (Secret Key + sign-in address). Losing the Secret Key with no Emergency Kit is unrecoverable
+>   by design.
+>
+> The rest of this ADR (per-item envelope encryption, size-bucket padding, AAD discipline) stands.
 
 ## Context
 
