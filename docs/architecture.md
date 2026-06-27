@@ -1343,6 +1343,53 @@ The resulting `K` (256 bits) is used as the input keying material for an HKDF th
 
 The server stores only `(account_id, salt_srp, v, role)` — never the password, the Secret Key, the URK, or enough to derive MEK or VK. The `role` (`admin` / `user`) governs account administration only and never grants access to any user's plaintext.
 
+### 5.7 Server account management (self-hosted)
+
+The `tock-server` crate owns the account/admin/user **model**; the SRP login
+handshake and session tokens of §5.6 layer on top of it (issue #130). Accounts
+are a first-class self-hosted feature — available in every server mode, not
+gated to hosted billing.
+
+**Storage.** A `PRAGMA user_version` migration runner adds an `accounts` table
+holding `(id, username, srp_salt, srp_verifier, srp_group, kdf_params, role,
+status, created_at)`, plus `server_settings` (registration policy) and
+`account_invites`. `srp_salt` / `srp_verifier` / `srp_group` / `kdf_params` are
+client-supplied and **opaque** to the server, stored verbatim so new devices and
+the login flow can re-derive. The server stores SRP **verifiers only** — never a
+password, Secret Key, URK, or 2SKD root.
+
+**First-run bootstrap (Immich pattern).** On a fresh instance the first
+registration is auto-promoted to `admin` and bypasses the policy/invite checks,
+so the instance can't be hijacked before setup. An offline
+`tock-server admin create-admin` CLI is the alternative for headless
+provisioning.
+
+**Registration policy.** `open` | `invite-only` | `disabled` (default
+`disabled`, Immich-style), configurable via the `TOCK_REGISTRATION_POLICY` env
+var at startup and the admin API at runtime. Because admins can't set passwords
+(zero-knowledge), "creating a user" mints a single-use **invite token**; the
+invitee completes registration with their own client-computed SRP credentials.
+
+**HTTP surface.**
+
+| Method · path                          | Auth          | Purpose                              |
+|----------------------------------------|---------------|--------------------------------------|
+| `POST /v1/accounts/register`           | rate-limited  | self-register (policy + bootstrap)   |
+| `GET /v1/admin/users`                  | admin token   | list accounts                        |
+| `POST /v1/admin/users`                 | admin token   | mint an invite                       |
+| `POST /v1/admin/users/:id/disable`     | admin token   | disable an account                   |
+| `POST /v1/admin/users/:id/enable`      | admin token   | re-enable an account                 |
+| `DELETE /v1/admin/users/:id`           | admin token   | delete an account                    |
+| `GET /v1/admin/settings`               | admin token   | read registration policy             |
+| `PUT /v1/admin/settings`               | admin token   | set registration policy              |
+
+Registration is rate-limited per client IP by the existing limiter
+(`quota.rs`). The admin API is guarded by an **interim admin bearer token**
+minted when an admin account is provisioned; issue #130 extends that guard to
+also accept SRP session tokens without changing the endpoints. Hosted billing
+endpoints (`POST /v1/accounts`, `GET /v1/accounts/:id`, `/usage`) remain gated
+to `--mode hosted`.
+
 ---
 
 ## 6. Sync Protocol Design

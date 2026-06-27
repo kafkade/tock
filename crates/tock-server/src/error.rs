@@ -25,6 +25,14 @@ pub enum Error {
     #[error("not found")]
     NotFound,
 
+    /// The request conflicts with existing state (e.g. duplicate username).
+    #[error("conflict: {0}")]
+    Conflict(String),
+
+    /// The caller is authenticated but lacks permission for the action.
+    #[error("forbidden: {0}")]
+    Forbidden(&'static str),
+
     /// Rate limit exceeded.
     #[allow(dead_code)]
     #[error("rate limit exceeded")]
@@ -53,6 +61,8 @@ impl IntoResponse for Error {
             Self::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, (*msg).to_string()),
             Self::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
             Self::NotFound => (StatusCode::NOT_FOUND, "not found".to_string()),
+            Self::Conflict(msg) => (StatusCode::CONFLICT, msg.clone()),
+            Self::Forbidden(msg) => (StatusCode::FORBIDDEN, (*msg).to_string()),
             Self::RateLimited => (
                 StatusCode::TOO_MANY_REQUESTS,
                 "rate limit exceeded".to_string(),

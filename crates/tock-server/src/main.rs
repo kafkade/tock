@@ -9,9 +9,11 @@
 //!
 //! ## Modes
 //!
-//! - `--mode self-hosted` (default): no accounts, no billing, no quotas.
-//! - `--mode hosted`: accounts, subscription tiers, rate limiting,
-//!   usage tracking, and metrics.
+//! - `--mode self-hosted` (default): first-class accounts (admin/user) with
+//!   SRP-verifier storage and a configurable registration policy; no billing,
+//!   no quotas.
+//! - `--mode hosted`: everything in self-hosted, plus billing accounts,
+//!   subscription tiers, usage tracking, and metrics.
 //!
 //! ## Routes
 //!
@@ -22,16 +24,26 @@
 //! - `GET /v1/vaults/:vault_id/events/pull` — pull events by cursor
 //! - `PUT /v1/vaults/:vault_id/onboarding/:device_id` — store pairing blob
 //! - `GET /v1/vaults/:vault_id/onboarding/:device_id` — retrieve pairing blob
-//! - `POST /v1/accounts` — create account (hosted mode only)
+//! - `POST /v1/accounts/register` — self-hosted account registration (SRP)
+//! - `GET|POST /v1/admin/users` — list users / mint invite (admin)
+//! - `DELETE /v1/admin/users/:id`, `POST …/disable`, `…/enable` — manage users
+//! - `GET|PUT /v1/admin/settings` — read/set registration policy (admin)
+//! - `POST /v1/accounts` — create billing account (hosted mode only)
 //! - `GET /v1/accounts/:id` — account info (hosted mode only)
 //! - `GET /v1/accounts/:id/usage` — usage stats (hosted mode only)
+//!
+//! ## Offline admin CLI
+//!
+//! - `tock-server admin create-admin --username <u>`
+//! - `tock-server admin list-users`
+//! - `tock-server admin reset-registration --policy <open|invite-only|disabled>`
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 
-use tock_server::ServerMode;
+use tock_server::{AdminCommand, RegistrationPolicy, ServerMode};
 
 /// tock-server — encrypted blob store for tock sync (AGPL-3.0-only).
 #[derive(Parser, Debug)]
@@ -42,17 +54,78 @@ struct Args {
     bind: SocketAddr,
 
     /// Directory for persistent data (`SQLite` database).
-    #[arg(long, default_value = "./data", env = "TOCK_DATA_DIR")]
+    #[arg(long, default_value = "./data", env = "TOCK_DATA_DIR", global = true)]
     data_dir: PathBuf,
 
     /// Server mode: `self-hosted` (default) or `hosted`.
     #[arg(long, default_value = "self-hosted", env = "TOCK_MODE")]
     mode: String,
+
+    /// Optional subcommand. With none, the server starts and serves requests.
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+/// Top-level subcommands.
+#[derive(Subcommand, Debug)]
+enum Command {
+    /// Offline admin operations on the server database (no running server).
+    Admin {
+        /// The admin action to perform.
+        #[command(subcommand)]
+        action: AdminAction,
+    },
+}
+
+/// Offline admin actions.
+#[derive(Subcommand, Debug)]
+enum AdminAction {
+    /// Provision an admin by minting an admin-role invite.
+    CreateAdmin {
+        /// Login identifier (email or username) for the admin.
+        #[arg(long)]
+        username: String,
+    },
+    /// List all accounts.
+    ListUsers,
+    /// Set the registration policy: `open`, `invite-only`, or `disabled`.
+    ResetRegistration {
+        /// The policy to apply.
+        #[arg(long)]
+        policy: String,
+    },
+}
+
+fn run_admin_command(data_dir: &std::path::Path, action: AdminAction) -> ! {
+    let cmd = match action {
+        AdminAction::CreateAdmin { username } => AdminCommand::CreateAdmin { username },
+        AdminAction::ListUsers => AdminCommand::ListUsers,
+        AdminAction::ResetRegistration { policy } => {
+            let Some(parsed) = RegistrationPolicy::from_str_opt(policy.trim()) else {
+                eprintln!(
+                    "error: unknown policy '{policy}', expected open | invite-only | disabled"
+                );
+                std::process::exit(1);
+            };
+            AdminCommand::ResetRegistration { policy: parsed }
+        }
+    };
+    match tock_server::run_admin(data_dir, cmd) {
+        Ok(()) => std::process::exit(0),
+        Err(e) => {
+            eprintln!("error: {e}");
+            std::process::exit(1);
+        }
+    }
 }
 
 #[allow(clippy::cognitive_complexity)]
 fn main() {
     let args = Args::parse();
+
+    if let Some(Command::Admin { action }) = args.command {
+        run_admin_command(&args.data_dir, action);
+    }
 
     let mode = ServerMode::from_str_opt(&args.mode).unwrap_or_else(|| {
         eprintln!(

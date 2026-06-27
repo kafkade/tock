@@ -15,44 +15,27 @@ pub struct ServerDb {
     conn: Mutex<Connection>,
 }
 
-#[allow(clippy::significant_drop_tightening)]
-impl ServerDb {
-    /// Open or create the server database at `path`.
-    ///
-    /// # Errors
-    /// Returns [`Error::Db`] on `SQLite` failure.
-    pub fn open(path: &Path) -> Result<Self, Error> {
-        let conn = Connection::open(path)?;
-        conn.execute_batch(
-            "PRAGMA journal_mode = WAL;
-             PRAGMA busy_timeout = 5000;
-             PRAGMA foreign_keys = ON;",
-        )?;
-        let db = Self {
-            conn: Mutex::new(conn),
-        };
-        db.migrate()?;
-        Ok(db)
-    }
+/// One numbered schema migration, applied in order and tracked via
+/// `PRAGMA user_version` (mirroring the `tock-storage` migration approach).
+struct Migration {
+    /// Monotonic version (matches `PRAGMA user_version` after apply).
+    version: u32,
+    /// SQL executed in a single transaction.
+    sql: &'static str,
+}
 
-    /// Open an in-memory database (for testing).
-    #[cfg(test)]
-    pub fn open_memory() -> Result<Self, Error> {
-        let conn = Connection::open_in_memory()?;
-        let db = Self {
-            conn: Mutex::new(conn),
-        };
-        db.migrate()?;
-        Ok(db)
-    }
-
-    fn migrate(&self) -> Result<(), Error> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| Error::Internal(e.to_string()))?;
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS vaults (
+/// All server migrations, in apply order.
+///
+/// - **v1** is the historical schema (idempotent `CREATE TABLE IF NOT EXISTS`)
+///   so pre-existing on-disk databases — which were created before
+///   `user_version` tracking — converge cleanly.
+/// - **v2** introduces the self-hosted account system (ADR-011 / issue #127):
+///   it rebuilds `accounts` with SRP-verifier storage, roles, and status, and
+///   adds `server_settings` (registration policy) and `account_invites`.
+const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        sql: "CREATE TABLE IF NOT EXISTS vaults (
                 id         BLOB PRIMARY KEY,
                 account_id TEXT,
                 created_at TEXT NOT NULL
@@ -100,7 +83,100 @@ impl ServerDb {
                 bytes_stored INTEGER NOT NULL DEFAULT 0,
                 event_count  INTEGER NOT NULL DEFAULT 0
             );",
+    },
+    Migration {
+        version: 2,
+        // Rebuild `accounts` into the self-hosted account model. The server
+        // stores SRP verifiers ONLY — never a password, Secret Key, or 2SKD
+        // root (ADR-011). `api_token` is now nullable: it carries the hosted
+        // billing bearer token AND the interim admin bearer token (issue #130
+        // replaces the latter with SRP session tokens). Existing billing rows
+        // are preserved as `role = 'user'`, `status = 'active'`.
+        sql: "ALTER TABLE accounts RENAME TO accounts_legacy;
+
+            CREATE TABLE accounts (
+                id           TEXT PRIMARY KEY,
+                username     TEXT NOT NULL UNIQUE,
+                srp_salt     BLOB,
+                srp_verifier BLOB,
+                srp_group    TEXT,
+                kdf_params   TEXT,
+                role         TEXT NOT NULL DEFAULT 'user',
+                status       TEXT NOT NULL DEFAULT 'active',
+                api_token    TEXT UNIQUE,
+                tier         TEXT NOT NULL DEFAULT 'free',
+                created_at   TEXT NOT NULL
+            );
+
+            INSERT INTO accounts
+                (id, username, api_token, tier, role, status, created_at)
+            SELECT id, email, api_token, tier, 'user', 'active', created_at
+            FROM accounts_legacy;
+
+            DROP TABLE accounts_legacy;
+
+            CREATE TABLE server_settings (
+                key   TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+
+            CREATE TABLE account_invites (
+                token      TEXT PRIMARY KEY,
+                username   TEXT,
+                role       TEXT NOT NULL DEFAULT 'user',
+                created_at TEXT NOT NULL,
+                used       INTEGER NOT NULL DEFAULT 0
+            );",
+    },
+];
+
+#[allow(clippy::significant_drop_tightening)]
+impl ServerDb {
+    /// Open or create the server database at `path`.
+    ///
+    /// # Errors
+    /// Returns [`Error::Db`] on `SQLite` failure.
+    pub fn open(path: &Path) -> Result<Self, Error> {
+        let conn = Connection::open(path)?;
+        conn.execute_batch(
+            "PRAGMA journal_mode = WAL;
+             PRAGMA busy_timeout = 5000;
+             PRAGMA foreign_keys = ON;",
         )?;
+        let db = Self {
+            conn: Mutex::new(conn),
+        };
+        db.migrate()?;
+        Ok(db)
+    }
+
+    /// Open an in-memory database (for testing).
+    #[cfg(test)]
+    pub fn open_memory() -> Result<Self, Error> {
+        let conn = Connection::open_in_memory()?;
+        let db = Self {
+            conn: Mutex::new(conn),
+        };
+        db.migrate()?;
+        Ok(db)
+    }
+
+    fn migrate(&self) -> Result<(), Error> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))?;
+        let current: u32 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        for migration in MIGRATIONS {
+            if migration.version <= current {
+                continue;
+            }
+            let tx = conn.unchecked_transaction()?;
+            tx.execute_batch(migration.sql)?;
+            // `PRAGMA user_version` does not accept bound parameters.
+            tx.execute_batch(&format!("PRAGMA user_version = {};", migration.version))?;
+            tx.commit()?;
+        }
         Ok(())
     }
 
@@ -396,8 +472,8 @@ impl ServerDb {
             .format(&time::format_description::well_known::Rfc3339)
             .unwrap_or_default();
         conn.execute(
-            "INSERT INTO accounts (id, email, api_token, tier, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT INTO accounts (id, username, api_token, tier, role, status, created_at)
+             VALUES (?1, ?2, ?3, ?4, 'user', 'active', ?5)",
             params![account_id, email, api_token, tier.as_str(), now],
         )?;
         conn.execute(
@@ -418,7 +494,7 @@ impl ServerDb {
             .map_err(|e| Error::Internal(e.to_string()))?;
         let row: Option<(String, String)> = conn
             .query_row(
-                "SELECT email, tier FROM accounts WHERE id = ?1",
+                "SELECT username, tier FROM accounts WHERE id = ?1",
                 params![account_id],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
@@ -490,6 +566,348 @@ impl ServerDb {
         )?;
         Ok(())
     }
+
+    // ── Self-hosted account system (issue #127 / ADR-011) ────────────
+
+    /// Total number of accounts. Zero means the instance is unbootstrapped.
+    pub fn account_count(&self) -> Result<i64, Error> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))?;
+        let count: i64 = conn.query_row("SELECT COUNT(*) FROM accounts", [], |r| r.get(0))?;
+        Ok(count)
+    }
+
+    /// Register a new self-hosted account, storing its SRP verifier material.
+    ///
+    /// Enforces the supplied registration `policy` and consumes an invite when
+    /// one is required. The first account on a fresh instance is bootstrapped
+    /// as an `admin` (Immich pattern), bypassing the policy. When the resulting
+    /// account is an admin, an interim admin bearer token is minted and
+    /// returned (issue #130 replaces this with SRP session tokens).
+    ///
+    /// The server never receives a password, Secret Key, URK, or `x` — only the
+    /// public verifier and its salt/parameters.
+    pub fn register_account(
+        &self,
+        new: &NewAccount<'_>,
+        policy: crate::accounts::RegistrationPolicy,
+    ) -> Result<RegisterOutcome, Error> {
+        use crate::accounts::RegistrationPolicy;
+
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))?;
+        let tx = conn.unchecked_transaction()?;
+
+        let count: i64 = tx.query_row("SELECT COUNT(*) FROM accounts", [], |r| r.get(0))?;
+        let bootstrap = count == 0;
+
+        let role = if bootstrap {
+            "admin".to_string()
+        } else {
+            match policy {
+                RegistrationPolicy::Open => match new.invite_token {
+                    Some(token) => Self::consume_invite_tx(&tx, token, new.username)?,
+                    None => "user".to_string(),
+                },
+                RegistrationPolicy::InviteOnly | RegistrationPolicy::Disabled => {
+                    let token = new
+                        .invite_token
+                        .ok_or(Error::Forbidden("registration requires a valid invite"))?;
+                    Self::consume_invite_tx(&tx, token, new.username)?
+                }
+            }
+        };
+
+        let exists: bool = tx.query_row(
+            "SELECT COUNT(*) > 0 FROM accounts WHERE username = ?1",
+            params![new.username],
+            |r| r.get(0),
+        )?;
+        if exists {
+            return Err(Error::Conflict(format!(
+                "username already registered: {}",
+                new.username
+            )));
+        }
+
+        let account_id = uuid::Uuid::now_v7().to_string();
+        let now = rfc3339_now();
+        let admin_token = if role == "admin" {
+            Some(format!("adm_{}", uuid::Uuid::now_v7().as_hyphenated()))
+        } else {
+            None
+        };
+
+        tx.execute(
+            "INSERT INTO accounts
+               (id, username, srp_salt, srp_verifier, srp_group, kdf_params,
+                role, status, api_token, tier, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'active', ?8, 'free', ?9)",
+            params![
+                account_id,
+                new.username,
+                new.srp_salt,
+                new.srp_verifier,
+                new.srp_group,
+                new.kdf_params,
+                role,
+                admin_token,
+                now,
+            ],
+        )?;
+        tx.commit()?;
+
+        Ok(RegisterOutcome {
+            account_id,
+            role,
+            status: "active".to_string(),
+            admin_token,
+        })
+    }
+
+    /// Validate and consume an invite token, returning the role it grants.
+    fn consume_invite_tx(tx: &Connection, token: &str, username: &str) -> Result<String, Error> {
+        let row: Option<(Option<String>, String, i64)> = tx
+            .query_row(
+                "SELECT username, role, used FROM account_invites WHERE token = ?1",
+                params![token],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .optional()?;
+        let (pinned, role, used) = row.ok_or(Error::Forbidden("invalid invite token"))?;
+        if used != 0 {
+            return Err(Error::Forbidden("invite token already used"));
+        }
+        if pinned.is_some_and(|p| p != username) {
+            return Err(Error::Forbidden(
+                "invite token does not match this username",
+            ));
+        }
+        tx.execute(
+            "UPDATE account_invites SET used = 1 WHERE token = ?1",
+            params![token],
+        )?;
+        Ok(role)
+    }
+
+    /// Create an invite, optionally pinned to a `username`, granting `role`.
+    /// Returns the opaque invite token.
+    pub fn create_invite(&self, username: Option<&str>, role: &str) -> Result<String, Error> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))?;
+        let token = format!("inv_{}", uuid::Uuid::now_v7().as_hyphenated());
+        conn.execute(
+            "INSERT INTO account_invites (token, username, role, created_at, used)
+             VALUES (?1, ?2, ?3, ?4, 0)",
+            params![token, username, role, rfc3339_now()],
+        )?;
+        Ok(token)
+    }
+
+    /// List all accounts (no secret material) for admin endpoints / CLI.
+    pub fn list_users(&self) -> Result<Vec<UserRecord>, Error> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))?;
+        let mut stmt = conn.prepare(
+            "SELECT id, username, role, status, created_at
+             FROM accounts ORDER BY created_at ASC",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(UserRecord {
+                id: r.get(0)?,
+                username: r.get(1)?,
+                role: r.get(2)?,
+                status: r.get(3)?,
+                created_at: r.get(4)?,
+            })
+        })?;
+        let mut users = Vec::new();
+        for row in rows {
+            users.push(row?);
+        }
+        Ok(users)
+    }
+
+    /// Set an account's status (`active` / `disabled`). Returns `false` if no
+    /// such account exists.
+    pub fn set_user_status(&self, account_id: &str, status: &str) -> Result<bool, Error> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))?;
+        let updated = conn.execute(
+            "UPDATE accounts SET status = ?2 WHERE id = ?1",
+            params![account_id, status],
+        )?;
+        Ok(updated > 0)
+    }
+
+    /// Delete an account. Returns `false` if no such account exists.
+    pub fn delete_user(&self, account_id: &str) -> Result<bool, Error> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))?;
+        let deleted = conn.execute("DELETE FROM accounts WHERE id = ?1", params![account_id])?;
+        Ok(deleted > 0)
+    }
+
+    /// Resolve an active admin account id from its interim admin bearer token.
+    ///
+    /// This is the authorization seam for the admin API. Issue #130 will extend
+    /// admin authorization to accept SRP session tokens; the admin endpoints
+    /// themselves do not change.
+    pub fn admin_account_id_by_token(&self, token: &str) -> Result<Option<String>, Error> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))?;
+        conn.query_row(
+            "SELECT id FROM accounts
+             WHERE api_token = ?1 AND role = 'admin' AND status = 'active'",
+            params![token],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(Into::into)
+    }
+
+    /// The current registration policy (defaults to `disabled`).
+    pub fn registration_policy(&self) -> Result<crate::accounts::RegistrationPolicy, Error> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))?;
+        let value: Option<String> = conn
+            .query_row(
+                "SELECT value FROM server_settings WHERE key = 'registration_policy'",
+                [],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(value
+            .as_deref()
+            .and_then(crate::accounts::RegistrationPolicy::from_str_opt)
+            .unwrap_or(crate::accounts::RegistrationPolicy::Disabled))
+    }
+
+    /// Persist the registration policy.
+    pub fn set_registration_policy(
+        &self,
+        policy: crate::accounts::RegistrationPolicy,
+    ) -> Result<(), Error> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))?;
+        conn.execute(
+            "INSERT INTO server_settings (key, value) VALUES ('registration_policy', ?1)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![policy.as_str()],
+        )?;
+        Ok(())
+    }
+
+    /// Seam for issue #130's SRP login: fetch the stored verifier material for
+    /// a username. Disabled accounts and accounts without SRP credentials
+    /// (e.g. hosted billing rows) are excluded.
+    #[allow(dead_code)]
+    pub fn get_srp_credentials(&self, username: &str) -> Result<Option<SrpCredentials>, Error> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))?;
+        conn.query_row(
+            "SELECT id, srp_salt, srp_verifier, srp_group FROM accounts
+             WHERE username = ?1 AND status = 'active'
+               AND srp_salt IS NOT NULL AND srp_verifier IS NOT NULL",
+            params![username],
+            |r| {
+                Ok(SrpCredentials {
+                    account_id: r.get::<_, String>(0)?,
+                    srp_salt: r.get::<_, Vec<u8>>(1)?,
+                    srp_verifier: r.get::<_, Vec<u8>>(2)?,
+                    srp_group: r.get::<_, Option<String>>(3)?.unwrap_or_default(),
+                })
+            },
+        )
+        .optional()
+        .map_err(Into::into)
+    }
+}
+
+/// Format the current instant as an RFC 3339 timestamp.
+fn rfc3339_now() -> String {
+    time::OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap_or_default()
+}
+
+/// SRP registration material + identity for a new self-hosted account.
+///
+/// All fields are client-supplied and opaque to the server, which stores them
+/// verbatim so new devices and issue #130's login flow can re-derive.
+pub struct NewAccount<'a> {
+    /// Login identifier (an email or a bare username).
+    pub username: &'a str,
+    /// Random SRP salt (`salt_srp`).
+    pub srp_salt: &'a [u8],
+    /// SRP verifier `v = g^x mod N` (big-endian), from `tock_crypto::srp`.
+    pub srp_verifier: &'a [u8],
+    /// SRP group/hash identifier (e.g. `RFC5054-4096-SHA256`).
+    pub srp_group: &'a str,
+    /// Opaque KDF parameters (JSON) the client needs to re-derive the URK.
+    pub kdf_params: &'a str,
+    /// Optional invite token (required under invite-only / disabled policies).
+    pub invite_token: Option<&'a str>,
+}
+
+/// Result of a successful [`ServerDb::register_account`].
+pub struct RegisterOutcome {
+    /// Server-assigned account id (`UUIDv7`).
+    pub account_id: String,
+    /// Granted role (`admin` or `user`).
+    pub role: String,
+    /// Account status (`active`).
+    pub status: String,
+    /// Interim admin bearer token, present only when the account is an admin.
+    pub admin_token: Option<String>,
+}
+
+/// A non-secret account row as listed by admin endpoints / CLI.
+pub struct UserRecord {
+    /// Account id.
+    pub id: String,
+    /// Login identifier.
+    pub username: String,
+    /// Role (`admin` or `user`).
+    pub role: String,
+    /// Status (`active` or `disabled`).
+    pub status: String,
+    /// RFC 3339 creation timestamp.
+    pub created_at: String,
+}
+
+/// Stored SRP verifier material for an account — the seam consumed by issue
+/// #130's login handshake. None of these fields are secret.
+#[allow(dead_code)]
+pub struct SrpCredentials {
+    /// Account id bound into the SRP proof.
+    pub account_id: String,
+    /// Random SRP salt (`salt_srp`).
+    pub srp_salt: Vec<u8>,
+    /// SRP verifier `v = g^x mod N` (big-endian).
+    pub srp_verifier: Vec<u8>,
+    /// SRP group/hash identifier.
+    pub srp_group: String,
 }
 
 /// An event stored on the server.
@@ -651,5 +1069,307 @@ mod tests {
             db.claim_vault_for_account(&vault, &aid2),
             Err(Error::Unauthorized(_))
         ));
+    }
+
+    // ── Self-hosted account system (issue #127) ──────────────────────
+
+    use crate::accounts::RegistrationPolicy;
+
+    fn sample_account<'a>(username: &'a str, invite: Option<&'a str>) -> NewAccount<'a> {
+        NewAccount {
+            username,
+            srp_salt: &[0xAA; 16],
+            srp_verifier: &[0xBB; 64],
+            srp_group: "RFC5054-4096-SHA256",
+            kdf_params: "argon2id$t=3$m=65536$p=1",
+            invite_token: invite,
+        }
+    }
+
+    #[test]
+    fn first_registration_bootstraps_admin() {
+        let db = ServerDb::open_memory().expect("open");
+        assert_eq!(db.account_count().expect("count"), 0);
+
+        let out = db
+            .register_account(&sample_account("alice", None), RegistrationPolicy::Disabled)
+            .expect("register");
+
+        assert_eq!(out.role, "admin");
+        assert_eq!(out.status, "active");
+        let token = out.admin_token.expect("admin token minted");
+        assert!(token.starts_with("adm_"));
+        assert_eq!(db.account_count().expect("count"), 1);
+
+        // The minted token resolves back to the admin account.
+        let resolved = db
+            .admin_account_id_by_token(&token)
+            .expect("lookup")
+            .expect("present");
+        assert_eq!(resolved, out.account_id);
+    }
+
+    #[test]
+    fn disabled_policy_requires_invite_after_bootstrap() {
+        let db = ServerDb::open_memory().expect("open");
+        db.register_account(&sample_account("admin", None), RegistrationPolicy::Disabled)
+            .expect("bootstrap");
+
+        // No invite → forbidden.
+        assert!(matches!(
+            db.register_account(&sample_account("bob", None), RegistrationPolicy::Disabled),
+            Err(Error::Forbidden(_))
+        ));
+
+        // With a valid invite → ordinary user.
+        let invite = db.create_invite(None, "user").expect("invite");
+        let out = db
+            .register_account(
+                &sample_account("bob", Some(&invite)),
+                RegistrationPolicy::Disabled,
+            )
+            .expect("register with invite");
+        assert_eq!(out.role, "user");
+        assert!(out.admin_token.is_none());
+    }
+
+    #[test]
+    fn open_policy_allows_registration_without_invite() {
+        let db = ServerDb::open_memory().expect("open");
+        db.register_account(&sample_account("admin", None), RegistrationPolicy::Open)
+            .expect("bootstrap");
+
+        let out = db
+            .register_account(&sample_account("carol", None), RegistrationPolicy::Open)
+            .expect("open register");
+        assert_eq!(out.role, "user");
+    }
+
+    #[test]
+    fn invite_only_policy_requires_invite() {
+        let db = ServerDb::open_memory().expect("open");
+        db.register_account(
+            &sample_account("admin", None),
+            RegistrationPolicy::InviteOnly,
+        )
+        .expect("bootstrap");
+
+        assert!(matches!(
+            db.register_account(
+                &sample_account("dave", None),
+                RegistrationPolicy::InviteOnly
+            ),
+            Err(Error::Forbidden(_))
+        ));
+    }
+
+    #[test]
+    fn invite_is_single_use() {
+        let db = ServerDb::open_memory().expect("open");
+        db.register_account(&sample_account("admin", None), RegistrationPolicy::Disabled)
+            .expect("bootstrap");
+        let invite = db.create_invite(None, "user").expect("invite");
+
+        db.register_account(
+            &sample_account("first", Some(&invite)),
+            RegistrationPolicy::Disabled,
+        )
+        .expect("first use");
+
+        assert!(matches!(
+            db.register_account(
+                &sample_account("second", Some(&invite)),
+                RegistrationPolicy::Disabled,
+            ),
+            Err(Error::Forbidden(_))
+        ));
+    }
+
+    #[test]
+    fn invite_can_grant_admin_role() {
+        let db = ServerDb::open_memory().expect("open");
+        db.register_account(&sample_account("admin", None), RegistrationPolicy::Disabled)
+            .expect("bootstrap");
+        let invite = db.create_invite(Some("eve"), "admin").expect("invite");
+
+        // Pinned to "eve": a different username is rejected.
+        assert!(matches!(
+            db.register_account(
+                &sample_account("mallory", Some(&invite)),
+                RegistrationPolicy::Disabled,
+            ),
+            Err(Error::Forbidden(_))
+        ));
+
+        let out = db
+            .register_account(
+                &sample_account("eve", Some(&invite)),
+                RegistrationPolicy::Disabled,
+            )
+            .expect("admin invite register");
+        assert_eq!(out.role, "admin");
+        assert!(out.admin_token.is_some());
+    }
+
+    #[test]
+    fn duplicate_username_conflicts() {
+        let db = ServerDb::open_memory().expect("open");
+        db.register_account(&sample_account("admin", None), RegistrationPolicy::Open)
+            .expect("bootstrap");
+        db.register_account(&sample_account("frank", None), RegistrationPolicy::Open)
+            .expect("first");
+
+        assert!(matches!(
+            db.register_account(&sample_account("frank", None), RegistrationPolicy::Open),
+            Err(Error::Conflict(_))
+        ));
+    }
+
+    #[test]
+    fn disable_enable_and_delete_user() {
+        let db = ServerDb::open_memory().expect("open");
+        db.register_account(&sample_account("admin", None), RegistrationPolicy::Open)
+            .expect("bootstrap");
+        let user = db
+            .register_account(&sample_account("grace", None), RegistrationPolicy::Open)
+            .expect("user");
+
+        assert!(
+            db.set_user_status(&user.account_id, "disabled")
+                .expect("disable")
+        );
+        let listed = db.list_users().expect("list");
+        let row = listed
+            .iter()
+            .find(|u| u.id == user.account_id)
+            .expect("present");
+        assert_eq!(row.status, "disabled");
+
+        assert!(
+            db.set_user_status(&user.account_id, "active")
+                .expect("enable")
+        );
+        assert!(db.delete_user(&user.account_id).expect("delete"));
+        assert!(!db.delete_user(&user.account_id).expect("delete again"));
+    }
+
+    #[test]
+    fn disabling_admin_revokes_admin_token() {
+        let db = ServerDb::open_memory().expect("open");
+        let out = db
+            .register_account(&sample_account("admin", None), RegistrationPolicy::Open)
+            .expect("bootstrap");
+        let token = out.admin_token.expect("token");
+
+        assert!(
+            db.admin_account_id_by_token(&token)
+                .expect("lookup")
+                .is_some()
+        );
+
+        db.set_user_status(&out.account_id, "disabled")
+            .expect("disable");
+        assert!(
+            db.admin_account_id_by_token(&token)
+                .expect("lookup")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn srp_credentials_seam_excludes_billing_and_disabled() {
+        let db = ServerDb::open_memory().expect("open");
+        let out = db
+            .register_account(&sample_account("heidi", None), RegistrationPolicy::Open)
+            .expect("register");
+
+        let creds = db
+            .get_srp_credentials("heidi")
+            .expect("query")
+            .expect("present");
+        assert_eq!(creds.account_id, out.account_id);
+        assert_eq!(creds.srp_salt, vec![0xAA; 16]);
+        assert_eq!(creds.srp_verifier, vec![0xBB; 64]);
+        assert_eq!(creds.srp_group, "RFC5054-4096-SHA256");
+
+        // Hosted billing rows have no SRP material.
+        db.create_account("billing@example.com", crate::billing::Tier::Personal)
+            .expect("billing");
+        assert!(
+            db.get_srp_credentials("billing@example.com")
+                .expect("query")
+                .is_none()
+        );
+
+        // Disabled accounts are excluded from the login seam.
+        db.set_user_status(&out.account_id, "disabled")
+            .expect("disable");
+        assert!(db.get_srp_credentials("heidi").expect("query").is_none());
+    }
+
+    #[test]
+    fn registration_policy_defaults_to_disabled_and_persists() {
+        let db = ServerDb::open_memory().expect("open");
+        assert_eq!(
+            db.registration_policy().expect("policy"),
+            RegistrationPolicy::Disabled
+        );
+
+        db.set_registration_policy(RegistrationPolicy::Open)
+            .expect("set");
+        assert_eq!(
+            db.registration_policy().expect("policy"),
+            RegistrationPolicy::Open
+        );
+
+        // Upsert (not duplicate insert) on second write.
+        db.set_registration_policy(RegistrationPolicy::InviteOnly)
+            .expect("set 2");
+        assert_eq!(
+            db.registration_policy().expect("policy"),
+            RegistrationPolicy::InviteOnly
+        );
+    }
+
+    #[test]
+    fn migration_preserves_legacy_billing_account() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let path = tmp.path().join("legacy.db");
+
+        // Build a pre-#127 database: v1 schema + a legacy billing row.
+        {
+            let conn = Connection::open(&path).expect("open raw");
+            conn.execute_batch(MIGRATIONS[0].sql).expect("v1 schema");
+            conn.execute_batch("PRAGMA user_version = 1;")
+                .expect("stamp v1");
+            conn.execute(
+                "INSERT INTO accounts (id, email, api_token, tier, created_at)
+                 VALUES ('acct-legacy', 'legacy@example.com', 'tok_legacy', 'personal', '2024-01-01T00:00:00Z')",
+                [],
+            )
+            .expect("insert legacy");
+        }
+
+        // Opening through ServerDb runs the v2 migration.
+        let db = ServerDb::open(&path).expect("open + migrate");
+
+        let users = db.list_users().expect("list");
+        let row = users.iter().find(|u| u.id == "acct-legacy").expect("kept");
+        assert_eq!(row.username, "legacy@example.com");
+        assert_eq!(row.role, "user");
+        assert_eq!(row.status, "active");
+
+        // Hosted billing lookups still resolve via the preserved token.
+        let resolved = db
+            .account_id_by_api_token("tok_legacy")
+            .expect("lookup")
+            .expect("present");
+        assert_eq!(resolved, "acct-legacy");
+
+        // New v2 tables exist and behave.
+        assert_eq!(
+            db.registration_policy().expect("policy"),
+            RegistrationPolicy::Disabled
+        );
     }
 }
