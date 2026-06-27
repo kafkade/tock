@@ -14,8 +14,7 @@ pub struct AppState {
     pub(crate) db: Arc<ServerDb>,
     /// Operating mode (`self-hosted` or `hosted`).
     pub(crate) mode: ServerMode,
-    /// Per-account rate limiter (only enforced in hosted mode).
-    #[allow(dead_code)]
+    /// Per-account / per-client rate limiter (registration + hosted requests).
     pub(crate) rate_limiter: Arc<RateLimiter>,
     /// Global metric counters.
     pub(crate) metrics: Arc<Metrics>,
