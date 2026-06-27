@@ -7,11 +7,15 @@
 //! ## Modules
 //!
 //! - [`aead`]    — AES-256-GCM authenticated encryption.
-//! - [`kdf`]     — Argon2id password hashing and HKDF-SHA256 key derivation.
+//! - [`base32`]  — Crockford Base32 for human-transcribable secrets.
+//! - [`kdf`]     — Argon2id password hashing, HKDF-SHA256 key derivation,
+//!   and two-secret key derivation (2SKD).
 //! - [`keyexchange`] — X25519 Diffie-Hellman.
 //! - [`signature`]   — Ed25519 signing and verification.
 //! - [`secret`]  — `SecretBytes<N>` wrapper with zeroize-on-drop,
 //!   constant-time equality, and redacted `Debug`.
+//! - [`secret_key`] — account `SecretKey` (the "something you have"
+//!   factor) and its Emergency-Kit encoding.
 //! - [`random`]  — fallible OS RNG helper.
 //! - [`error`]   — crate-wide [`Error`] enum.
 //!
@@ -29,12 +33,15 @@
 #![forbid(unsafe_code)]
 
 pub mod aead;
+pub mod base32;
 pub mod error;
 pub mod kdf;
 pub mod keyexchange;
 pub mod random;
 pub mod secret;
+pub mod secret_key;
 pub mod signature;
 
 pub use error::Error;
 pub use secret::SecretBytes;
+pub use secret_key::SecretKey;

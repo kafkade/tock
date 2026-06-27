@@ -30,7 +30,7 @@ final class TockSwiftTests: XCTestCase {
     func testCreateOpenLockRoundTrip() async throws {
         let path = try makeVaultPath()
 
-        let ws = try await TockWorkspace.create(path: path, password: Self.password)
+        let (ws, secretKey) = try await TockWorkspace.create(path: path, password: Self.password)
         XCTAssertEqual(ws.path, path)
         try await ws.lock()
 
@@ -44,17 +44,22 @@ final class TockSwiftTests: XCTestCase {
             }
         }
 
-        // Reopen with the right password succeeds.
-        let reopened = try await TockWorkspace.open(path: path, password: Self.password)
+        // Reopen with the right password and Secret Key succeeds.
+        let reopened = try await TockWorkspace.open(
+            path: path, password: Self.password, secretKey: secretKey
+        )
         XCTAssertEqual(reopened.path, path)
     }
 
     func testOpenWrongPasswordThrows() async throws {
         let path = try makeVaultPath()
-        try await TockWorkspace.create(path: path, password: Self.password).lock()
+        let (ws, secretKey) = try await TockWorkspace.create(path: path, password: Self.password)
+        try await ws.lock()
 
         do {
-            _ = try await TockWorkspace.open(path: path, password: Data("wrong".utf8))
+            _ = try await TockWorkspace.open(
+                path: path, password: Data("wrong".utf8), secretKey: secretKey
+            )
             XCTFail("expected open to throw on wrong password")
         } catch let error as TockError {
             guard case .InvalidCredentials = error else {
@@ -66,7 +71,7 @@ final class TockSwiftTests: XCTestCase {
     // MARK: - Tasks (the acceptance round-trip)
 
     func testTaskRoundTrip() async throws {
-        let ws = try await TockWorkspace.create(path: makeVaultPath(), password: Self.password)
+        let (ws, _) = try await TockWorkspace.create(path: makeVaultPath(), password: Self.password)
 
         let task = try await ws.addTask(
             TockNewTask(
@@ -135,7 +140,7 @@ final class TockSwiftTests: XCTestCase {
     // MARK: - Projects & areas
 
     func testProjectAndAreaCrud() async throws {
-        let ws = try await TockWorkspace.create(path: makeVaultPath(), password: Self.password)
+        let (ws, _) = try await TockWorkspace.create(path: makeVaultPath(), password: Self.password)
 
         let area = try await ws.addArea(TockNewArea(name: "Health", color: "#00FF00"))
         XCTAssertEqual(area.name, "Health")
@@ -156,7 +161,7 @@ final class TockSwiftTests: XCTestCase {
     // MARK: - Tags
 
     func testTagsList() async throws {
-        let ws = try await TockWorkspace.create(path: makeVaultPath(), password: Self.password)
+        let (ws, _) = try await TockWorkspace.create(path: makeVaultPath(), password: Self.password)
         _ = try await ws.addTask(
             TockNewTask(
                 title: "Tagged",
@@ -182,7 +187,7 @@ final class TockSwiftTests: XCTestCase {
     // MARK: - Time tracking
 
     func testTimeTracking() async throws {
-        let ws = try await TockWorkspace.create(path: makeVaultPath(), password: Self.password)
+        let (ws, _) = try await TockWorkspace.create(path: makeVaultPath(), password: Self.password)
 
         let block = try await ws.startTimer(
             TockNewTimeBlock(title: "Coding", taskSid: nil, projectId: nil, notes: nil)
@@ -203,7 +208,7 @@ final class TockSwiftTests: XCTestCase {
     // MARK: - Focus sessions
 
     func testFocusLifecycle() async throws {
-        let ws = try await TockWorkspace.create(path: makeVaultPath(), password: Self.password)
+        let (ws, _) = try await TockWorkspace.create(path: makeVaultPath(), password: Self.password)
 
         let session = try await ws.startFocus(
             TockNewFocusSession(
@@ -242,7 +247,7 @@ final class TockSwiftTests: XCTestCase {
     // MARK: - Habits
 
     func testHabitLifecycle() async throws {
-        let ws = try await TockWorkspace.create(path: makeVaultPath(), password: Self.password)
+        let (ws, _) = try await TockWorkspace.create(path: makeVaultPath(), password: Self.password)
 
         let habit = try await ws.addHabit(
             TockNewHabit(

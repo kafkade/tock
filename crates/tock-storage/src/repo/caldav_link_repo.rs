@@ -259,7 +259,7 @@ mod tests {
     fn setup() -> (TempDir, vault::OpenVault) {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("test.db");
-        let v = vault::init(&path, b"password123").expect("vault init");
+        let (v, _sk) = vault::init(&path, b"password123").expect("vault init");
         (dir, v)
     }
 

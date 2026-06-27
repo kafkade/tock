@@ -33,12 +33,13 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
     use tock_core::event::{EntityKind, EventOp, VectorClock};
+    use tock_crypto::SecretKey;
     use uuid::Uuid;
 
     fn write_then_read_one() {
         let dir = tempdir().expect("tempdir");
         let path = dir.path().join("v.tockvault");
-        let v = init(&path, b"pw").expect("init");
+        let (v, _sk) = init(&path, b"pw").expect("init");
         let device_id = v.local_device().device_id;
         let entity = Uuid::now_v7();
         let log = EventLog::new(&v);
@@ -62,13 +63,13 @@ mod tests {
     fn vault_init_status_lock_reopen_roundtrip() {
         let dir = tempdir().expect("tempdir");
         let path = dir.path().join("v.tockvault");
-        let v = init(&path, b"hunter2").expect("init");
+        let (v, sk) = init(&path, b"hunter2").expect("init");
         let vault_id = v.header().vault_id;
         let stat_before = status(&path).expect("status");
         assert_eq!(stat_before.vault_id, vault_id);
         v.lock();
 
-        let v2 = open(&path, b"hunter2").expect("open");
+        let v2 = open(&path, b"hunter2", &sk).expect("open");
         assert_eq!(v2.header().vault_id, vault_id);
     }
 
@@ -76,8 +77,9 @@ mod tests {
     fn wrong_password_is_invalid_credentials() {
         let dir = tempdir().expect("tempdir");
         let path = dir.path().join("v.tockvault");
-        init(&path, b"hunter2").expect("init").lock();
-        match open(&path, b"wrong") {
+        let (v, sk) = init(&path, b"hunter2").expect("init");
+        v.lock();
+        match open(&path, b"wrong", &sk) {
             Err(Error::InvalidVaultOrCredentials) => {}
             other => panic!("expected InvalidVaultOrCredentials, got {other:?}"),
         }
@@ -87,7 +89,8 @@ mod tests {
     fn missing_file_is_not_found() {
         let dir = tempdir().expect("tempdir");
         let path = dir.path().join("nope.tockvault");
-        assert!(matches!(open(&path, b"pw"), Err(Error::NotFound)));
+        let sk = SecretKey::from_bytes([0; 16]);
+        assert!(matches!(open(&path, b"pw", &sk), Err(Error::NotFound)));
         assert!(matches!(status(&path), Err(Error::NotFound)));
     }
 
@@ -100,7 +103,7 @@ mod tests {
     fn tampered_payload_fails_read() {
         let dir = tempdir().expect("tempdir");
         let path = dir.path().join("v.tockvault");
-        let v = init(&path, b"pw").expect("init");
+        let (v, _sk) = init(&path, b"pw").expect("init");
         let device_id = v.local_device().device_id;
         let entity = Uuid::now_v7();
         let log = EventLog::new(&v);
@@ -132,7 +135,7 @@ mod tests {
     fn plaintext_absent_from_disk_after_append() {
         let dir = tempdir().expect("tempdir");
         let path = dir.path().join("v.tockvault");
-        let v = init(&path, b"pw").expect("init");
+        let (v, _sk) = init(&path, b"pw").expect("init");
         let device_id = v.local_device().device_id;
         let entity = Uuid::now_v7();
         let log = EventLog::new(&v);

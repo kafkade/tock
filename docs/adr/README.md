@@ -16,7 +16,7 @@ This directory contains Architecture Decision Records for the Tock project. Each
 | [ADR-008](ADR-008-unified-domain-model.md) | Four unified domains — tasks, habits, time tracking, focus | Accepted |
 | [ADR-009](ADR-009-natural-language-cli.md) | Natural language CLI with dual-mode parsing | Accepted |
 | [ADR-010](ADR-010-srp-authentication.md) | SRP-6a authentication | Accepted (amended by ADR-011) |
-| [ADR-011](ADR-011-account-based-self-host-two-secret-auth.md) | Account-based self-host with two-secret (1Password-style) auth | Proposed |
+| [ADR-011](ADR-011-account-based-self-host-two-secret-auth.md) | Account-based self-host with two-secret (1Password-style) auth | Accepted (2SKD core landed in #126) |
 
 ## Categories
 

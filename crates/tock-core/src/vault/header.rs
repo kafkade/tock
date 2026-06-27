@@ -25,11 +25,20 @@ use crate::Error;
 pub const MAGIC: [u8; 4] = *b"KAFD";
 
 /// Current on-disk vault format version.
-pub const FORMAT_VERSION: u16 = 1;
+///
+/// Bumped to `2` for the two-secret key derivation (2SKD, ADR-011):
+/// the header now carries `account_id` and `kdf_version`, and the key
+/// hierarchy roots in the Unlock Root Key (password + Secret Key)
+/// instead of the password alone.
+pub const FORMAT_VERSION: u16 = 2;
 
 /// Lowest format version this build can open. Files with a higher
 /// `format_version` than [`FORMAT_VERSION`] are refused.
-pub const MIN_COMPAT_VERSION: u16 = 1;
+///
+/// 2SKD vaults are not backward-compatible with password-only `v1`
+/// vaults; those must be re-initialized (pre-1.0, no automatic
+/// migration). See [`VaultHeader::from_meta`].
+pub const MIN_COMPAT_VERSION: u16 = 2;
 
 /// Storage layout marker for this build.
 ///
@@ -60,6 +69,12 @@ pub struct VaultHeader {
     pub min_compatible_version: u16,
     /// Globally unique vault identifier (`UUIDv7`).
     pub vault_id: Uuid,
+    /// Server-assigned account identifier this vault belongs to
+    /// (`UUIDv7`). Bound into the 2SKD Secret-Key step and the wrap AAD.
+    pub account_id: Uuid,
+    /// Two-secret KDF version. Selects Argon2id parameters and the 2SKD
+    /// `info` labels; bumping it is a forward-compatible re-wrap.
+    pub kdf_version: u16,
     /// Salt for the password → MK Argon2id step (16 bytes).
     pub kdf_salt: [u8; 16],
     /// Salt for the MK → MEK HKDF step (32 bytes).
@@ -94,6 +109,8 @@ impl VaultHeader {
     /// || format_version u16
     /// || min_compatible_version u16
     /// || vault_id[16]
+    /// || account_id[16]
+    /// || kdf_version u16
     /// || kdf_salt[16]
     /// || hkdf_salt[32]
     /// || argon2_t u32 || argon2_m_kib u32 || argon2_p u32
@@ -104,12 +121,14 @@ impl VaultHeader {
     #[must_use]
     pub fn canonical_aad(&self) -> Vec<u8> {
         const DOMAIN: &[u8] = b"tock-vault-header-v1";
-        let mut out = Vec::with_capacity(DOMAIN.len() + 128);
+        let mut out = Vec::with_capacity(DOMAIN.len() + 160);
         out.extend_from_slice(DOMAIN);
         out.extend_from_slice(&self.magic);
         out.extend_from_slice(&self.format_version.to_le_bytes());
         out.extend_from_slice(&self.min_compatible_version.to_le_bytes());
         out.extend_from_slice(self.vault_id.as_bytes());
+        out.extend_from_slice(self.account_id.as_bytes());
+        out.extend_from_slice(&self.kdf_version.to_le_bytes());
         out.extend_from_slice(&self.kdf_salt);
         out.extend_from_slice(&self.hkdf_salt);
         out.extend_from_slice(&self.argon2.t.to_le_bytes());
@@ -141,6 +160,8 @@ impl VaultHeader {
             self.min_compatible_version.to_le_bytes().to_vec(),
         );
         m.insert("vault_id", self.vault_id.as_bytes().to_vec());
+        m.insert("account_id", self.account_id.as_bytes().to_vec());
+        m.insert("kdf_version", self.kdf_version.to_le_bytes().to_vec());
         m.insert("kdf_salt", self.kdf_salt.to_vec());
         m.insert("hkdf_salt", self.hkdf_salt.to_vec());
         m.insert("argon2_t", self.argon2.t.to_le_bytes().to_vec());
@@ -198,8 +219,19 @@ impl VaultHeader {
                 supported: FORMAT_VERSION,
             });
         }
+        // Legacy password-only vaults (v1) lack the 2SKD account binding
+        // and cannot be opened — surface a clear re-init error rather
+        // than a confusing missing-field failure.
+        if format_version < MIN_COMPAT_VERSION {
+            return Err(Error::VaultNeedsReinit {
+                found: format_version,
+            });
+        }
         let vault_id_bytes = arr::<16>(get(m, "vault_id")?)?;
         let vault_id = Uuid::from_bytes(vault_id_bytes);
+        let account_id_bytes = arr::<16>(get(m, "account_id")?)?;
+        let account_id = Uuid::from_bytes(account_id_bytes);
+        let kdf_version = u16_le(get(m, "kdf_version")?)?;
         let kdf_salt = arr::<16>(get(m, "kdf_salt")?)?;
         let hkdf_salt = arr::<32>(get(m, "hkdf_salt")?)?;
         let argon2 = Argon2HeaderParams {
@@ -224,6 +256,8 @@ impl VaultHeader {
             format_version,
             min_compatible_version,
             vault_id,
+            account_id,
+            kdf_version,
             kdf_salt,
             hkdf_salt,
             argon2,
@@ -252,6 +286,8 @@ mod tests {
             format_version: FORMAT_VERSION,
             min_compatible_version: MIN_COMPAT_VERSION,
             vault_id: Uuid::from_bytes([7; 16]),
+            account_id: Uuid::from_bytes([8; 16]),
+            kdf_version: 1,
             kdf_salt: [9; 16],
             hkdf_salt: [3; 32],
             argon2: Argon2HeaderParams {
@@ -322,8 +358,32 @@ mod tests {
         h3.argon2.t += 1;
         assert_ne!(aad, h3.canonical_aad());
 
+        let mut h_acct = h.clone();
+        h_acct.account_id = Uuid::from_bytes([99; 16]);
+        assert_ne!(aad, h_acct.canonical_aad());
+
+        let mut h_ver = h.clone();
+        h_ver.kdf_version += 1;
+        assert_ne!(aad, h_ver.canonical_aad());
+
         let mut h4 = h;
         h4.storage_layout.push('x');
         assert_ne!(h4.canonical_aad(), sample_header().canonical_aad());
+    }
+
+    #[test]
+    fn legacy_v1_vault_needs_reinit() {
+        let h = sample_header();
+        let mut owned = into_owned(h.to_meta());
+        // Simulate a legacy password-only vault: format/compat = 1.
+        owned.insert("format_version".to_string(), 1_u16.to_le_bytes().to_vec());
+        owned.insert(
+            "min_compatible_version".to_string(),
+            1_u16.to_le_bytes().to_vec(),
+        );
+        assert!(matches!(
+            VaultHeader::from_meta(&owned),
+            Err(Error::VaultNeedsReinit { found: 1 })
+        ));
     }
 }

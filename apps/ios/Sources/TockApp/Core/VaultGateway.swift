@@ -24,17 +24,19 @@ actor VaultGateway {
         if let cachedClient { return cachedClient }
 
         let password: String
+        let secretKey: String
         do {
             password = try KeychainService.loadMasterPassword(
                 reason: "Unlock your tock vault"
             )
+            secretKey = try KeychainService.loadSecretKey()
         } catch {
             throw VaultGatewayError.locked
         }
 
         do {
             let workspace = try await TockWorkspace.open(
-                path: AppGroup.vaultPath(), password: Data(password.utf8)
+                path: AppGroup.vaultPath(), password: Data(password.utf8), secretKey: secretKey
             )
             let client = TockCoreClient(workspace: workspace)
             cachedClient = client

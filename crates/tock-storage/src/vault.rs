@@ -32,6 +32,7 @@ use tock_core::vault::header::{
     Argon2HeaderParams, FORMAT_VERSION, MAGIC, MIN_COMPAT_VERSION, STORAGE_LAYOUT_V0,
 };
 use tock_core::vault::{KeyHierarchy, VaultHeader, VaultKey, generate_vault_key};
+use tock_crypto::SecretKey;
 use tock_crypto::signature::{SigningKey, VerifyingKey};
 use uuid::Uuid;
 use zeroize::Zeroizing;
@@ -98,6 +99,9 @@ const VAULT_INIT_ARGON2: Argon2HeaderParams = Argon2HeaderParams {
     m_kib: 65_536,
     p: 1,
 };
+
+/// Two-secret KDF version stamped into freshly initialized vaults.
+const VAULT_INIT_KDF_VERSION: u16 = 1;
 
 /// An unlocked vault — holds an open `SQLite` connection and the
 /// decrypted Vault Key in memory.
@@ -171,16 +175,21 @@ impl OpenVault {
     }
 }
 
-/// Open an existing vault file with the given password.
+/// Open an existing vault file with the given password and account
+/// [`SecretKey`].
+///
+/// Both secrets are required: the vault is rooted in the two-secret
+/// Unlock Root Key (2SKD), so a wrong password **or** a wrong Secret Key
+/// fails identically with [`Error::InvalidVaultOrCredentials`].
 ///
 /// # Errors
 /// - [`Error::NotFound`] if the file does not exist.
-/// - [`Error::InvalidVaultOrCredentials`] for wrong password, tampered
-///   header, or malformed metadata.
+/// - [`Error::InvalidVaultOrCredentials`] for a wrong password, wrong
+///   Secret Key, tampered header, or malformed metadata.
 /// - [`Error::Sqlite`] / [`Error::MigrationChecksumMismatch`] on
 ///   schema-runtime failures.
 #[allow(clippy::cognitive_complexity)]
-pub fn open(path: &Path, password: &[u8]) -> Result<OpenVault, Error> {
+pub fn open(path: &Path, password: &[u8], secret_key: &SecretKey) -> Result<OpenVault, Error> {
     let _span = tracing::info_span!("vault::open", path = %path.display()).entered();
     if !path.exists() {
         tracing::warn!("vault file does not exist");
@@ -191,10 +200,10 @@ pub fn open(path: &Path, password: &[u8]) -> Result<OpenVault, Error> {
     let meta = load_meta(&conn)?;
     let header = VaultHeader::from_meta(&meta).map_err(map_core_err)?;
     tracing::debug!(vault_id = %header.vault_id, format_version = header.format_version, "header parsed");
-    let mk = KeyHierarchy::derive_master_key(password, &header)
+    let urk = KeyHierarchy::derive_unlock_root_key(password, secret_key, &header)
         .map_err(|_| Error::InvalidVaultOrCredentials)?;
     let mek =
-        KeyHierarchy::derive_mek(&mk, &header).map_err(|_| Error::InvalidVaultOrCredentials)?;
+        KeyHierarchy::derive_mek(&urk, &header).map_err(|_| Error::InvalidVaultOrCredentials)?;
     let vk =
         KeyHierarchy::unwrap_vk(&mek, &header).map_err(|_| Error::InvalidVaultOrCredentials)?;
     tracing::debug!("vault key unwrapped successfully");
@@ -212,16 +221,29 @@ pub fn open(path: &Path, password: &[u8]) -> Result<OpenVault, Error> {
 
 /// Initialize a fresh vault at `path` (must not exist) with `password`.
 ///
-/// Generates the vault id, KDF salts, vault key, a per-device random
-/// `device_id`, and an Ed25519 signing key; writes them all into the
-/// new `SQLite` file; registers the device.
+/// Generates a fresh account [`SecretKey`] and `account_id`, the vault
+/// id, KDF salts, vault key, a per-device random `device_id`, and an
+/// Ed25519 signing key; writes them all into the new `SQLite` file;
+/// registers the device. The Secret Key is **returned to the caller**
+/// (to surface in the Emergency Kit) and is **never persisted**.
 ///
 /// # Errors
 /// - [`Error::Io`] if `path` already exists.
 /// - [`Error::Sqlite`] / [`Error::Crypto`] on the usual failure modes.
-pub fn init(path: &Path, password: &[u8]) -> Result<OpenVault, Error> {
+pub fn init(path: &Path, password: &[u8]) -> Result<(OpenVault, SecretKey), Error> {
+    let secret_key = SecretKey::generate().map_err(map_crypto_err)?;
+    let account_id = Uuid::now_v7();
     let vk = generate_vault_key().map_err(map_core_err)?;
-    init_with_key(path, password, Uuid::now_v7(), vk, Some("local"))
+    let vault = init_with_key(
+        path,
+        password,
+        &secret_key,
+        account_id,
+        Uuid::now_v7(),
+        vk,
+        Some("local"),
+    )?;
+    Ok((vault, secret_key))
 }
 
 /// Initialize a fresh vault at `path` (must not exist) that adopts an
@@ -232,7 +254,10 @@ pub fn init(path: &Path, password: &[u8]) -> Result<OpenVault, Error> {
 /// local vault file that decrypts the same event payloads and syncs
 /// against the same server bucket (which is keyed by `vault_id`). The
 /// new device gets its own random `device_id` and Ed25519 signing key,
-/// and its own password-derived key wrapping of the shared VK.
+/// and wraps the shared VK under its own two-secret Unlock Root Key
+/// (derived from `password` + `secret_key`, bound to `account_id`).
+///
+/// The Secret Key is **never persisted**.
 ///
 /// # Errors
 /// - [`Error::Io`] if `path` already exists.
@@ -240,6 +265,8 @@ pub fn init(path: &Path, password: &[u8]) -> Result<OpenVault, Error> {
 pub fn init_with_key(
     path: &Path,
     password: &[u8],
+    secret_key: &SecretKey,
+    account_id: Uuid,
     vault_id: Uuid,
     vk: VaultKey,
     label: Option<&str>,
@@ -265,6 +292,8 @@ pub fn init_with_key(
         format_version: FORMAT_VERSION,
         min_compatible_version: MIN_COMPAT_VERSION,
         vault_id,
+        account_id,
+        kdf_version: VAULT_INIT_KDF_VERSION,
         kdf_salt,
         hkdf_salt,
         argon2: VAULT_INIT_ARGON2,
@@ -274,8 +303,9 @@ pub fn init_with_key(
         storage_layout: STORAGE_LAYOUT_V0.to_string(),
     };
 
-    let mk = KeyHierarchy::derive_master_key(password, &header_skel).map_err(map_core_err)?;
-    let mek = KeyHierarchy::derive_mek(&mk, &header_skel).map_err(map_core_err)?;
+    let urk = KeyHierarchy::derive_unlock_root_key(password, secret_key, &header_skel)
+        .map_err(map_core_err)?;
+    let mek = KeyHierarchy::derive_mek(&urk, &header_skel).map_err(map_core_err)?;
     let (nonce, ct) = KeyHierarchy::wrap_vk(&mek, &vk, &header_skel).map_err(map_core_err)?;
 
     let header = VaultHeader {
@@ -447,6 +477,7 @@ const fn map_core_err(e: CoreError) -> Error {
     match e {
         CoreError::InvalidVaultOrCredentials => Error::InvalidVaultOrCredentials,
         CoreError::UnsupportedVaultVersion { .. } => Error::UnsupportedVaultVersion,
+        CoreError::VaultNeedsReinit { .. } => Error::VaultNeedsReinit,
         other => Error::Core(other),
     }
 }

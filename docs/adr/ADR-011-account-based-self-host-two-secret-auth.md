@@ -1,6 +1,7 @@
 # ADR-011: Account-based self-host with two-secret (1Password-style) auth
 
-**Status:** Proposed
+**Status:** Accepted (2SKD crypto/core/storage landed in #126; SRP verifier,
+server-assigned accounts, and Emergency-Kit onboarding UX tracked separately)
 **Date:** 2026-06-26
 
 > **Amends [ADR-002](ADR-002-end-to-end-encryption.md)** (replaces the password-only

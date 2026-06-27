@@ -26,6 +26,7 @@ enum KeychainService {
     private static let account = "vault-master-key"
     private static let syncService = "com.kafkade.tock.sync"
     private static let syncTokenAccount = "hosted-api-token"
+    private static let secretKeyAccount = "vault-secret-key"
     private static let installIdKey = "com.kafkade.tock.installId"
 
     // MARK: - Vault key operations
@@ -149,6 +150,67 @@ enum KeychainService {
     static func loadMasterPassword(reason: String) throws -> String {
         let data = try loadVaultKey(reason: reason)
         return String(decoding: data, as: UTF8.self)
+    }
+
+    // MARK: - Account Secret Key storage
+
+    /// Cache the account **Secret Key** (the `A4-…` Emergency-Kit string).
+    ///
+    /// The 2SKD unlock needs *both* the master password and this Secret Key,
+    /// so it is cached on-device (separately from the biometric-gated
+    /// password) to let the app reopen the vault. It is never synced.
+    ///
+    /// > Note: full Emergency-Kit display/entry UX is tracked by the
+    /// > onboarding issue; this is the minimal persistence the app needs.
+    static func saveSecretKey(_ secretKey: String) throws {
+        deleteSecretKey()
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: secretKeyAccount,
+            kSecValueData as String: Data(secretKey.utf8),
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+        ]
+        let status = SecItemAdd(query as CFDictionary, nil)
+        guard status == errSecSuccess else {
+            throw KeychainError.saveFailed(status)
+        }
+    }
+
+    /// Load the cached account Secret Key. Does not require biometric auth.
+    static func loadSecretKey() throws -> String {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: secretKeyAccount,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        switch status {
+        case errSecSuccess:
+            guard let data = result as? Data else {
+                throw KeychainError.unexpectedData
+            }
+            return String(decoding: data, as: UTF8.self)
+        case errSecItemNotFound:
+            throw KeychainError.itemNotFound
+        default:
+            throw KeychainError.loadFailed(status)
+        }
+    }
+
+    @discardableResult
+    static func deleteSecretKey() -> Bool {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: secretKeyAccount,
+        ]
+        let status = SecItemDelete(query as CFDictionary)
+        return status == errSecSuccess || status == errSecItemNotFound
     }
 
     // MARK: - Sync credential storage

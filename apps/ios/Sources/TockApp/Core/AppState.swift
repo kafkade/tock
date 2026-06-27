@@ -119,8 +119,9 @@ final class AppState {
     func unlock(path: String, password: String) async {
         vaultStatus = .unlocking
         do {
+            let secretKey = try KeychainService.loadSecretKey()
             let workspace = try await TockWorkspace.open(
-                path: path, password: Data(password.utf8)
+                path: path, password: Data(password.utf8), secretKey: secretKey
             )
             await finishUnlock(with: workspace, password: password)
         } catch {
@@ -131,9 +132,13 @@ final class AppState {
     func createVault(path: String, password: String) async {
         vaultStatus = .unlocking
         do {
-            let workspace = try await TockWorkspace.create(
+            let (workspace, secretKey) = try await TockWorkspace.create(
                 path: path, password: Data(password.utf8)
             )
+            // Persist the generated Secret Key so the vault can be reopened.
+            // TODO(onboarding): surface the Emergency Kit to the user once,
+            // prompting them to save it, before caching here.
+            try KeychainService.saveSecretKey(secretKey)
             await finishUnlock(with: workspace, password: password)
         } catch {
             vaultStatus = .error(Self.describe(error))
@@ -173,7 +178,7 @@ final class AppState {
         if let tockError = error as? TockError {
             switch tockError {
             case .InvalidCredentials:
-                return "Incorrect master password."
+                return "Incorrect master password or Secret Key."
             case .VaultNotFound:
                 return "No vault found. Create one to get started."
             default:
@@ -195,8 +200,9 @@ final class AppState {
         do {
             let reason = "Unlock your tock vault"
             let password = try KeychainService.loadMasterPassword(reason: reason)
+            let secretKey = try KeychainService.loadSecretKey()
             let workspace = try await TockWorkspace.open(
-                path: AppGroup.vaultPath(), password: Data(password.utf8)
+                path: AppGroup.vaultPath(), password: Data(password.utf8), secretKey: secretKey
             )
             await finishUnlock(with: workspace, password: password)
         } catch let error as KeychainError {
