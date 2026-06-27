@@ -7,7 +7,7 @@ This directory contains Architecture Decision Records for the Tock project. Each
 | ADR | Title | Status |
 |-----|-------|--------|
 | [ADR-001](ADR-001-rust-zero-io-core.md) | Rust with zero-I/O core crate | Accepted |
-| [ADR-002](ADR-002-end-to-end-encryption.md) | End-to-end encryption with per-item envelope encryption | Accepted |
+| [ADR-002](ADR-002-end-to-end-encryption.md) | End-to-end encryption with per-item envelope encryption | Accepted (amended by ADR-011) |
 | [ADR-003](ADR-003-event-sourced-sync.md) | Event-sourced sync with vector clocks | Accepted |
 | [ADR-004](ADR-004-sqlite-app-layer-encryption.md) | SQLite with app-layer encryption | Accepted |
 | [ADR-005](ADR-005-platform-bindings.md) | Platform bindings via UniFFI and WASM | Accepted |
@@ -15,7 +15,8 @@ This directory contains Architecture Decision Records for the Tock project. Each
 | [ADR-007](ADR-007-monetization-open-core.md) | Monetization — Open core with paid hosted sync | Accepted |
 | [ADR-008](ADR-008-unified-domain-model.md) | Four unified domains — tasks, habits, time tracking, focus | Accepted |
 | [ADR-009](ADR-009-natural-language-cli.md) | Natural language CLI with dual-mode parsing | Accepted |
-| [ADR-010](ADR-010-srp-authentication.md) | SRP-6a authentication | Accepted |
+| [ADR-010](ADR-010-srp-authentication.md) | SRP-6a authentication | Accepted (amended by ADR-011) |
+| [ADR-011](ADR-011-account-based-self-host-two-secret-auth.md) | Account-based self-host with two-secret (1Password-style) auth | Proposed |
 
 ## Categories
 
@@ -29,6 +30,7 @@ This directory contains Architecture Decision Records for the Tock project. Each
 
 - ADR-002: End-to-end encryption design
 - ADR-010: Zero-knowledge authentication
+- ADR-011: Account-based self-host with two-secret (1Password-style) auth
 
 ### Synchronization
 

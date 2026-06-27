@@ -10,7 +10,7 @@
 
 The target user is the *power productivity practitioner*: developers, researchers, founders, knowledge workers, and serious productivity practitioners who have outgrown single-purpose apps and are forced to maintain manual bridges between them. Tock collapses those bridges into first-class cross-domain primitives: a Pomodoro session linked to a task automatically logs a time block *and* increments a "deep work" habit; a recurring task can be promoted to (or replaced by) a habit; projects aggregate effort, completion velocity, and supporting habits in a single view. Filtering, urgency scoring, and reporting use a single expressive query language that extends uniformly across all four domains.
 
-What differentiates Tock is the combination of *(a)* methodology-neutral design — GTD-style views are available but not enforced, identity-based habits are encouraged but not required — *(b)* uncompromising cryptographic design (Argon2id-derived master key, per-item envelope encryption with AES-256-GCM, size-bucket padding, domain-separated AAD, SRP-6a authentication, 24-word Crockford Base32 recovery keys), and *(c)* a strict "core has zero I/O" architectural rule that makes the same Rust logic provably identical across CLI, iOS, watchOS, and web. The result is a system that respects expert workflows, refuses to leak unencrypted data to any server, and provides an honest plain-text export at any time.
+What differentiates Tock is the combination of *(a)* methodology-neutral design — GTD-style views are available but not enforced, identity-based habits are encouraged but not required — *(b)* uncompromising cryptographic design (two-secret key derivation à la 1Password — account password XOR a client-generated 128-bit Secret Key — per-item envelope encryption with AES-256-GCM, size-bucket padding, domain-separated AAD, SRP-6a authentication, and an Emergency Kit as the sole recovery path), and *(c)* a strict "core has zero I/O" architectural rule that makes the same Rust logic provably identical across CLI, iOS, watchOS, and web. Self-hosting is Immich-style — one server, an admin, and many user accounts who sign in from any device — while the server stays zero-knowledge and never sees plaintext. The result is a system that respects expert workflows, refuses to leak unencrypted data to any server, and provides an honest plain-text export at any time.
 
 ---
 
@@ -956,7 +956,7 @@ Tock/
 ├── deny.toml                       # cargo-deny
 ├── crates/
 │   ├── tock-core/               # PURE: zero I/O, zero net, zero async runtime
-│   ├── tock-crypto/             # PURE: key hierarchy, AEAD, SRP, recovery codes
+│   ├── tock-crypto/             # PURE: key hierarchy, 2SKD, AEAD, SRP, Secret Key encoding
 │   ├── tock-storage/            # SQLite adapter (sync rusqlite), schema, migrations
 │   ├── tock-sync/               # event log, conflict res, transport trait (no I/O impl)
 │   ├── tock-parse/              # filter DSL + natural-language date/time parser
@@ -1117,56 +1117,69 @@ Tock's encryption design is adapted for an event-sourced workload.
 
 ### 5.1 Key hierarchy
 
-```
-                 ┌─────────────────────────┐
-                 │  User Password (UTF-8)  │
-                 └────────────┬────────────┘
-                              │  Argon2id (t=3, m=64 MiB, p=1, 32-byte out)
-                              │  salt = vault.kdf_salt (16 B, random per vault)
-                              ▼
-                 ┌─────────────────────────┐
-                 │  Master Key  MK (32 B)  │
-                 └────────────┬────────────┘
-                              │  HKDF-SHA256, salt = vault.hkdf_salt (32 B)
-              ┌───────────────┼──────────────────────────┐
-              │ info="Tock/v1/mek"   │ info="Tock/v1/srp-verifier"
-              ▼                         ▼
-   ┌─────────────────────┐   ┌─────────────────────────────┐
-   │  MEK (32 B)         │   │  SRP-6a verifier seed       │
-   │  (key-wrap key)     │   │  → used in §5.6             │
-   └──────────┬──────────┘   └─────────────────────────────┘
-              │  AES-256-GCM (key wrap)
-              │  nonce = vault.vk_wrap_nonce
-              ▼
-   ┌─────────────────────┐
-   │  Vault Key  VK (32B)│  ← random per vault, generated at vault creation
-   └──────────┬──────────┘
-              │  HKDF-SHA256, salt = VK, info = "Tock/v1/item/" || entity_kind
-              ▼
-   ┌─────────────────────────────────────┐
-   │  Domain Key  DK_kind (32 B per kind)│  e.g. DK_task, DK_habit, DK_block, DK_event
-   └──────────┬──────────────────────────┘
-              │  HKDF-SHA256, salt = DK_kind, info = "item/" || uuid_v7
-              ▼
-   ┌──────────────────────────────────┐
-   │  Item Key  IK (32 B per entity)  │
-   └──────────────────────────────────┘
-              │  AES-256-GCM
-              ▼
-       (ciphertext + 12 B nonce + 16 B tag)
+> **Two-secret model (ADR-011).** The top of the hierarchy is the **Unlock Root Key (URK)**,
+> derived from the account **password** *and* a client-generated 128-bit **Secret Key**
+> (`URK = Argon2id(password) XOR HKDF(secret_key)`). The URK replaces the former password-only
+> Master Key (MK). The Secret Key is never sent to the server and never stored in the vault.
 
-   ┌──────────────────────────────────┐
-   │ Recovery Key (24 words,          │
-   │   Crockford Base32, 256 bits)    │
-   │   → HKDF-SHA256                  │
-   │   → alternate wrap of VK         │ ← stored as second vk_wrap_ct in header
-   └──────────────────────────────────┘
+```
+        ┌─────────────────────────┐        ┌────────────────────────────────┐
+        │  User Password (UTF-8)  │        │  Secret Key (128 bits)         │
+        └────────────┬────────────┘        │  client-generated, never sent  │
+                     │  Argon2id            └───────────────┬────────────────┘
+                     │  (t=3, m=64 MiB,                     │  HKDF-SHA256
+                     │   p=1, 32-byte out)                  │  salt = account_id (16 B)
+                     │  salt = vault.kdf_salt (16 B)        │  info = "Tock/2skd/v1/secret-key"
+                     ▼                                      ▼
+            ┌──────────────────┐                  ┌──────────────────┐
+            │  K_pw (32 B)     │                  │  K_sk (32 B)     │
+            └────────┬─────────┘                  └────────┬─────────┘
+                     └──────────────── XOR ────────────────┘
+                                       │
+                                       ▼
+                  ┌─────────────────────────────────────┐
+                  │  Unlock Root Key  URK (32 B)        │   ← never persisted
+                  └────────────────────┬────────────────┘
+                                       │  HKDF-SHA256, salt = vault.hkdf_salt (32 B)
+                  ┌────────────────────┼──────────────────────────┐
+                  │ info="Tock/v1/mek"   │ info="Tock/v1/srp-x"
+                  ▼                         ▼
+       ┌─────────────────────┐   ┌─────────────────────────────┐
+       │  MEK (32 B)         │   │  SRP-6a private x           │
+       │  (key-wrap key)     │   │  → verifier v=g^x (§5.6)    │
+       └──────────┬──────────┘   └─────────────────────────────┘
+                  │  AES-256-GCM (key wrap)
+                  │  nonce = vault.vk_wrap_nonce
+                  ▼
+       ┌─────────────────────┐
+       │  Vault Key  VK (32B)│  ← random per vault, generated at vault creation
+       └──────────┬──────────┘
+                  │  HKDF-SHA256, salt = VK, info = "Tock/v1/item/" || entity_kind
+                  ▼
+       ┌─────────────────────────────────────┐
+       │  Domain Key  DK_kind (32 B per kind)│  e.g. DK_task, DK_habit, DK_block, DK_event
+       └──────────┬──────────────────────────┘
+                  │  HKDF-SHA256, salt = DK_kind, info = "item/" || uuid_v7
+                  ▼
+       ┌──────────────────────────────────┐
+       │  Item Key  IK (32 B per entity)  │
+       └──────────────────────────────────┘
+                  │  AES-256-GCM
+                  ▼
+           (ciphertext + 12 B nonce + 16 B tag)
 ```
 
 Notes:
-- **MK and VK are never persisted.** MK exists only in memory during a session and is wiped via `Zeroize` on lock.
-- **VK rotation** is supported by re-wrapping with a new MK (password change) or by re-deriving and re-wrapping all items (full rotation; rare).
-- **Item Keys are deterministic** from `(VK, kind, uuid)` — no per-item key storage. This is critical for sync: a remote peer holding only VK can decrypt any item by UUID.
+- **URK, MEK, and VK are never persisted.** The URK exists only in memory during a session and
+  is wiped via `Zeroize` on lock. The Secret Key is held in the platform keystore on signed-in
+  devices, never in the vault file or on the server.
+- **Recovery is the Emergency Kit only (ADR-011).** There is **no** 24-word recovery key and no
+  `vk_recover_ct` escrow. Losing the Secret Key with no Emergency Kit is unrecoverable by design.
+- **VK rotation** is supported by re-wrapping with a new MEK (password change re-derives URK from
+  the same Secret Key + new password) or by re-deriving and re-wrapping all items (full rotation;
+  rare). **KDF upgrades** bump `vault.kdf_version` and re-wrap.
+- **Item Keys are deterministic** from `(VK, kind, uuid)` — no per-item key storage. This is
+  critical for sync: a remote peer holding only VK can decrypt any item by UUID.
 - **AAD discipline**: every AEAD operation includes a domain-separated AAD tag (see §5.3).
 
 ### 5.2 Vault format (`.kafvault`)
@@ -1177,27 +1190,36 @@ Binary, little-endian, version-prefixed. Header is fixed at 256 bytes; body is t
 Offset  Size  Field                  Notes
 ──────  ────  ─────────────────────  ─────────────────────────────────────────
 0x0000   4    magic                  "KAFD" (0x4B 0x41 0x46 0x44)
-0x0004   2    format_version         u16 = 1
-0x0006   2    min_compatible_version u16 = 1
+0x0004   2    format_version         u16 = 2   (v2: two-secret / ADR-011)
+0x0006   2    min_compatible_version u16 = 2
 0x0008  16    vault_id               UUIDv7
-0x0018  16    kdf_salt               Argon2id salt
-0x0028  32    hkdf_salt              HKDF salt
-0x0048   4    argon2_t               u32 iterations (3)
-0x004C   4    argon2_m_kib           u32 memory KiB (65536)
-0x0050   1    argon2_p               u8 parallelism (1)
-0x0051   3    _reserved
-0x0054  12    vk_wrap_nonce          AES-GCM nonce (password path)
-0x0060  48    vk_wrap_ct             32 B wrapped VK + 16 B tag (password)
-0x0090  12    vk_recover_nonce       AES-GCM nonce (recovery path)
-0x009C  48    vk_recover_ct          32 B wrapped VK + 16 B tag (recovery)
-0x00CC  32    srp_verifier_hash      SHA-256 of SRP verifier (server stores v)
-0x00EC  16    created_at_ts          ISO8601 (truncated, padded)
-0x00FC   4    flags                  bit 0: has_recovery, bit 1: padding_enabled
+0x0018  16    account_id             server-assigned account UUID (ADR-011)
+0x0028   2    kdf_version            u16 (selects 2SKD params + HKDF info labels)
+0x002A   6    _reserved
+0x0030  16    kdf_salt               Argon2id salt (K_pw)
+0x0040  32    hkdf_salt              HKDF salt (URK → MEK / SRP-x)
+0x0060   4    argon2_t               u32 iterations (3)
+0x0064   4    argon2_m_kib           u32 memory KiB (65536)
+0x0068   1    argon2_p               u8 parallelism (1)
+0x0069   3    _reserved
+0x006C  12    vk_wrap_nonce          AES-GCM nonce (MEK key-wrap, URK path)
+0x0078  48    vk_wrap_ct             32 B wrapped VK + 16 B tag
+0x00A8  32    srp_verifier_hash      SHA-256 of SRP verifier (server stores v)
+0x00C8  16    created_at_ts          ISO8601 (truncated, padded)
+0x00DC   4    flags                  bit 1: padding_enabled (bit 0 has_recovery removed)
+0x00E0  32    _reserved
 0x0100   0    --- end of header (256 B) ---
 0x0100   N    sqlcipher database     SQLite file, page-encrypted with VK
 ```
 
-Header itself is integrity-protected: the first AES-GCM operation (unlocking VK) uses the header bytes `[0x0000, 0x0090)` as AAD, so any tampering with format/version/salts is detected.
+The Secret Key (in any form) is **never** stored in the header — only `account_id` and
+`kdf_version` bind the vault to its account and KDF generation. The former recovery-path fields
+(`vk_recover_nonce`, `vk_recover_ct`, `has_recovery`) are removed (ADR-011: Emergency Kit is the
+sole recovery path).
+
+Header itself is integrity-protected: the AES-GCM operation that unwraps VK uses the header bytes
+`[0x0000, 0x006C)` as AAD, so any tampering with format/version, `vault_id`, `account_id`,
+`kdf_version`, or the salts/params is detected.
 
 ### 5.3 Per-item encryption flow
 
@@ -1223,29 +1245,36 @@ Decrypt:
 
 Size-bucket padding rounds plaintext up to the next power-of-two bucket within `[64, 128, 256, 512, 1024, 2048, 4096, 8192]`; payloads larger than 8 KiB are padded to the next multiple of 4 KiB. Padding byte = `0x00`, with a 2-byte big-endian length prefix at the start of the plaintext so the original length is recoverable.
 
-### 5.4 Recovery key
+### 5.4 Recovery — Emergency Kit (sole path)
 
-- **Generation**: 256 bits of CSPRNG entropy encoded as 24 words from a **Crockford Base32 wordlist** (no ambiguous chars; checksum baked in via a 4-bit CRC on the last word).
-- **Derivation**: `RK_material ← decode_crockford(words)` → `RK ← HKDF-SHA256(salt=vault_id, ikm=RK_material, info="Tock/v1/recovery", len=32)`.
-- **Storage**: never persisted by Tock. The vault header carries `vk_recover_ct = AES-GCM(RK, vault.vk_recover_nonce, VK, aad=header[0..0x90])`.
-- **Usage**:
-  1. User pastes 24 words → core validates checksum and length.
-  2. Derive RK.
-  3. AEAD-decrypt `vk_recover_ct` → VK.
-  4. Prompt for **new password** → derive new MK and MEK → wrap VK afresh → overwrite `vk_wrap_ct`.
-  5. SRP verifier is regenerated and pushed to server (proves possession of new MK).
+Per [ADR-011](adr/ADR-011-account-based-self-host-two-secret-auth.md), the **Emergency Kit is
+the only recovery path**. The former 24-word recovery key and the `vk_recover_ct` escrow are
+**removed**.
 
-The recovery flow never reveals the old password. The recovery key is offered at vault creation and can be regenerated (which re-wraps VK with new RK and invalidates the old).
+- **Emergency Kit contents** (printable / savable, presented with a "save now" gate before
+  onboarding completes):
+  - the **sign-in address** (server URL),
+  - the **account email**,
+  - the **Secret Key** (`A4-<accountID>-<6 groups>-<checksum>`, 128-bit, Crockford Base32),
+  - a blank space for the user to optionally record the password (Tock never stores it).
+- **Recovery / new-device flow** = ordinary sign-in: password + Secret Key → `URK` → `MEK` →
+  unwrap `VK` → pull and decrypt. There is **no** server-side reset and **no** VK escrow.
+- **Loss model:** losing the Secret Key with no Emergency Kit means the data is **unrecoverable
+  by design**. This is stated plainly to users at account creation.
+
+The Secret Key is generated client-side, never transmitted to the server, and cached in the
+platform keystore on signed-in devices.
 
 ### 5.5 Threat model
 
 **Protect against:**
 
 - **Server compromise / hostile sync host** — server only sees opaque events; can correlate metadata (event count, timing, sizes within buckets, device IDs) but cannot read content. SRP-6a means the server never sees the password or verifier-from-password.
-- **At-rest disk theft** — vault file encrypted at SQLCipher page level by VK; VK only reachable via password (Argon2id-hardened) or recovery key.
+- **At-rest disk theft** — vault file encrypted at SQLCipher page level by VK; VK only reachable via the two-secret URK (password **and** 128-bit Secret Key, Argon2id-hardened).
 - **Network MITM** — transport is TLS 1.3 (required); additionally, the SRP-6a session key is used to derive an authenticated channel binding so a TLS-stripping MITM still cannot impersonate.
 - **Sync replay / reorder** — events carry monotonic lamport + UUIDv7; storage rejects duplicates; AAD pins payload to `(entity, op, lamport, device)`.
-- **Stolen recovery key** — equivalent to stolen password (full access). Documented; users instructed to store offline.
+- **Stolen server database** — holds only the SRP verifier + ciphertext; offline-cracking the verifier additionally requires the 128-bit Secret Key (ADR-011), so it is infeasible regardless of password strength.
+- **Lost Secret Key with no Emergency Kit** — **not** recoverable; this is a deliberate trade-off (ADR-011), not a protected scenario.
 - **Cross-item key reuse** — defeated by per-item HKDF derivation.
 
 **Do not protect against:**
@@ -1258,20 +1287,26 @@ The recovery flow never reveals the old password. The recovery key is offered at
 
 ### 5.6 SRP-6a authentication
 
-We use SRP-6a (RFC 5054) over a 4096-bit safe-prime group with SHA-256.
+We use SRP-6a (RFC 5054) over a 4096-bit safe-prime group with SHA-256. Per
+[ADR-011](adr/ADR-011-account-based-self-host-two-secret-auth.md), the private exponent `x`
+derives from the two-secret **Unlock Root Key (URK)**, not from the password directly, so a
+stolen verifier is offline-crackable only by an attacker who also holds the 128-bit Secret Key.
+SRP-backed accounts are available in **self-hosted** mode too (multi-user: one `admin` + N
+`user` accounts), not hosted mode only.
 
 **Registration:**
 
 ```
 Client                                                Server
 ──────                                                ──────
-password, vault_id
+password, secret_key, account_id
+URK       ← Argon2id(password, kdf_salt) XOR HKDF(secret_key, account_id, "Tock/2skd/v1/secret-key")
 salt_srp  ← random 16 B (independent of kdf_salt)
-x         ← H( salt_srp || H(username || ":" || password) )
+x         ← HKDF( ikm=URK, salt=salt_srp, info="Tock/v1/srp-x" )   (reduced mod N)
 v         ← g^x  mod N
-                       ──── (username, salt_srp, v) ───►
-                                                       store (username, salt_srp, v)
-                                                       Server NEVER sees password.
+                       ──── (account_id, salt_srp, v) ───►
+                                                       store (account_id, salt_srp, v, role)
+                                                       Server NEVER sees password or Secret Key.
 ```
 
 **Login (mutual auth, derives shared K):**
@@ -1281,16 +1316,17 @@ Client                                                  Server
 ──────                                                  ──────
 a ← random
 A ← g^a mod N
-                          ──── (username, A) ───►
+                          ──── (account_id, A) ───►
                                                        lookup salt_srp, v
                                                        b ← random
                                                        B ← (k*v + g^b) mod N    [k = H(N, g)]
                           ◄──── (salt_srp, B) ─────
 u   ← H(A, B)
-x   ← H( salt_srp || H(username || ":" || password) )
+URK ← Argon2id(password, kdf_salt) XOR HKDF(secret_key, account_id, "Tock/2skd/v1/secret-key")
+x   ← HKDF( ikm=URK, salt=salt_srp, info="Tock/v1/srp-x" )   (reduced mod N)
 S_c ← (B − k*g^x)^(a + u*x)  mod N
 K_c ← H(S_c)
-M1  ← H( H(N) XOR H(g) || H(username) || salt_srp || A || B || K_c )
+M1  ← H( H(N) XOR H(g) || H(account_id) || salt_srp || A || B || K_c )
                           ──── M1 ───►
                                                        S_s ← (A * v^u)^b  mod N
                                                        K_s ← H(S_s)
@@ -1305,7 +1341,7 @@ The resulting `K` (256 bits) is used as the input keying material for an HKDF th
 - a **bearer token** sent with each subsequent HTTPS request (short-lived, signed by HMAC-K),
 - a **channel-binding tag** included in event AAD for the session (defense-in-depth against TLS strip).
 
-The server stores only `(username, salt_srp, v)` — never the password, never enough to derive MK or VK.
+The server stores only `(account_id, salt_srp, v, role)` — never the password, the Secret Key, the URK, or enough to derive MEK or VK. The `role` (`admin` / `user`) governs account administration only and never grants access to any user's plaintext.
 
 ---
 
@@ -1408,6 +1444,31 @@ A **conflict log** (queryable via `tock sync conflicts`) surfaces LWW-losers for
 
 ### 6.5 Device onboarding flow
 
+Per [ADR-011](adr/ADR-011-account-based-self-host-two-secret-auth.md), the **primary** way to
+onboard a new device is **account sign-in with password + Secret Key** — no existing device is
+required. Device-to-device pairing (below) is retained as an **optional convenience**.
+
+**Primary — Secret Key sign-in:**
+
+```
+New device N                                            Server S
+────────────                                            ────────
+1. User enters sign-in address + email
+2. User enters password and Secret Key
+   (typed, or scanned from Emergency Kit Setup Code / QR)
+3. N derives URK = Argon2id(password) XOR HKDF(secret_key, account_id)
+   N runs SRP-6a login (x from URK) ─────────────────►  verify; issue session bearer
+4. N GETs vault header + wrapped VK ◄──────────────────  ciphertext only
+5. N derives MEK from URK; unwraps VK; pulls snapshot + events; decrypts; materializes state
+6. N caches Secret Key in the platform keystore; publishes Create(Device)
+```
+
+The server only ever returns the vault header and ciphertext; it never sees the password, the
+Secret Key, the URK, or VK.
+
+**Optional: device-to-device pairing** (avoids retyping the Secret Key when a trusted device is
+present; unchanged from [ADR-003](adr/ADR-003-event-sourced-sync.md)):
+
 ```
 Existing device E                    New device N                     Server S
 ─────────────────                    ────────────                     ──────────
@@ -1426,7 +1487,7 @@ Existing device E                    New device N                     Server S
    (out-of-band trust establishment)
 
                                                                   4. N --(register pubkey)--> S
-                                                                     S returns device_id_N
+                                                                    S returns device_id_N
 
 5. E computes shared_secret = X25519(es, ep_N)
    E derives wrap_key = HKDF(shared_secret, info="Tock/v1/onboard")
@@ -1439,10 +1500,8 @@ Existing device E                    New device N                     Server S
                                         N derives wrap_key (same)
                                         N decrypts → VK
 
-8. N prompts user for *new local* password (independent of E's):
-   - derive new MK, MEK via Argon2id over the new password
-   - re-wrap VK locally on N
-   - store header + open empty SQLCipher DB keyed by VK
+8. N stores header + opens empty SQLCipher DB keyed by VK
+   (N is already signed in to the account, so it has its own URK/MEK)
 
 9. N pulls latest snapshot + events from S, decrypts with VK, materializes state.
 
@@ -1453,7 +1512,7 @@ Notes:
 - The server never sees VK or wrap_key — only opaque blobs and X25519 public keys.
 - Out-of-band confirmation of the fingerprint thwarts QR-MITM (a hostile server cannot substitute its own pubkey without the fingerprint mismatching).
 - A pairing attempt without confirmation expires in **5 minutes**.
-- Recovery-key onboarding is identical except step 1 is skipped — N derives VK directly from the recovery key, then registers with S.
+- Pairing is a convenience over the primary Secret Key sign-in; it is never required to onboard.
 
 ### 6.6 Transport abstraction
 
@@ -1638,14 +1697,13 @@ tock
 │
 ├── ── Vault & crypto ──────────────────────────────────────────────
 ├── vault
-│   ├── init [--path <dir>] [--passphrase-stdin]
+│   ├── init [--path <dir>] [--passphrase-stdin]   # Generates account + Secret Key + Emergency Kit
 │   ├── unlock [--ttl <duration>]          # Cache key in keyring/agent
 │   ├── lock
 │   ├── status                             # Locked? device id? sync peer count?
 │   ├── rotate-key                         # Generate new content key, re-wrap
-│   ├── change-passphrase
-│   ├── recover --shares <file>...         # Reconstruct via Shamir shares
-│   └── export-recovery --threshold 3 --shares 5 --out <dir>
+│   ├── change-passphrase                  # Re-derive URK (same Secret Key, new password), re-wrap
+│   └── emergency-kit [--out <file>]       # (Re)generate the Emergency Kit (sole recovery path; ADR-011)
 │
 ├── ── Sync & devices ──────────────────────────────────────────────
 ├── sync [--once] [--dry-run] [--verbose]
@@ -1653,13 +1711,18 @@ tock
 │   ├── ls
 │   ├── revoke <device-id>
 │   └── rename <device-id> <name>
-├── onboard
-│   ├── invite [--ttl 10m]                 # Print pairing code/QR on this device
-│   └── accept <code>                      # On new device
-├── server
-│   ├── login <url>                        # For hosted service
-│   ├── logout
-│   └── status
+├── onboard                                # Primary: sign in with password + Secret Key (ADR-011)
+│   ├── invite [--ttl 10m]                 # Optional pairing: print code/QR on a trusted device
+│   └── accept <code>                      # Optional pairing: on new device
+├── account
+│   ├── signin <url> --email <addr>        # Password + Secret Key (typed or scanned from Emergency Kit)
+│   ├── signout
+│   ├── status
+│   └── admin                              # Server admin only (admin role)
+│       ├── user-add <email> [--role user|admin]
+│       ├── user-ls
+│       ├── user-disable <email>
+│       └── user-rm <email>
 │
 ├── ── Config, context, reports ────────────────────────────────────
 ├── context
@@ -2810,8 +2873,10 @@ Eight phases. Each ships a usable artifact to keep dogfooding pressure high. Est
 
 - Event log → wire format → sync protocol (E2EE; details in part 1 §5).
 - Conflict resolution (CRDT-ish per-field LWW with concurrent-edit promotion to annotation).
-- Device pairing flow (`onboard invite` / `accept`, QR + 6-word phrase).
-- Device revocation, key rotation, recovery shares.
+- Account-based sign-in (password + Secret Key, two-secret derivation per ADR-011) with
+  multi-user self-host (admin + N users); SRP-6a verifier over the URK.
+- Device pairing flow (`onboard invite` / `accept`, QR + 6-word phrase) as an optional convenience.
+- Device revocation, key rotation, Emergency Kit (sole recovery path).
 - Self-hosted server (`tock-server`, Axum, AGPL-3.0): receives encrypted blobs, append-only log per vault, never sees plaintext.
 - Container image, Helm chart, systemd unit.
 - Hosted service skeleton (same binary, billing layer, S3-compatible blob backend).
@@ -2991,8 +3056,9 @@ Tock is one of several focused, privacy-first tools in the **kafkade** family.
 Each tool is independently useful, but they share an architectural spine:
 
 - A pure-Rust core with the **"core has zero I/O"** invariant.
-- An **end-to-end encrypted vault** (Argon2id → MK → VK → per-item keys, AES-256-GCM
-  envelope encryption with size-bucket padding and domain-separated AAD).
+- An **end-to-end encrypted vault** (two-secret derivation: password + 128-bit Secret Key →
+  URK → VK → per-item keys, AES-256-GCM envelope encryption with size-bucket padding and
+  domain-separated AAD).
 - An **event-sourced sync protocol** with vector-clock conflict detection,
   field-level LWW merge, and append-only logs for commutative collections.
 - A **CLI-first surface** with a ratatui TUI option, UniFFI bindings for native
@@ -3012,7 +3078,7 @@ Each tool is independently useful, but they share an architectural spine:
   area appropriate to medical-adjacent information.
 
 The intent is that a user who chooses one kafkade tool can adopt the others with
-near-zero ceremony: the same recovery key flow, the same device-onboarding QR
-exchange, the same self-hosted-or-hosted choice for sync, the same export-at-any-time
+near-zero ceremony: the same account sign-in + Emergency Kit recovery, the same
+device-onboarding flow, the same self-hosted-or-hosted choice for sync, the same export-at-any-time
 guarantee. The tools are deliberately separate binaries — there is no
 "super-app" — but they are designed to feel like one ecosystem.
