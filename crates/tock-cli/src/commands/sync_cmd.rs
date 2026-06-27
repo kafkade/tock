@@ -301,6 +301,7 @@ pub fn run_onboard_invite(vault: &OpenVault, server_flag: Option<&str>) -> CmdRe
 pub fn run_onboard_accept(
     path: &std::path::Path,
     password: &[u8],
+    secret_key: Option<&str>,
     server: &str,
     vault_id_hex: &str,
     inviter_pubkey_hex: &str,
@@ -313,6 +314,13 @@ pub fn run_onboard_accept(
         )
         .into());
     }
+    let raw_sk = secret_key.ok_or(
+        "missing account Secret Key: pass --secret-key or set TOCK_SECRET_KEY \
+         (the `A4-…` string from your Emergency Kit) so this device joins the same account",
+    )?;
+    let (account_id, account_secret_key) = tock_crypto::SecretKey::parse(raw_sk)
+        .map_err(|_| "invalid account Secret Key: check the Emergency-Kit string and try again")?;
+    let account_id = uuid::Uuid::from_bytes(account_id);
     let vault_id = uuid_from_hex(vault_id_hex)?;
     let inviter_pk =
         tock_crypto::keyexchange::PublicKey::from_bytes(parse_hex32(inviter_pubkey_hex)?);
@@ -347,8 +355,15 @@ pub fn run_onboard_accept(
     let blob = runtime.block_on(poll_blob(&transport, rendezvous_id))?;
 
     let vk = pairing::open_onboarding_blob(acceptor, &inviter_pk, &blob, vault_id)?;
-    let new_vault =
-        tock_storage::vault::init_with_key(path, password, vault_id, vk, Some("paired"))?;
+    let new_vault = tock_storage::vault::init_with_key(
+        path,
+        password,
+        &account_secret_key,
+        account_id,
+        vault_id,
+        vk,
+        Some("paired"),
+    )?;
 
     // Persist the server URL and register this device so it can sync.
     sync::set_server_url(&new_vault, server)?;

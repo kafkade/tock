@@ -112,6 +112,7 @@ struct JoinExistingVaultSheet: View {
     @State private var deviceLabel = ""
     @State private var password = ""
     @State private var confirmPassword = ""
+    @State private var secretKey = ""
     @State private var acceptSession: TockPairingAcceptSession?
     @State private var invite: TockPairingInvite?
     @State private var responseCode = ""
@@ -134,6 +135,10 @@ struct JoinExistingVaultSheet: View {
 
                     SecureField("New local password", text: $password)
                     SecureField("Confirm password", text: $confirmPassword)
+
+                    TextField("Account Secret Key (A4-…)", text: $secretKey, axis: .vertical)
+                        .platformTextInputAutocapitalizationCharacters()
+                        .autocorrectionDisabled()
 
                     Button("Generate Response Code") {
                         Task { await generateResponseCode() }
@@ -198,6 +203,11 @@ struct JoinExistingVaultSheet: View {
 
     private func finishPairing() async {
         guard let acceptSession, let invite else { return }
+        let trimmedSecretKey = secretKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedSecretKey.isEmpty else {
+            message = "Enter your account Secret Key (from your Emergency Kit) to join this account."
+            return
+        }
         isBusy = true
         defer { isBusy = false }
 
@@ -213,10 +223,13 @@ struct JoinExistingVaultSheet: View {
             let workspace = try await acceptSession.completeOnboarding(
                 path: AppGroup.vaultPath(),
                 password: Data(password.utf8),
+                secretKey: trimmedSecretKey,
                 invite: invite,
                 blob: blob,
                 deviceLabel: normalized(deviceLabel)
             )
+            // Cache the Secret Key so this device can reopen the vault later.
+            try KeychainService.saveSecretKey(trimmedSecretKey)
             await appState.adoptPairedWorkspace(workspace, password: password)
             dismiss()
         } catch {

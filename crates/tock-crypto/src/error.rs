@@ -57,4 +57,10 @@ pub enum Error {
     /// Ed25519 signature verification failed.
     #[error("signature verification failed")]
     SignatureVerification,
+
+    /// An account Secret Key string was malformed: wrong format/version
+    /// tag, wrong length, or a failed transcription checksum. Carries no
+    /// secret material.
+    #[error("invalid account secret key")]
+    InvalidSecretKey,
 }

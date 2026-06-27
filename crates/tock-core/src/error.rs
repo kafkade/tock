@@ -35,6 +35,17 @@ pub enum Error {
     #[error("missing vault header field: {0}")]
     MissingHeaderField(&'static str),
 
+    /// The vault predates two-secret key derivation (format `v1`,
+    /// password-only) and cannot be opened by this build. Pre-1.0 vaults
+    /// have no automatic migration path and must be re-initialized.
+    #[error(
+        "vault uses the legacy password-only format (v{found}); re-initialize it (no automatic migration before 1.0)"
+    )]
+    VaultNeedsReinit {
+        /// The legacy `format_version` found in the file.
+        found: u16,
+    },
+
     /// A canonical encoding could not be decoded.
     #[error("invalid encoding")]
     InvalidEncoding,

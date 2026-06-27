@@ -105,12 +105,17 @@ public final class TockWorkspace: @unchecked Sendable {
     /// - Parameters:
     ///   - path: Filesystem path for the new vault file.
     ///   - password: Raw password bytes (zeroed after use by the Rust layer).
-    /// - Returns: An open `TockWorkspace` handle.
-    public static func create(path: String, password: Data) async throws -> TockWorkspace {
-        let handle = try await performStatic {
+    /// - Returns: An open `TockWorkspace` handle plus the one-time
+    ///   Emergency-Kit string encoding the generated account Secret Key.
+    ///   Surface `secretKey` to the user exactly once; it is never stored.
+    public static func create(
+        path: String,
+        password: Data
+    ) async throws -> (workspace: TockWorkspace, secretKey: String) {
+        let result = try await performStatic {
             try initWorkspace(path: path, password: password)
         }
-        return TockWorkspace(handle: handle, path: path)
+        return (TockWorkspace(handle: result.workspace, path: path), result.secretKey)
     }
 
     /// Open an existing vault at `path`.
@@ -118,10 +123,15 @@ public final class TockWorkspace: @unchecked Sendable {
     /// - Parameters:
     ///   - path: Filesystem path to the vault file.
     ///   - password: Raw password bytes.
+    ///   - secretKey: The account Secret Key (`A4-…` Emergency-Kit string).
     /// - Returns: An open `TockWorkspace` handle.
-    public static func open(path: String, password: Data) async throws -> TockWorkspace {
+    public static func open(
+        path: String,
+        password: Data,
+        secretKey: String
+    ) async throws -> TockWorkspace {
         let handle = try await performStatic {
-            try openWorkspace(path: path, password: password)
+            try openWorkspace(path: path, password: password, secretKey: secretKey)
         }
         return TockWorkspace(handle: handle, path: path)
     }
@@ -451,6 +461,7 @@ public final class TockPairingAcceptSession: @unchecked Sendable {
     public func completeOnboarding(
         path: String,
         password: Data,
+        secretKey: String,
         invite: TockPairingInvite,
         blob: Data,
         deviceLabel: String?
@@ -459,6 +470,7 @@ public final class TockPairingAcceptSession: @unchecked Sendable {
             try $0.completeOnboarding(
                 path: path,
                 password: password,
+                secretKey: secretKey,
                 invite: invite,
                 blob: blob,
                 deviceLabel: deviceLabel

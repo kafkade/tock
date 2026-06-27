@@ -59,8 +59,8 @@ mod tests {
             .join("test.tockvault")
             .to_string_lossy()
             .to_string();
-        let ws = init_workspace(path, b"test-pw".to_vec()).expect("init workspace");
-        (dir, ws)
+        let init = init_workspace(path, b"test-pw".to_vec()).expect("init workspace");
+        (dir, init.workspace)
     }
 
     #[test]
@@ -77,11 +77,11 @@ mod tests {
             .to_string_lossy()
             .to_string();
 
-        let ws = init_workspace(path.clone(), b"pw123".to_vec()).expect("init");
-        assert_eq!(ws.vault_path(), path);
-        ws.lock().expect("lock");
+        let init = init_workspace(path.clone(), b"pw123".to_vec()).expect("init");
+        assert_eq!(init.workspace.vault_path(), path);
+        init.workspace.lock().expect("lock");
 
-        let ws2 = open_workspace(path.clone(), b"pw123".to_vec()).expect("open");
+        let ws2 = open_workspace(path.clone(), b"pw123".to_vec(), init.secret_key).expect("open");
         assert_eq!(ws2.vault_path(), path);
     }
 
@@ -93,7 +93,10 @@ mod tests {
             .join("nope.tockvault")
             .to_string_lossy()
             .to_string();
-        match open_workspace(path, b"pw".to_vec()) {
+        let secret_key = tock_crypto::SecretKey::generate()
+            .expect("generate")
+            .to_emergency_kit(&[0_u8; 16]);
+        match open_workspace(path, b"pw".to_vec(), secret_key) {
             Err(TockError::VaultNotFound) => {}
             other => panic!("expected VaultNotFound, got {other:?}"),
         }
@@ -107,11 +110,9 @@ mod tests {
             .join("wp.tockvault")
             .to_string_lossy()
             .to_string();
-        init_workspace(path.clone(), b"correct".to_vec())
-            .expect("init")
-            .lock()
-            .expect("lock");
-        match open_workspace(path, b"wrong".to_vec()) {
+        let init = init_workspace(path.clone(), b"correct".to_vec()).expect("init");
+        init.workspace.lock().expect("lock");
+        match open_workspace(path, b"wrong".to_vec(), init.secret_key) {
             Err(TockError::InvalidCredentials) => {}
             other => panic!("expected InvalidCredentials, got {other:?}"),
         }

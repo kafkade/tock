@@ -1,12 +1,16 @@
-//! Key derivation hierarchy: password → MK → MEK → VK → `DK_kind` → IK.
+//! Key derivation hierarchy: (password + Secret Key) → URK → MEK → VK →
+//! `DK_kind` → IK.
 //!
-//! Architecture §5.1 defines the hierarchy; this module wraps the
-//! primitives from `tock-crypto` to enforce the canonical info strings
-//! and AAD construction.
+//! Architecture §5.1 and ADR-011 define the hierarchy; this module wraps
+//! the primitives from `tock-crypto` to enforce the canonical info
+//! strings and AAD construction. The root is the **Unlock Root Key
+//! (URK)** from two-secret key derivation (2SKD): a stolen vault file is
+//! uncrackable without the account Secret Key.
 
 use tock_crypto::SecretBytes;
+use tock_crypto::SecretKey;
 use tock_crypto::aead::{self, Key as AeadKey, Nonce};
-use tock_crypto::kdf::{Argon2Params, argon2id, hkdf_sha256_32};
+use tock_crypto::kdf::{Argon2Params, derive_unlock_root_key, hkdf_sha256_32};
 use zeroize::Zeroizing;
 
 use crate::Error;
@@ -48,31 +52,46 @@ impl core::fmt::Debug for VaultKey {
 pub struct KeyHierarchy;
 
 impl KeyHierarchy {
-    /// Derive the Master Key from the user password using Argon2id with
-    /// the salt and parameters stored in `header`.
+    /// Derive the **Unlock Root Key (URK)** from the user password *and*
+    /// the account [`SecretKey`] via two-secret key derivation (2SKD,
+    /// ADR-011), using the salt, account id, KDF version, and Argon2id
+    /// parameters stored in `header`.
+    ///
+    /// The URK replaces the password-only Master Key at the root of the
+    /// hierarchy: `URK → MEK → VK → DK_kind → IK`.
     ///
     /// # Errors
-    /// Returns [`Error::Crypto`] if Argon2 fails (e.g. memory allocation).
-    pub fn derive_master_key(
+    /// Returns [`Error::Crypto`] if Argon2 or HKDF fails (e.g. memory
+    /// allocation).
+    pub fn derive_unlock_root_key(
         password: &[u8],
+        secret_key: &SecretKey,
         header: &VaultHeader,
     ) -> Result<SecretBytes<32>, Error> {
         let params = Argon2Params::new(header.argon2.t, header.argon2.m_kib, header.argon2.p)
             .map_err(Error::from)?;
-        argon2id(password, &header.kdf_salt, params).map_err(Error::from)
+        derive_unlock_root_key(
+            password,
+            secret_key.expose_secret(),
+            &header.kdf_salt,
+            header.account_id.as_bytes(),
+            header.kdf_version,
+            params,
+        )
+        .map_err(Error::from)
     }
 
-    /// Derive the Master Encryption Key from `mk` using HKDF-SHA256
+    /// Derive the Master Encryption Key from the URK using HKDF-SHA256
     /// with the header's `hkdf_salt`.
     ///
     /// # Errors
     /// Returns [`Error::Crypto`] only if HKDF rejects its inputs (should
     /// not happen for the 32-byte output).
     pub fn derive_mek(
-        mk: &SecretBytes<32>,
+        urk: &SecretBytes<32>,
         header: &VaultHeader,
     ) -> Result<SecretBytes<32>, Error> {
-        hkdf_sha256_32(mk.expose_secret(), &header.hkdf_salt, INFO_MEK).map_err(Error::from)
+        hkdf_sha256_32(urk.expose_secret(), &header.hkdf_salt, INFO_MEK).map_err(Error::from)
     }
 
     /// Wrap the Vault Key under the MEK, binding the wrap to the
@@ -175,12 +194,18 @@ mod tests {
         }
     }
 
+    fn test_secret_key() -> SecretKey {
+        SecretKey::from_bytes([0x5A; 16])
+    }
+
     fn header_skeleton(nonce: [u8; 12], ct: Vec<u8>) -> VaultHeader {
         VaultHeader {
             magic: MAGIC,
             format_version: FORMAT_VERSION,
             min_compatible_version: MIN_COMPAT_VERSION,
             vault_id: Uuid::from_bytes([1; 16]),
+            account_id: Uuid::from_bytes([4; 16]),
+            kdf_version: 1,
             kdf_salt: [2; 16],
             hkdf_salt: [3; 32],
             argon2: fast_argon_params(),
@@ -194,8 +219,9 @@ mod tests {
     #[test]
     fn wrap_then_unwrap_roundtrips() {
         let header_skel = header_skeleton([0; 12], vec![]);
-        let mk = KeyHierarchy::derive_master_key(b"hunter2", &header_skel).expect("mk");
-        let mek = KeyHierarchy::derive_mek(&mk, &header_skel).expect("mek");
+        let sk = test_secret_key();
+        let urk = KeyHierarchy::derive_unlock_root_key(b"hunter2", &sk, &header_skel).expect("urk");
+        let mek = KeyHierarchy::derive_mek(&urk, &header_skel).expect("mek");
         let vk = generate_vault_key().expect("vk");
 
         let (nonce, ct) = KeyHierarchy::wrap_vk(&mek, &vk, &header_skel).expect("wrap");
@@ -209,14 +235,38 @@ mod tests {
     #[allow(clippy::similar_names)]
     fn wrong_password_yields_invalid_credentials() {
         let header_skel = header_skeleton([0; 12], vec![]);
-        let mk = KeyHierarchy::derive_master_key(b"hunter2", &header_skel).expect("mk");
-        let mek = KeyHierarchy::derive_mek(&mk, &header_skel).expect("mek");
+        let sk = test_secret_key();
+        let urk = KeyHierarchy::derive_unlock_root_key(b"hunter2", &sk, &header_skel).expect("urk");
+        let mek = KeyHierarchy::derive_mek(&urk, &header_skel).expect("mek");
         let vk = generate_vault_key().expect("vk");
         let (nonce, ct) = KeyHierarchy::wrap_vk(&mek, &vk, &header_skel).expect("wrap");
         let final_header = header_skeleton(*nonce.as_bytes(), ct);
 
-        let wrong_mk = KeyHierarchy::derive_master_key(b"wrong", &final_header).expect("mk-wrong");
-        let wrong_mek = KeyHierarchy::derive_mek(&wrong_mk, &final_header).expect("mek-wrong");
+        let wrong_urk =
+            KeyHierarchy::derive_unlock_root_key(b"wrong", &sk, &final_header).expect("urk-wrong");
+        let wrong_mek = KeyHierarchy::derive_mek(&wrong_urk, &final_header).expect("mek-wrong");
+        assert!(matches!(
+            KeyHierarchy::unwrap_vk(&wrong_mek, &final_header),
+            Err(Error::InvalidVaultOrCredentials)
+        ));
+    }
+
+    #[test]
+    #[allow(clippy::similar_names)]
+    fn wrong_secret_key_yields_invalid_credentials() {
+        let header_skel = header_skeleton([0; 12], vec![]);
+        let sk = test_secret_key();
+        let urk = KeyHierarchy::derive_unlock_root_key(b"hunter2", &sk, &header_skel).expect("urk");
+        let mek = KeyHierarchy::derive_mek(&urk, &header_skel).expect("mek");
+        let vk = generate_vault_key().expect("vk");
+        let (nonce, ct) = KeyHierarchy::wrap_vk(&mek, &vk, &header_skel).expect("wrap");
+        let final_header = header_skeleton(*nonce.as_bytes(), ct);
+
+        // Correct password, wrong Secret Key → cannot unwrap VK.
+        let wrong_sk = SecretKey::from_bytes([0xA5; 16]);
+        let wrong_urk = KeyHierarchy::derive_unlock_root_key(b"hunter2", &wrong_sk, &final_header)
+            .expect("urk-wrong");
+        let wrong_mek = KeyHierarchy::derive_mek(&wrong_urk, &final_header).expect("mek-wrong");
         assert!(matches!(
             KeyHierarchy::unwrap_vk(&wrong_mek, &final_header),
             Err(Error::InvalidVaultOrCredentials)
@@ -226,8 +276,9 @@ mod tests {
     #[test]
     fn tampered_header_yields_invalid_credentials() {
         let header_skel = header_skeleton([0; 12], vec![]);
-        let mk = KeyHierarchy::derive_master_key(b"hunter2", &header_skel).expect("mk");
-        let mek = KeyHierarchy::derive_mek(&mk, &header_skel).expect("mek");
+        let sk = test_secret_key();
+        let urk = KeyHierarchy::derive_unlock_root_key(b"hunter2", &sk, &header_skel).expect("urk");
+        let mek = KeyHierarchy::derive_mek(&urk, &header_skel).expect("mek");
         let vk = generate_vault_key().expect("vk");
         let (nonce, ct) = KeyHierarchy::wrap_vk(&mek, &vk, &header_skel).expect("wrap");
         let mut final_header = header_skeleton(*nonce.as_bytes(), ct);

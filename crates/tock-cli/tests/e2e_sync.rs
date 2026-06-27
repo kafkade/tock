@@ -121,6 +121,9 @@ struct Device {
     vault: PathBuf,
     password: String,
     home: tempfile::TempDir,
+    /// The account Secret Key (Emergency-Kit string). Captured from the
+    /// init output on first use, or set from the inviter during pairing.
+    secret_key: std::sync::Mutex<Option<String>>,
 }
 
 impl Device {
@@ -129,6 +132,35 @@ impl Device {
             vault: dir.join(format!("{name}.tockvault")),
             password: format!("pw-{name}"),
             home: tempfile::tempdir().expect("home tmp dir"),
+            secret_key: std::sync::Mutex::new(None),
+        }
+    }
+
+    /// The captured account Secret Key, if this device has been initialised
+    /// (or paired) yet.
+    fn secret_key(&self) -> Option<String> {
+        self.secret_key.lock().expect("secret-key lock").clone()
+    }
+
+    /// Adopt an account Secret Key (e.g. the inviter's, when joining an
+    /// existing account during pairing).
+    fn set_secret_key(&self, key: String) {
+        *self.secret_key.lock().expect("secret-key lock") = Some(key);
+    }
+
+    /// Capture the Emergency-Kit string printed by `init` on first use so
+    /// later commands can open the vault (2SKD needs password + Secret Key).
+    fn capture_secret_key(&self, stdout: &str) {
+        let mut guard = self.secret_key.lock().expect("secret-key lock");
+        if guard.is_some() {
+            return;
+        }
+        if let Some(kit) = stdout
+            .lines()
+            .map(str::trim)
+            .find(|line| line.starts_with("A4-"))
+        {
+            *guard = Some(kit.to_string());
         }
     }
 
@@ -141,6 +173,9 @@ impl Device {
             .env("USERPROFILE", self.home.path())
             .env("XDG_CONFIG_HOME", self.home.path().join(".config"))
             .env_remove("TOCK_SERVER");
+        if let Some(secret_key) = self.secret_key() {
+            cmd.env("TOCK_SECRET_KEY", secret_key);
+        }
         cmd
     }
 
@@ -155,7 +190,9 @@ impl Device {
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr),
         );
-        String::from_utf8(output.stdout).expect("utf8 stdout")
+        let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
+        self.capture_secret_key(&stdout);
+        stdout
     }
 
     /// The non-deleted tasks this vault currently sees, as JSON.
@@ -195,6 +232,15 @@ struct TaskRow {
 /// `tock onboard invite` / `tock onboard accept` handshake, shuttling the
 /// out-of-band values between the two processes exactly as a human would.
 fn pair(server: &str, inviter: &Device, acceptor: &Device) {
+    // The acceptor joins the inviter's account, so it unlocks with the same
+    // account Secret Key. Adopt it up front: `onboard accept` reads it from
+    // `TOCK_SECRET_KEY` (set by `command()`) to bind the new device's vault
+    // to the same account, and later commands reuse it to open the vault.
+    let inviter_secret_key = inviter
+        .secret_key()
+        .expect("inviter must be initialised before pairing");
+    acceptor.set_secret_key(inviter_secret_key);
+
     // 1. Start the inviter. It prints its --vault-id / --inviter-pubkey /
     //    --inviter-fingerprint, then blocks reading the acceptor's values
     //    from stdin.

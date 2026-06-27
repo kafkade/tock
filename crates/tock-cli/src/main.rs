@@ -43,6 +43,12 @@ struct Cli {
     #[arg(long, env = "TOCK_PASSWORD", hide_env_values = true)]
     password: Option<String>,
 
+    /// Account Secret Key (the `A4-…` string from your Emergency Kit).
+    /// Required to open an existing vault; reads from `TOCK_SECRET_KEY`.
+    /// On `init` a fresh Secret Key is generated and printed instead.
+    #[arg(long, env = "TOCK_SECRET_KEY", hide_env_values = true)]
+    secret_key: Option<String>,
+
     /// Log format: human (default) or json.
     #[arg(long, env = "TOCK_LOG_FORMAT", default_value = "human")]
     log_format: String,
@@ -134,10 +140,13 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     let password = cli.password.as_deref().map_or(b"" as &[u8], str::as_bytes);
 
     let mut vault = if cli.vault.exists() {
-        tock_storage::open(&cli.vault, password)?
+        let secret_key = resolve_secret_key(cli.secret_key.as_deref())?;
+        tock_storage::open(&cli.vault, password, &secret_key)?
     } else {
         tracing::info!("vault does not exist, initializing");
-        tock_storage::init(&cli.vault, password)?
+        let (vault, secret_key) = tock_storage::init(&cli.vault, password)?;
+        print_emergency_kit(&secret_key, vault.header().account_id);
+        vault
     };
 
     // Handle imports that need &mut Connection (for transactions) early.
@@ -231,6 +240,41 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
 /// Handle `tock onboard` subcommands. Invite opens the existing vault;
 /// Accept creates a fresh vault, so this runs before the normal
 /// open-or-init path in [`run`].
+/// Resolve the account Secret Key for opening an existing vault.
+///
+/// # Errors
+/// Returns an error if no Secret Key was supplied or it fails to parse.
+fn resolve_secret_key(
+    opt: Option<&str>,
+) -> Result<tock_crypto::SecretKey, Box<dyn std::error::Error>> {
+    let raw = opt.ok_or(
+        "missing account Secret Key: pass --secret-key or set TOCK_SECRET_KEY \
+         (the `A4-…` string from your Emergency Kit)",
+    )?;
+    let (_account_id, secret_key) = tock_crypto::SecretKey::parse(raw)
+        .map_err(|_| "invalid account Secret Key: check the Emergency-Kit string and try again")?;
+    Ok(secret_key)
+}
+
+/// Print the freshly generated account Secret Key as an Emergency Kit.
+///
+/// This is the only time the Secret Key is shown; it is never stored in the
+/// vault file or sent to any server.
+fn print_emergency_kit(secret_key: &tock_crypto::SecretKey, account_id: Uuid) {
+    let kit = secret_key.to_emergency_kit(account_id.as_bytes());
+    println!();
+    println!("============================ EMERGENCY KIT ============================");
+    println!("  Your account Secret Key (write it down and keep it safe):");
+    println!();
+    println!("    {kit}");
+    println!();
+    println!("  You need BOTH your password AND this Secret Key to open the vault.");
+    println!("  It is shown ONLY once and is never stored or transmitted. If you");
+    println!("  lose it, the vault cannot be recovered.");
+    println!("======================================================================");
+    println!();
+}
+
 fn run_onboard_cmd(
     cli: &Cli,
     cmd: &commands::sync_cmd::OnboardCmd,
@@ -243,7 +287,8 @@ fn run_onboard_cmd(
             if !cli.vault.exists() {
                 return Err("vault does not exist; nothing to invite from".into());
             }
-            let vault = tock_storage::open(&cli.vault, password)?;
+            let secret_key = resolve_secret_key(cli.secret_key.as_deref())?;
+            let vault = tock_storage::open(&cli.vault, password, &secret_key)?;
             commands::sync_cmd::run_onboard_invite(&vault, server.as_deref())
         }
         OnboardCmd::Accept {
@@ -254,6 +299,7 @@ fn run_onboard_cmd(
         } => commands::sync_cmd::run_onboard_accept(
             &cli.vault,
             password,
+            cli.secret_key.as_deref(),
             server,
             vault_id,
             inviter_pubkey,

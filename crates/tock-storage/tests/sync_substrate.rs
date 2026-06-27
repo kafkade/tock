@@ -27,12 +27,21 @@ fn clone_vault_key(v: &OpenVault) -> VaultKey {
 /// Create device A (fresh vault) and device B (same VK + vault id).
 fn two_devices(dir: &Path) -> (OpenVault, OpenVault) {
     let path_a = dir.join("a.tockvault");
-    let a = vault::init(&path_a, b"password-a").expect("init a");
+    let (a, secret_key) = vault::init(&path_a, b"password-a").expect("init a");
     let vk_b = clone_vault_key(&a);
     let vault_id = a.header().vault_id;
+    let account_id = a.header().account_id;
     let path_b = dir.join("b.tockvault");
-    let b = vault::init_with_key(&path_b, b"password-b", vault_id, vk_b, Some("device-b"))
-        .expect("init b");
+    let b = vault::init_with_key(
+        &path_b,
+        b"password-b",
+        &secret_key,
+        account_id,
+        vault_id,
+        vk_b,
+        Some("device-b"),
+    )
+    .expect("init b");
     (a, b)
 }
 

@@ -32,6 +32,13 @@ pub enum Error {
     #[error("vault requires a newer version of tock")]
     UnsupportedVaultVersion,
 
+    /// Vault uses the legacy password-only format (pre-2SKD) and must be
+    /// re-initialized; there is no automatic migration before 1.0.
+    #[error(
+        "vault uses the legacy password-only format; re-initialize it (no automatic migration before 1.0)"
+    )]
+    VaultNeedsReinit,
+
     /// Migration framework refused to start: an already-applied
     /// migration's stored checksum no longer matches the embedded SQL.
     #[error("migration {version} checksum mismatch (developer/schema integrity check)")]

@@ -38,8 +38,20 @@ use crate::types::{
 
 // ── Top-level constructors ───────────────────────────────────────────
 
+/// Result of initialising a fresh vault: the open workspace plus the
+/// one-time Emergency-Kit string that encodes the generated account
+/// Secret Key. The Secret Key is never stored in the vault or transmitted;
+/// the caller MUST surface `secret_key` to the user exactly once.
+#[derive(uniffi::Record)]
+pub struct WorkspaceInit {
+    /// The unlocked workspace handle.
+    pub workspace: Arc<Workspace>,
+    /// Emergency-Kit string (`A4-…`) encoding the account Secret Key.
+    pub secret_key: String,
+}
+
 /// Create a new vault at `path` protected by `password` and return an
-/// open `Workspace` handle.
+/// open `Workspace` handle together with the generated Secret Key.
 ///
 /// # Errors
 ///
@@ -48,12 +60,18 @@ use crate::types::{
 /// initialised.
 #[allow(clippy::needless_pass_by_value)]
 #[uniffi::export]
-pub fn init_workspace(path: String, password: Vec<u8>) -> Result<Arc<Workspace>, TockError> {
-    let vault = tock_storage::init(&PathBuf::from(&path), &password)?;
-    Ok(Arc::new(Workspace {
+pub fn init_workspace(path: String, password: Vec<u8>) -> Result<WorkspaceInit, TockError> {
+    let (vault, secret_key) = tock_storage::init(&PathBuf::from(&path), &password)?;
+    let account_id = vault.header().account_id;
+    let kit = secret_key.to_emergency_kit(account_id.as_bytes());
+    let workspace = Arc::new(Workspace {
         vault: Mutex::new(Some(vault)),
         path,
-    }))
+    });
+    Ok(WorkspaceInit {
+        workspace,
+        secret_key: kit,
+    })
 }
 
 /// Start the accepter side of a device-pairing handshake.
@@ -81,21 +99,29 @@ pub fn begin_pairing_accept() -> Result<Arc<PairingAcceptSession>, TockError> {
     }))
 }
 
-/// Open an existing vault at `path` with `password` and return a
+/// Open an existing vault at `path` with `password` and the account
+/// `secret_key` (the `A4-…` Emergency-Kit string) and return a
 /// `Workspace` handle.
 ///
 /// # Errors
 ///
 /// Returns [`TockError::VaultNotFound`] if the file does not exist,
-/// [`TockError::InvalidCredentials`] for a wrong password, and
-/// [`TockError::StorageError`] for other failures.
+/// [`TockError::InvalidCredentials`] for a wrong password or Secret Key,
+/// and [`TockError::StorageError`] for other failures.
 #[allow(clippy::needless_pass_by_value)]
 #[uniffi::export]
-pub fn open_workspace(path: String, password: Vec<u8>) -> Result<Arc<Workspace>, TockError> {
-    let vault = tock_storage::open(&PathBuf::from(&path), &password).map_err(|e| match e {
-        tock_storage::Error::NotFound => TockError::VaultNotFound,
-        other => TockError::from(other),
-    })?;
+pub fn open_workspace(
+    path: String,
+    password: Vec<u8>,
+    secret_key: String,
+) -> Result<Arc<Workspace>, TockError> {
+    let (_account_id, secret_key) =
+        tock_crypto::SecretKey::parse(&secret_key).map_err(|_| TockError::InvalidCredentials)?;
+    let vault =
+        tock_storage::open(&PathBuf::from(&path), &password, &secret_key).map_err(|e| match e {
+            tock_storage::Error::NotFound => TockError::VaultNotFound,
+            other => TockError::from(other),
+        })?;
     Ok(Arc::new(Workspace {
         vault: Mutex::new(Some(vault)),
         path,
@@ -790,11 +816,17 @@ impl PairingAcceptSession {
         &self,
         path: String,
         password: Vec<u8>,
+        secret_key: String,
         invite: TockPairingInvite,
         blob: Vec<u8>,
         device_label: Option<String>,
     ) -> Result<Arc<Workspace>, TockError> {
         let acceptor_secret = self.take_secret()?;
+        let (account_id, account_secret_key) =
+            tock_crypto::SecretKey::parse(&secret_key).map_err(|_| TockError::InvalidInput {
+                message: "invalid account Secret Key (Emergency-Kit string)".into(),
+            })?;
+        let account_id = uuid::Uuid::from_bytes(account_id);
         let vault_id =
             uuid::Uuid::parse_str(&invite.vault_id).map_err(|_| TockError::InvalidInput {
                 message: format!("invalid vault id: {}", invite.vault_id),
@@ -820,6 +852,8 @@ impl PairingAcceptSession {
         let vault = tock_storage::vault::init_with_key(
             &PathBuf::from(&path),
             &password,
+            &account_secret_key,
+            account_id,
             vault_id,
             vault_key,
             label,

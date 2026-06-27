@@ -30,7 +30,9 @@
 use tock_core::vault::header::VaultHeader;
 use tock_core::vault::keys::{KeyHierarchy, VaultKey, generate_vault_key};
 use tock_crypto::SecretBytes;
+use tock_crypto::SecretKey;
 use tock_crypto::aead::{self, Key as AeadKey, Nonce};
+use tock_crypto::base32;
 use tock_crypto::kdf::hkdf_sha256_32;
 use uuid::Uuid;
 
@@ -43,98 +45,34 @@ const RECOVERY_KEY_INFO: &[u8] = b"tock/v1/recovery";
 const RECOVERY_WRAP_AAD: &[u8] = b"tock-recovery-wrap-v1";
 
 // ── Crockford Base32 ─────────────────────────────────────────────────
+//
+// The Crockford codec lives in `tock-crypto::base32` (shared with the
+// account Secret Key encoding). These thin wrappers preserve the
+// recovery-code API and map crypto errors into the sync error type.
 
-/// Crockford Base32 alphabet (excludes I, L, O, U to avoid confusion).
-const CROCKFORD_ALPHABET: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
-
-/// Encode bytes to Crockford Base32 string.
+/// Encode bytes to a Crockford Base32 string.
 #[must_use]
 pub fn crockford_encode(data: &[u8]) -> String {
-    if data.is_empty() {
-        return String::new();
-    }
-    // 5 bits per character. Total bits = data.len() * 8.
-    let total_bits = data.len() * 8;
-    let num_chars = total_bits.div_ceil(5);
-    let mut result = Vec::with_capacity(num_chars);
-    let mut bit_buffer: u64 = 0;
-    let mut bits_in_buffer: u32 = 0;
-
-    for &byte in data {
-        bit_buffer = (bit_buffer << 8) | u64::from(byte);
-        bits_in_buffer += 8;
-        while bits_in_buffer >= 5 {
-            bits_in_buffer -= 5;
-            let idx = ((bit_buffer >> bits_in_buffer) & 0x1F) as usize;
-            result.push(CROCKFORD_ALPHABET[idx]);
-        }
-    }
-    // Remaining bits (< 5), left-pad with zeros.
-    if bits_in_buffer > 0 {
-        let idx = ((bit_buffer << (5 - bits_in_buffer)) & 0x1F) as usize;
-        result.push(CROCKFORD_ALPHABET[idx]);
-    }
-    String::from_utf8(result).unwrap_or_default()
+    base32::encode(data)
 }
 
-/// Decode a Crockford Base32 string to bytes.
+/// Decode a Crockford Base32 string to `expected_bytes` bytes.
 ///
-/// Handles normalization: lowercase → uppercase, `O` → `0`, `I`/`L` → `1`.
-/// Skips dashes and spaces.
+/// Normalizes case and ambiguous characters; skips dashes and spaces.
 ///
 /// # Errors
-/// Returns [`Error::WireFormat`] on invalid characters.
+/// Returns [`Error::WireFormat`] on invalid characters or insufficient
+/// input length.
 pub fn crockford_decode(input: &str, expected_bytes: usize) -> Result<Vec<u8>, Error> {
-    let mut values = Vec::new();
-    for ch in input.chars() {
-        let ch = match ch {
-            '-' | ' ' => continue,
-            'a'..='z' => ch.to_ascii_uppercase(),
-            other => other,
-        };
-        // Normalize ambiguous characters.
-        let ch = match ch {
-            'O' => '0',
-            'I' | 'L' => '1',
-            other => other,
-        };
-        let Some(val) = CROCKFORD_ALPHABET.iter().position(|&c| c == ch as u8) else {
-            return Err(Error::WireFormat("invalid Crockford Base32 character"));
-        };
-        values.push(u8::try_from(val).unwrap_or(0));
-    }
-
-    // Reconstruct bytes from 5-bit values.
-    let mut result = Vec::with_capacity(expected_bytes);
-    let mut bit_buffer: u64 = 0;
-    let mut bits_in_buffer: u32 = 0;
-    for val in values {
-        bit_buffer = (bit_buffer << 5) | u64::from(val);
-        bits_in_buffer += 5;
-        while bits_in_buffer >= 8 {
-            bits_in_buffer -= 8;
-            result.push(((bit_buffer >> bits_in_buffer) & 0xFF) as u8);
-        }
-    }
-    // Truncate to expected length (padding bits are discarded).
-    result.truncate(expected_bytes);
-    if result.len() != expected_bytes {
-        return Err(Error::WireFormat("recovery code too short"));
-    }
-    Ok(result)
+    base32::decode(input, expected_bytes)
+        .map_err(|_| Error::WireFormat("invalid Crockford Base32 encoding"))
 }
 
-/// Format a Crockford Base32 string with dashes for readability.
-///
-/// Groups of 4 characters separated by dashes:
-/// `XXXX-XXXX-XXXX-...`
+/// Format a Crockford Base32 string with dashes (groups of 4) for
+/// readability: `XXXX-XXXX-XXXX-...`.
 #[must_use]
 pub fn format_recovery_code(code: &str) -> String {
-    code.as_bytes()
-        .chunks(4)
-        .map(|c| std::str::from_utf8(c).unwrap_or(""))
-        .collect::<Vec<_>>()
-        .join("-")
+    base32::group(code, 4)
 }
 
 // ── Recovery key ─────────────────────────────────────────────────────
@@ -237,23 +175,26 @@ pub fn unwrap_vk_from_recovery(
 
 /// Rotate the vault password.
 ///
-/// Re-derives MK and MEK from the new password and re-wraps VK in the
-/// header. Does **not** change VK — all item keys remain valid.
+/// Re-derives the Unlock Root Key (2SKD) from the **new** password and
+/// the unchanged account [`SecretKey`], then re-derives MEK and re-wraps
+/// VK in the header. Does **not** change VK — all item keys remain
+/// valid. The Secret Key is unchanged by a password rotation.
 ///
 /// Returns the updated header with new `kdf_salt`, `hkdf_salt`,
 /// `vk_wrap_nonce`, and `vk_wrap_ct`.
 ///
 /// # Errors
 /// - [`Error::Crypto`] on KDF / AEAD failure.
-/// - [`Error::Core`] if the old password fails to unwrap VK.
+/// - [`Error::Core`] if the old password/Secret Key fail to unwrap VK.
 pub fn rotate_password(
     #[allow(clippy::similar_names)] old_password: &[u8],
     new_password: &[u8],
+    secret_key: &SecretKey,
     header: &VaultHeader,
 ) -> Result<VaultHeader, Error> {
-    // Unwrap VK with old password.
-    let old_master = KeyHierarchy::derive_master_key(old_password, header)?;
-    let old_enc = KeyHierarchy::derive_mek(&old_master, header)?;
+    // Unwrap VK with the old password + Secret Key.
+    let old_urk = KeyHierarchy::derive_unlock_root_key(old_password, secret_key, header)?;
+    let old_enc = KeyHierarchy::derive_mek(&old_urk, header)?;
     let vk = KeyHierarchy::unwrap_vk(&old_enc, header)?;
 
     // Generate new salts.
@@ -267,9 +208,9 @@ pub fn rotate_password(
     new_header.kdf_salt = kdf_salt;
     new_header.hkdf_salt = hkdf_salt;
 
-    // Derive new MK, MEK and re-wrap VK.
-    let new_master = KeyHierarchy::derive_master_key(new_password, &new_header)?;
-    let new_enc = KeyHierarchy::derive_mek(&new_master, &new_header)?;
+    // Derive new URK, MEK and re-wrap VK.
+    let new_urk = KeyHierarchy::derive_unlock_root_key(new_password, secret_key, &new_header)?;
+    let new_enc = KeyHierarchy::derive_mek(&new_urk, &new_header)?;
     let (nonce, ct) = KeyHierarchy::wrap_vk(&new_enc, &vk, &new_header)?;
     new_header.vk_wrap_nonce = *nonce.as_bytes();
     new_header.vk_wrap_ct = ct;
@@ -333,6 +274,7 @@ mod tests {
     use tock_core::vault::header::{
         Argon2HeaderParams, FORMAT_VERSION, MAGIC, MIN_COMPAT_VERSION, STORAGE_LAYOUT_V0,
     };
+    use tock_crypto::SecretKey;
 
     const fn fast_argon() -> Argon2HeaderParams {
         Argon2HeaderParams {
@@ -342,12 +284,18 @@ mod tests {
         }
     }
 
+    fn test_secret_key() -> SecretKey {
+        SecretKey::from_bytes([0x33; 16])
+    }
+
     fn test_header() -> VaultHeader {
         VaultHeader {
             magic: MAGIC,
             format_version: FORMAT_VERSION,
             min_compatible_version: MIN_COMPAT_VERSION,
             vault_id: Uuid::from_bytes([1; 16]),
+            account_id: Uuid::from_bytes([2; 16]),
+            kdf_version: 1,
             kdf_salt: [2; 16],
             hkdf_salt: [3; 32],
             argon2: fast_argon(),
@@ -360,8 +308,9 @@ mod tests {
 
     fn header_with_wrapped_vk(password: &[u8]) -> (VaultHeader, VaultKey) {
         let header_skel = test_header();
-        let mk = KeyHierarchy::derive_master_key(password, &header_skel).expect("mk");
-        let mek = KeyHierarchy::derive_mek(&mk, &header_skel).expect("mek");
+        let sk = test_secret_key();
+        let urk = KeyHierarchy::derive_unlock_root_key(password, &sk, &header_skel).expect("urk");
+        let mek = KeyHierarchy::derive_mek(&urk, &header_skel).expect("mek");
         let vk = generate_vault_key().expect("vk");
         let (nonce, ct) = KeyHierarchy::wrap_vk(&mek, &vk, &header_skel).expect("wrap");
         let header = VaultHeader {
@@ -467,19 +416,22 @@ mod tests {
     #[allow(clippy::similar_names)]
     fn password_rotation_roundtrip() {
         let (header, original_vk) = header_with_wrapped_vk(b"old-password");
+        let sk = test_secret_key();
 
         // Rotate.
         let new_header =
-            rotate_password(b"old-password", b"new-password", &header).expect("rotate");
+            rotate_password(b"old-password", b"new-password", &sk, &header).expect("rotate");
 
         // Old password should fail.
-        let old_master = KeyHierarchy::derive_master_key(b"old-password", &new_header).expect("mk");
-        let old_enc = KeyHierarchy::derive_mek(&old_master, &new_header).expect("mek");
+        let old_urk =
+            KeyHierarchy::derive_unlock_root_key(b"old-password", &sk, &new_header).expect("urk");
+        let old_enc = KeyHierarchy::derive_mek(&old_urk, &new_header).expect("mek");
         assert!(KeyHierarchy::unwrap_vk(&old_enc, &new_header).is_err());
 
         // New password should succeed and recover same VK.
-        let new_master = KeyHierarchy::derive_master_key(b"new-password", &new_header).expect("mk");
-        let new_enc = KeyHierarchy::derive_mek(&new_master, &new_header).expect("mek");
+        let new_urk =
+            KeyHierarchy::derive_unlock_root_key(b"new-password", &sk, &new_header).expect("urk");
+        let new_enc = KeyHierarchy::derive_mek(&new_urk, &new_header).expect("mek");
         let recovered = KeyHierarchy::unwrap_vk(&new_enc, &new_header).expect("unwrap");
         assert_eq!(
             recovered.as_secret().expose_secret(),
@@ -490,7 +442,8 @@ mod tests {
     #[test]
     fn password_rotation_wrong_old_password_fails() {
         let (header, _vk) = header_with_wrapped_vk(b"correct");
-        assert!(rotate_password(b"wrong", b"new", &header).is_err());
+        let sk = test_secret_key();
+        assert!(rotate_password(b"wrong", b"new", &sk, &header).is_err());
     }
 
     // ── VK rotation plan ─────────────────────────────────────────────
