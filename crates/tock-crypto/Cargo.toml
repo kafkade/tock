@@ -20,6 +20,7 @@ hkdf = { workspace = true }
 sha2 = { workspace = true }
 x25519-dalek = { workspace = true }
 ed25519-dalek = { workspace = true }
+srp = { workspace = true }
 zeroize = { workspace = true }
 subtle = { workspace = true }
 rand_core = { workspace = true }

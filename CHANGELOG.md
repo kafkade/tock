@@ -44,6 +44,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Security
 
 - Hosted `tock-server` sync, device registration, and onboarding routes now require bearer-token authorization before a vault can be claimed or synchronized
+- Zero-knowledge account login with SRP-6a (RFC 5054, 4096-bit group, SHA-256), per ADR-010: the server authenticates you without ever receiving your password, account Secret Key, or the derived Unlock Root Key. Registration sends only a verifier folded over **both** secrets, so a stolen verifier cannot be brute-forced without the Secret Key, and login proves knowledge of both secrets with mutual client/server proofs — a wrong password **or** a wrong Secret Key is rejected. The resulting session key is bound into a short-lived sync bearer token and an event channel-binding tag
 
 ## [0.3.0] - 2026-05-30
 

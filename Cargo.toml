@@ -59,6 +59,11 @@ hkdf = "0.13"
 sha2 = "0.11"
 x25519-dalek = { version = "2", default-features = false, features = ["static_secrets", "zeroize"] }
 ed25519-dalek = { version = "2", default-features = false, features = ["rand_core", "zeroize"] }
+# SRP-6a (RFC 5054) PAKE for zero-knowledge auth (ADR-010/011). The 0.7 line is
+# constant-time (crypto-bigint), RFC5054-correct, and uses digest 0.11 matching
+# our sha2 0.11. `default-features = false` drops the crate's own getrandom/
+# rand_core — ephemerals are generated via `tock_crypto::random::fill_random`.
+srp = { version = "0.7.0-rc.3", default-features = false }
 zeroize = { version = "1.8", features = ["derive"] }
 subtle = "2.6"
 rand_core = { version = "0.6", features = ["getrandom"] }

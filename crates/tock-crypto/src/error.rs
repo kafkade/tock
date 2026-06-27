@@ -63,4 +63,11 @@ pub enum Error {
     /// secret material.
     #[error("invalid account secret key")]
     InvalidSecretKey,
+
+    /// SRP-6a authentication failed. Covers a malicious/zero ephemeral,
+    /// a client proof (`M1`) the server rejected, or a server proof
+    /// (`M2`) the client rejected. Intentionally undifferentiated and
+    /// carries no secret material.
+    #[error("srp authentication failed")]
+    SrpAuth,
 }
