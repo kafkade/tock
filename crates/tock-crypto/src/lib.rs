@@ -12,6 +12,8 @@
 //!   and two-secret key derivation (2SKD).
 //! - [`keyexchange`] — X25519 Diffie-Hellman.
 //! - [`signature`]   — Ed25519 signing and verification.
+//! - [`srp`]     — SRP-6a (RFC 5054) zero-knowledge auth over the
+//!   two-secret (password + Secret Key) input.
 //! - [`secret`]  — `SecretBytes<N>` wrapper with zeroize-on-drop,
 //!   constant-time equality, and redacted `Debug`.
 //! - [`secret_key`] — account `SecretKey` (the "something you have"
@@ -41,6 +43,7 @@ pub mod random;
 pub mod secret;
 pub mod secret_key;
 pub mod signature;
+pub mod srp;
 
 pub use error::Error;
 pub use secret::SecretBytes;
