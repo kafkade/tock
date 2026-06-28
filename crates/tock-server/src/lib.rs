@@ -16,12 +16,15 @@
 //!
 //! - `GET /health` — health check
 //! - `GET /metrics` — server metrics (JSON counters)
-//! - `POST /v1/vaults/:vault_id/devices` — register a device
-//! - `POST /v1/vaults/:vault_id/events/push` — push encrypted events
-//! - `GET /v1/vaults/:vault_id/events/pull` — pull events by cursor
-//! - `PUT /v1/vaults/:vault_id/onboarding/:device_id` — store pairing blob
-//! - `GET /v1/vaults/:vault_id/onboarding/:device_id` — retrieve pairing blob
+//! - `POST /v1/vaults/:vault_id/devices` — register a device (authenticated)
+//! - `POST /v1/vaults/:vault_id/events/push` — push encrypted events (authenticated)
+//! - `GET /v1/vaults/:vault_id/events/pull` — pull events by cursor (authenticated)
+//! - `PUT /v1/vaults/:vault_id/onboarding/:device_id` — store pairing blob (authenticated)
+//! - `GET /v1/vaults/:vault_id/onboarding/:device_id` — retrieve pairing blob (authenticated)
 //! - `POST /v1/accounts/register` — self-hosted account registration (SRP)
+//! - `POST /v1/auth/srp/start` — begin an SRP login (A → B)
+//! - `POST /v1/auth/srp/finish` — complete an SRP login (M1 → M2 + session)
+//! - `POST /v1/auth/refresh` — slide a live session's expiry forward
 //! - `GET|POST /v1/admin/users` — list users / mint invite (admin)
 //! - `DELETE /v1/admin/users/:id`, `POST …/disable`, `…/enable` — manage users
 //! - `GET|PUT /v1/admin/settings` — read/set registration policy (admin)
@@ -31,6 +34,7 @@
 
 mod accounts;
 mod admin;
+mod auth;
 mod billing;
 mod cli;
 mod codec;
@@ -41,9 +45,10 @@ mod quota;
 mod routes;
 mod state;
 
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use axum::Router;
 use axum::routing::{delete, get, post, put};
@@ -95,6 +100,7 @@ pub fn open_app_state(
         mode,
         rate_limiter: Arc::new(RateLimiter::new()),
         metrics: Arc::new(Metrics::new()),
+        pending: Arc::new(Mutex::new(HashMap::new())),
     })
 }
 
@@ -127,6 +133,10 @@ pub fn build_router(state: AppState) -> Router {
         // Self-hosted account system (ADR-011 / issue #127) — available in
         // every mode. Registration stores SRP verifiers only.
         .route("/v1/accounts/register", post(accounts::register))
+        // SRP login + session refresh (ADR-010 / issue #130).
+        .route("/v1/auth/srp/start", post(auth::srp_start))
+        .route("/v1/auth/srp/finish", post(auth::srp_finish))
+        .route("/v1/auth/refresh", post(auth::refresh))
         .route(
             "/v1/admin/users",
             get(admin::list_users).post(admin::create_user_invite),

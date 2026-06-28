@@ -25,8 +25,10 @@ use crate::state::AppState;
 
 /// Authorize the request as an active admin, returning the admin account id.
 ///
-/// Expects `Authorization: Bearer <admin-token>`. Issue #130 extends this to
-/// also accept SRP session tokens.
+/// Accepts either the interim admin **API token** (minted when an admin account
+/// is provisioned, issue #127) or an **SRP session token** (issue #130) whose
+/// account is an active admin. The endpoint signatures and behavior are
+/// unchanged.
 async fn require_admin(state: &AppState, headers: &HeaderMap) -> Result<String, Error> {
     let raw = headers
         .get(axum::http::header::AUTHORIZATION)
@@ -40,12 +42,23 @@ async fn require_admin(state: &AppState, headers: &HeaderMap) -> Result<String, 
         .ok_or(Error::Unauthorized("expected bearer token"))?
         .to_string();
 
+    // 1) Interim admin API token (issue #127).
     let db = state.db.clone();
-    let account_id = tokio::task::spawn_blocking(move || db.admin_account_id_by_token(&token))
-        .await
-        .map_err(|e| Error::Internal(e.to_string()))??
-        .ok_or(Error::Forbidden("admin privileges required"))?;
-    Ok(account_id)
+    let token_for_db = token.clone();
+    if let Some(account_id) =
+        tokio::task::spawn_blocking(move || db.admin_account_id_by_token(&token_for_db))
+            .await
+            .map_err(|e| Error::Internal(e.to_string()))??
+    {
+        return Ok(account_id);
+    }
+
+    // 2) SRP session token belonging to an active admin account (issue #130).
+    if let Some(account_id) = crate::auth::admin_via_session(state, headers).await? {
+        return Ok(account_id);
+    }
+
+    Err(Error::Forbidden("admin privileges required"))
 }
 
 /// A user as rendered by the admin API.

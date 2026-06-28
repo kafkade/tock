@@ -29,7 +29,7 @@ use crate::state::AppState;
 /// with connect info (it always is via [`crate::serve`]). Returns `None` for
 /// router-only callers (e.g. tower `oneshot` tests) so handlers never fail.
 #[allow(clippy::redundant_pub_crate)]
-pub(crate) struct PeerAddr(Option<SocketAddr>);
+pub(crate) struct PeerAddr(pub(crate) Option<SocketAddr>);
 
 impl<S: Send + Sync> FromRequestParts<S> for PeerAddr {
     type Rejection = std::convert::Infallible;
@@ -128,7 +128,8 @@ pub struct RegisterResponse {
 
 /// Best-effort client IP for rate limiting: trust `X-Forwarded-For` (typical
 /// self-host reverse-proxy deployment) and fall back to the socket peer.
-fn client_ip(headers: &HeaderMap, peer: Option<SocketAddr>) -> String {
+#[allow(clippy::redundant_pub_crate)]
+pub(crate) fn client_ip(headers: &HeaderMap, peer: Option<SocketAddr>) -> String {
     if let Some(first) = headers
         .get("x-forwarded-for")
         .and_then(|v| v.to_str().ok())
