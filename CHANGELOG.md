@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-06-28
+
 ### Added
 
 - **SRP login + account-scoped, authenticated sync** for `tock-server` (#130): an SRP-6a login handshake (`POST /v1/auth/srp/start` → `B` + salt, `POST /v1/auth/srp/finish` → `M2` + a short-lived bearer session) authenticates a client without the server ever seeing the password, Secret Key, or session key `K`. Both sides derive the bearer token and a channel-binding tag from `K` via HKDF (the token is never sent in the handshake bodies); the server stores only a SHA-256 hash of the token. All sync routes (`devices`, `events/push`, `events/pull`, onboarding) now require a valid session — unauthenticated requests are rejected with `401`. Vaults are bound to the account that first claims them, and a session may only touch its own account's vaults (`403` otherwise). The channel-binding tag is verified on the event routes as defense-in-depth. `POST /v1/auth/refresh` slides the session TTL forward. Admin endpoints now accept an SRP session token from an admin account (the interim admin api-token still works). Payloads remain ciphertext-only — the server still cannot decrypt user data

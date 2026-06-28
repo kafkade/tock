@@ -29,7 +29,7 @@ default-members = [
 ]
 
 [workspace.package]
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 rust-version = "1.95"
 license = "Apache-2.0"
@@ -41,15 +41,15 @@ authors = ["The tock authors"]
 # Kept intentionally small for the foundation phase; expand as real
 # implementation lands.
 [workspace.dependencies]
-tock-core = { path = "crates/tock-core", version = "0.3.0" }
-tock-crypto = { path = "crates/tock-crypto", version = "0.3.0" }
-tock-parse = { path = "crates/tock-parse", version = "0.3.0" }
-tock-storage = { path = "crates/tock-storage", version = "0.3.0" }
-tock-sync = { path = "crates/tock-sync", version = "0.3.0" }
-tock-import = { path = "crates/tock-import", version = "0.3.0" }
-tock-export = { path = "crates/tock-export", version = "0.3.0" }
-tock-caldav = { path = "crates/tock-caldav", version = "0.3.0" }
-tock-server = { path = "crates/tock-server", version = "0.3.0" }
+tock-core = { path = "crates/tock-core", version = "0.4.0" }
+tock-crypto = { path = "crates/tock-crypto", version = "0.4.0" }
+tock-parse = { path = "crates/tock-parse", version = "0.4.0" }
+tock-storage = { path = "crates/tock-storage", version = "0.4.0" }
+tock-sync = { path = "crates/tock-sync", version = "0.4.0" }
+tock-import = { path = "crates/tock-import", version = "0.4.0" }
+tock-export = { path = "crates/tock-export", version = "0.4.0" }
+tock-caldav = { path = "crates/tock-caldav", version = "0.4.0" }
+tock-server = { path = "crates/tock-server", version = "0.4.0" }
 
 # Crypto primitives (used by tock-crypto). All audited RustCrypto crates.
 # See docs/adr/ADR-002-end-to-end-encryption.md.

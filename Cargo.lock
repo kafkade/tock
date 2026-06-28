@@ -3286,7 +3286,7 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
 name = "tock-caldav"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "serde_json",
  "thiserror 2.0.18",
@@ -3297,7 +3297,7 @@ dependencies = [
 
 [[package]]
 name = "tock-cli"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "async-trait",
  "clap",
@@ -3332,7 +3332,7 @@ dependencies = [
 
 [[package]]
 name = "tock-core"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "proptest",
  "serde",
@@ -3347,7 +3347,7 @@ dependencies = [
 
 [[package]]
 name = "tock-crypto"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "aes-gcm",
  "argon2",
@@ -3366,7 +3366,7 @@ dependencies = [
 
 [[package]]
 name = "tock-export"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "rusqlite",
  "serde",
@@ -3381,7 +3381,7 @@ dependencies = [
 
 [[package]]
 name = "tock-import"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "csv",
  "rusqlite",
@@ -3395,14 +3395,14 @@ dependencies = [
 
 [[package]]
 name = "tock-parse"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "time",
 ]
 
 [[package]]
 name = "tock-server"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "axum",
  "clap",
@@ -3426,7 +3426,7 @@ dependencies = [
 
 [[package]]
 name = "tock-storage"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "rusqlite",
  "serde",
@@ -3446,7 +3446,7 @@ dependencies = [
 
 [[package]]
 name = "tock-sync"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "async-trait",
  "proptest",
@@ -3460,7 +3460,7 @@ dependencies = [
 
 [[package]]
 name = "tock-uniffi"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "serde_json",
  "tempfile",
@@ -4583,7 +4583,7 @@ dependencies = [
 
 [[package]]
 name = "xtask"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "fluent-syntax",
 ]
