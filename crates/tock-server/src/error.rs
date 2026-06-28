@@ -13,7 +13,6 @@ pub enum Error {
     Db(#[from] rusqlite::Error),
 
     /// Request authentication failed.
-    #[allow(dead_code)]
     #[error("unauthorized: {0}")]
     Unauthorized(&'static str),
 
@@ -34,7 +33,6 @@ pub enum Error {
     Forbidden(&'static str),
 
     /// Rate limit exceeded.
-    #[allow(dead_code)]
     #[error("rate limit exceeded")]
     RateLimited,
 

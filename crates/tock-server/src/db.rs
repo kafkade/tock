@@ -32,6 +32,9 @@ struct Migration {
 /// - **v2** introduces the self-hosted account system (ADR-011 / issue #127):
 ///   it rebuilds `accounts` with SRP-verifier storage, roles, and status, and
 ///   adds `server_settings` (registration policy) and `account_invites`.
+/// - **v3** adds `sessions` for authenticated sync (issue #130): SRP login
+///   issues short-lived bearer tokens (derived from the session key `K`); only
+///   their hash + channel-binding tag + expiry are persisted.
 const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 1,
@@ -127,6 +130,24 @@ const MIGRATIONS: &[Migration] = &[
                 created_at TEXT NOT NULL,
                 used       INTEGER NOT NULL DEFAULT 0
             );",
+    },
+    Migration {
+        version: 3,
+        // Authenticated-sync session tokens (issue #130). A row exists for each
+        // live SRP login. We persist only a SHA-256 *hash* of the bearer token —
+        // which is itself HKDF-derived from the SRP session key `K`, so a DB
+        // leak yields no usable token — plus the non-secret channel-binding tag
+        // and an absolute expiry (Unix seconds). No password, Secret Key, URK,
+        // or `K` is ever stored.
+        sql: "CREATE TABLE sessions (
+                token_hash      TEXT PRIMARY KEY,
+                account_id      TEXT NOT NULL,
+                channel_binding BLOB NOT NULL,
+                created_at      TEXT NOT NULL,
+                expires_at      INTEGER NOT NULL
+            );
+            CREATE INDEX sessions_expires_at ON sessions (expires_at);
+            CREATE INDEX sessions_account_id ON sessions (account_id);",
     },
 ];
 
@@ -231,7 +252,7 @@ impl ServerDb {
         match current {
             None => return Err(Error::NotFound),
             Some(Some(existing)) if existing != account_id => {
-                return Err(Error::Unauthorized("vault belongs to a different account"));
+                return Err(Error::Forbidden("vault belongs to a different account"));
             }
             Some(Some(_)) => return Ok(()),
             Some(None) => {}
@@ -259,8 +280,8 @@ impl ServerDb {
         match owner {
             None => Err(Error::NotFound),
             Some(Some(existing)) if existing == account_id => Ok(()),
-            Some(Some(_)) => Err(Error::Unauthorized("vault belongs to a different account")),
-            Some(None) => Err(Error::Unauthorized(
+            Some(Some(_)) => Err(Error::Forbidden("vault belongs to a different account")),
+            Some(None) => Err(Error::Forbidden(
                 "vault is not yet associated with an account",
             )),
         }
@@ -819,7 +840,9 @@ impl ServerDb {
     /// Seam for issue #130's SRP login: fetch the stored verifier material for
     /// a username. Disabled accounts and accounts without SRP credentials
     /// (e.g. hosted billing rows) are excluded.
-    #[allow(dead_code)]
+    /// Seam for issue #130's SRP login: fetch the stored verifier material for
+    /// a username. Disabled accounts and accounts without SRP credentials
+    /// (e.g. hosted billing rows) are excluded.
     pub fn get_srp_credentials(&self, username: &str) -> Result<Option<SrpCredentials>, Error> {
         let conn = self
             .conn
@@ -841,6 +864,100 @@ impl ServerDb {
         )
         .optional()
         .map_err(Into::into)
+    }
+
+    // ── Authenticated-sync sessions (issue #130) ─────────────────────────
+
+    /// Persist a freshly minted SRP login session. `token_hash` is the
+    /// hex SHA-256 of the bearer token (which is itself HKDF-derived from the
+    /// session key `K`); `channel_binding` is the non-secret AAD tag;
+    /// `expires_at` is an absolute Unix-seconds deadline.
+    pub fn create_session(
+        &self,
+        token_hash: &str,
+        account_id: &str,
+        channel_binding: &[u8],
+        expires_at: i64,
+    ) -> Result<(), Error> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))?;
+        conn.execute(
+            "INSERT OR REPLACE INTO sessions
+               (token_hash, account_id, channel_binding, created_at, expires_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                token_hash,
+                account_id,
+                channel_binding,
+                rfc3339_now(),
+                expires_at
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Resolve a live session from its `token_hash`. Returns `None` if the
+    /// session is unknown, expired (`expires_at <= now`), or its account is no
+    /// longer active. `now` is Unix seconds (passed in so callers share one
+    /// clock reading).
+    pub fn lookup_session(
+        &self,
+        token_hash: &str,
+        now: i64,
+    ) -> Result<Option<SessionRecord>, Error> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))?;
+        conn.query_row(
+            "SELECT s.account_id, s.channel_binding, a.role
+               FROM sessions s
+               JOIN accounts a ON a.id = s.account_id
+              WHERE s.token_hash = ?1 AND s.expires_at > ?2 AND a.status = 'active'",
+            params![token_hash, now],
+            |r| {
+                Ok(SessionRecord {
+                    account_id: r.get::<_, String>(0)?,
+                    channel_binding: r.get::<_, Vec<u8>>(1)?,
+                    role: r.get::<_, String>(2)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(Into::into)
+    }
+
+    /// Slide a live session's expiry forward. Returns `false` if the session is
+    /// unknown or already expired (in which case the caller must re-login).
+    pub fn refresh_session(
+        &self,
+        token_hash: &str,
+        now: i64,
+        new_expires_at: i64,
+    ) -> Result<bool, Error> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))?;
+        let updated = conn.execute(
+            "UPDATE sessions SET expires_at = ?3
+              WHERE token_hash = ?1 AND expires_at > ?2",
+            params![token_hash, now, new_expires_at],
+        )?;
+        Ok(updated > 0)
+    }
+
+    /// Delete sessions whose expiry has passed. Best-effort housekeeping called
+    /// opportunistically; returns the number of rows removed.
+    pub fn delete_expired_sessions(&self, now: i64) -> Result<usize, Error> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))?;
+        let deleted = conn.execute("DELETE FROM sessions WHERE expires_at <= ?1", params![now])?;
+        Ok(deleted)
     }
 }
 
@@ -898,7 +1015,6 @@ pub struct UserRecord {
 
 /// Stored SRP verifier material for an account — the seam consumed by issue
 /// #130's login handshake. None of these fields are secret.
-#[allow(dead_code)]
 pub struct SrpCredentials {
     /// Account id bound into the SRP proof.
     pub account_id: String,
@@ -908,6 +1024,17 @@ pub struct SrpCredentials {
     pub srp_verifier: Vec<u8>,
     /// SRP group/hash identifier.
     pub srp_group: String,
+}
+
+/// A live authenticated-sync session resolved from a bearer token hash
+/// (issue #130). None of these fields are secret.
+pub struct SessionRecord {
+    /// Account that owns the session.
+    pub account_id: String,
+    /// Channel-binding tag mixed into event AAD (defense-in-depth, ADR-010).
+    pub channel_binding: Vec<u8>,
+    /// Account role (`admin` or `user`) at session-lookup time.
+    pub role: String,
 }
 
 /// An event stored on the server.
@@ -1063,11 +1190,11 @@ mod tests {
         db.claim_vault_for_account(&vault, &aid1).expect("claim");
         assert!(matches!(
             db.require_vault_access(&vault, &aid2),
-            Err(Error::Unauthorized(_))
+            Err(Error::Forbidden(_))
         ));
         assert!(matches!(
             db.claim_vault_for_account(&vault, &aid2),
-            Err(Error::Unauthorized(_))
+            Err(Error::Forbidden(_))
         ));
     }
 
@@ -1305,6 +1432,60 @@ mod tests {
         db.set_user_status(&out.account_id, "disabled")
             .expect("disable");
         assert!(db.get_srp_credentials("heidi").expect("query").is_none());
+    }
+
+    #[test]
+    fn session_lifecycle_lookup_expiry_and_refresh() {
+        let db = ServerDb::open_memory().expect("open");
+        let out = db
+            .register_account(&sample_account("ivan", None), RegistrationPolicy::Open)
+            .expect("register");
+        let now = 1_000_i64;
+        let cb = vec![0x11_u8; 32];
+
+        // Live session resolves; an unknown hash does not.
+        db.create_session("hash-a", &out.account_id, &cb, now + 100)
+            .expect("create");
+        let rec = db
+            .lookup_session("hash-a", now)
+            .expect("lookup")
+            .expect("present");
+        assert_eq!(rec.account_id, out.account_id);
+        assert_eq!(rec.channel_binding, cb);
+        assert_eq!(rec.role, "admin"); // first account bootstraps as admin
+        assert!(db.lookup_session("missing", now).expect("lookup").is_none());
+
+        // Expired sessions are not returned.
+        db.create_session("hash-b", &out.account_id, &cb, now - 1)
+            .expect("create expired");
+        assert!(db.lookup_session("hash-b", now).expect("lookup").is_none());
+
+        // Refresh slides a live session forward but refuses an expired one.
+        assert!(
+            db.refresh_session("hash-a", now, now + 500)
+                .expect("refresh")
+        );
+        assert!(
+            db.lookup_session("hash-a", now + 400)
+                .expect("lookup")
+                .is_some()
+        );
+        assert!(
+            !db.refresh_session("hash-b", now, now + 500)
+                .expect("refresh")
+        );
+
+        // Disabling the account revokes the session even before expiry.
+        db.set_user_status(&out.account_id, "disabled")
+            .expect("disable");
+        assert!(db.lookup_session("hash-a", now).expect("lookup").is_none());
+
+        // Housekeeping prunes only past-due rows.
+        db.set_user_status(&out.account_id, "active")
+            .expect("enable");
+        let removed = db.delete_expired_sessions(now).expect("prune");
+        assert_eq!(removed, 1); // hash-b only
+        assert!(db.lookup_session("hash-a", now).expect("lookup").is_some());
     }
 
     #[test]
