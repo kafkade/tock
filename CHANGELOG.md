@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Account signup & login with Secret Key onboarding across all clients** (#129): a new zero-I/O `tock-account` crate orchestrates the full account lifecycle — generate a Secret Key, derive the SRP verifier (2SKD), register, and sign in on a fresh device with only email + password + Secret Key. Signup emits an **Emergency Kit** (printable text + PDF) and a **Setup Code** (`TOCK1:` text + scannable QR). The CLI gains `tock account signup/login/logout/status`, storing session credentials in the OS keyring (file fallback for headless) and authenticating every sync request with `Authorization: Bearer` + `X-Tock-Channel-Binding`. Apple apps gain a UniFFI account API (`account_signup_bundle`, SRP login state machine, Setup-Code parsing), Keychain-backed token + channel-binding storage, and channel-bound authed sync. The server stores the wrapped vault header so a new device can recover its keys after SRP login (`PUT`/`GET /v1/vaults/:id/header`), and `srp/start` now returns `kdf_params` so a fresh device derives its Unlock Root Key before authenticating. The password is never persisted or transmitted
+- **Web app** (`apps/web`): a new React + TypeScript + Vite app drives signup, login, and authed sync entirely in the browser via a new `tock-wasm` (wasm-bindgen) binding that exposes the `tock-account` orchestration; signup shows the Emergency Kit + Setup Code (with QR), credentials default to in-memory (sessionStorage opt-in) and the Secret Key is never persisted in the browser. The WASM bundle stays well under the 2 MB gzip budget; a `web` CI job builds the package, enforces the size gate, and runs the Vitest suite
+
 ## [0.4.0] - 2026-06-28
 
 ### Added

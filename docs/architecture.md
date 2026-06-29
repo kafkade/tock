@@ -964,13 +964,15 @@ Tock/
 │   ├── tock-server/             # Axum sync server (AGPL-3.0)
 │   ├── tock-import/             # Things 3, Taskwarrior, CSV, JSON importers
 │   ├── tock-export/             # JSON, CSV, Markdown, iCal, ledger
-│   └── tock-uniffi/             # UniFFI scaffolding crate (cdylib + udl)
+│   ├── tock-uniffi/             # UniFFI scaffolding crate (cdylib + udl)
+│   ├── tock-account/            # PURE: account signup/login orchestration (2SKD + SRP, Emergency Kit, Setup Code)
+│   └── tock-wasm/               # wasm-bindgen account bindings for the web app
 ├── bindings/
 │   └── swift/                      # generated Swift package
 ├── apps/
 │   ├── ios/                        # SwiftUI iOS + iPadOS + watchOS + widgets
 │   ├── macos/                      # SwiftUI macOS (shares iOS code)
-│   └── web/                        # Next.js + WASM (tock-core compiled to wasm32)
+│   └── web/                        # React + TypeScript + Vite (account onboarding via WASM)
 ├── docs/
 └── xtask/                          # cargo-xtask: build orchestration, codegen
 ```
@@ -989,6 +991,8 @@ Tock/
 | `tock-cli`      | Apache-2.0  | YES  | YES    | all of the above + `clap`, `ratatui`, `tokio` (single-thread) |
 | `tock-server`   | AGPL-3.0    | YES  | YES    | `tock-sync`, `axum`, `sqlx`, `tokio`        |
 | `tock-uniffi`   | Apache-2.0  | YES (binding shim) | NO | `tock-core`, `tock-storage`, `tock-sync`, `uniffi` |
+| `tock-account`  | Apache-2.0  | NO   | NO     | `tock-core`, `tock-crypto` (orchestrates 2SKD + SRP; clients own HTTP) |
+| `tock-wasm`     | Apache-2.0  | NO   | NO     | `tock-account`, `wasm-bindgen` (web edge owns `fetch`) |
 
 **Mandatory `Cargo.toml` lints** in every workspace member:
 

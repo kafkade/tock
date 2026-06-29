@@ -21,6 +21,9 @@
 //! - `GET /v1/vaults/:vault_id/events/pull` — pull events by cursor (authenticated)
 //! - `PUT /v1/vaults/:vault_id/onboarding/:device_id` — store pairing blob (authenticated)
 //! - `GET /v1/vaults/:vault_id/onboarding/:device_id` — retrieve pairing blob (authenticated)
+//! - `PUT /v1/vaults/:vault_id/header` — store the non-secret vault header (authenticated)
+//! - `GET /v1/vaults/:vault_id/header` — retrieve the vault header for new-device login (authenticated)
+//! - `GET /v1/account/header` — retrieve the account's vault header by session (authenticated)
 //! - `POST /v1/accounts/register` — self-hosted account registration (SRP)
 //! - `POST /v1/auth/srp/start` — begin an SRP login (A → B)
 //! - `POST /v1/auth/srp/finish` — complete an SRP login (M1 → M2 + session)
@@ -130,6 +133,14 @@ pub fn build_router(state: AppState) -> Router {
             "/v1/vaults/{vault_id}/onboarding/{device_id}",
             put(routes::put_onboarding_blob).get(routes::get_onboarding_blob),
         )
+        // Vault-header bootstrap for new-device account login (issue #129).
+        .route(
+            "/v1/vaults/{vault_id}/header",
+            put(routes::put_vault_header).get(routes::get_vault_header),
+        )
+        // Account-scoped header fetch: a fresh device knows its account but
+        // not its vault id yet (issue #129 new-device login).
+        .route("/v1/account/header", get(routes::get_account_vault_header))
         // Self-hosted account system (ADR-011 / issue #127) — available in
         // every mode. Registration stores SRP verifiers only.
         .route("/v1/accounts/register", post(accounts::register))

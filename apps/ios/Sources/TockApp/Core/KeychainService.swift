@@ -26,6 +26,7 @@ enum KeychainService {
     private static let account = "vault-master-key"
     private static let syncService = "com.kafkade.tock.sync"
     private static let syncTokenAccount = "hosted-api-token"
+    private static let syncChannelAccount = "hosted-channel-binding"
     private static let secretKeyAccount = "vault-secret-key"
     private static let installIdKey = "com.kafkade.tock.installId"
 
@@ -260,6 +261,55 @@ enum KeychainService {
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: syncService,
             kSecAttrAccount as String: syncTokenAccount,
+        ]
+        let status = SecItemDelete(query as CFDictionary)
+        return status == errSecSuccess || status == errSecItemNotFound
+    }
+
+    /// Persist the SRP channel-binding tag (hex) sent on every authed sync
+    /// request as `X-Tock-Channel-Binding`. Paired with the bearer token.
+    static func saveSyncChannelBinding(_ value: String) throws {
+        deleteSyncChannelBinding()
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: syncService,
+            kSecAttrAccount as String: syncChannelAccount,
+            kSecValueData as String: Data(value.utf8),
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+        ]
+        let status = SecItemAdd(query as CFDictionary, nil)
+        guard status == errSecSuccess else {
+            throw KeychainError.saveFailed(status)
+        }
+    }
+
+    static func loadSyncChannelBinding() throws -> String {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: syncService,
+            kSecAttrAccount as String: syncChannelAccount,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        switch status {
+        case errSecSuccess:
+            guard let data = result as? Data else { throw KeychainError.unexpectedData }
+            return String(decoding: data, as: UTF8.self)
+        case errSecItemNotFound:
+            throw KeychainError.itemNotFound
+        default:
+            throw KeychainError.loadFailed(status)
+        }
+    }
+
+    @discardableResult
+    static func deleteSyncChannelBinding() -> Bool {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: syncService,
+            kSecAttrAccount as String: syncChannelAccount,
         ]
         let status = SecItemDelete(query as CFDictionary)
         return status == errSecSuccess || status == errSecItemNotFound

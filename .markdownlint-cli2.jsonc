@@ -11,8 +11,11 @@
   "ignores": [
     "target/**",
     "node_modules/**",
+    "**/node_modules/**",
     "pkg/**",
+    "**/pkg/**",
     "apps/web/.next/**",
+    "apps/web/dist/**",
     "apps/ios/build/**"
   ]
 }

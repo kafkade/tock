@@ -1,0 +1,45 @@
+[package]
+name = "tock-wasm"
+description = "wasm-bindgen account bindings for the tock web app (signup/login/setup-code, zero-I/O)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+
+[lib]
+name = "tock_wasm"
+crate-type = ["cdylib", "rlib"]
+
+# Bundled wasm-opt predates the bulk-memory ops LLVM now emits; skip it. Vite
+# minifies the JS glue and the wasm stays small enough for the budget.
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false
+
+# wasm-bindgen generates `#[no_mangle] pub extern "C"` + unsafe glue, so this
+# crate allows unsafe (workspace default is forbid). Mirrors tock-uniffi.
+[lints.rust]
+unsafe_code = "allow"
+missing_docs = "warn"
+rust_2024_compatibility = { level = "warn", priority = -1 }
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+
+[dependencies]
+tock-account = { workspace = true }
+wasm-bindgen = { workspace = true }
+serde-wasm-bindgen = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.2", features = ["js"] }
+uuid = { workspace = true, features = ["js"] }

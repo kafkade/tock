@@ -65,6 +65,25 @@ public final class TockWorkspace: @unchecked Sendable {
     /// The filesystem path of the vault.
     public var path: String { vaultPath }
 
+    /// Build signup artifacts (register body, Emergency Kit, Setup Code) for
+    /// this freshly created vault. Call once after ``create(path:password:)``.
+    public func signupBundle(
+        secretKey: String,
+        username: String,
+        password: String,
+        serverURL: String
+    ) async throws -> TockSignupBundle {
+        try await perform { ws in
+            try accountSignupBundle(
+                workspace: ws,
+                secretKey: secretKey,
+                username: username,
+                password: password,
+                serverUrl: serverURL
+            )
+        }
+    }
+
     // MARK: - Internal dispatch
 
     /// Run a synchronous FFI call on the serial queue and bridge it to

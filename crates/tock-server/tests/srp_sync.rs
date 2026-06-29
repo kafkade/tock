@@ -475,3 +475,85 @@ async fn srp_login_and_account_scoped_sync() {
         .expect("refresh bogus");
     assert_eq!(resp.status(), reqwest::StatusCode::UNAUTHORIZED);
 }
+
+/// Vault-header bootstrap for new-device login (issue #129): the owner uploads
+/// the non-secret header after login; another device of the same account can
+/// download it, a different account cannot, and anonymous access is rejected.
+#[tokio::test]
+async fn vault_header_bootstrap_round_trip() {
+    let server = TestServer::start();
+    let http = reqwest::Client::new();
+    let base = &server.base_url;
+    let vault = hex(&[0xB7; 16]);
+
+    // Alice registers (bootstraps admin) and logs in.
+    let alice = Account::new("alice", b"alice-password", b"alice-secret-key");
+    let reg = register(&http, base, &alice.register_body(None)).await;
+    let admin_token = reg["admin_token"]
+        .as_str()
+        .expect("admin token")
+        .to_string();
+    let sess_a = login(&http, base, &alice, None).await.expect("alice login");
+
+    let header_blob = b"opaque-non-secret-vault-header";
+
+    // Anonymous upload/download is rejected.
+    let resp = http
+        .get(format!("{base}/v1/vaults/{vault}/header"))
+        .send()
+        .await
+        .expect("anon get header");
+    assert_eq!(resp.status(), reqwest::StatusCode::UNAUTHORIZED);
+
+    // Before upload, GET is 404 for the owner.
+    let resp = http
+        .get(format!("{base}/v1/vaults/{vault}/header"))
+        .bearer_auth(&sess_a.bearer)
+        .send()
+        .await
+        .expect("get before put");
+    assert_eq!(resp.status(), reqwest::StatusCode::NOT_FOUND);
+
+    // Alice uploads the header (claims the vault for her account).
+    let resp = http
+        .put(format!("{base}/v1/vaults/{vault}/header"))
+        .bearer_auth(&sess_a.bearer)
+        .json(&serde_json::json!({ "header": b64(header_blob) }))
+        .send()
+        .await
+        .expect("put header");
+    assert_eq!(resp.status(), reqwest::StatusCode::OK);
+
+    // Alice downloads it back, byte-identical.
+    let resp = http
+        .get(format!("{base}/v1/vaults/{vault}/header"))
+        .bearer_auth(&sess_a.bearer)
+        .send()
+        .await
+        .expect("get header");
+    assert_eq!(resp.status(), reqwest::StatusCode::OK);
+    let body: serde_json::Value = resp.json().await.expect("header json");
+    assert_eq!(b64_decode(body["header"].as_str().unwrap()), header_blob);
+
+    // A different account (Bob) cannot read Alice's header.
+    let resp = http
+        .post(format!("{base}/v1/admin/users"))
+        .bearer_auth(&admin_token)
+        .json(&serde_json::json!({ "role": "user" }))
+        .send()
+        .await
+        .expect("mint invite");
+    let invite: serde_json::Value = resp.json().await.expect("invite json");
+    let invite_token = invite["invite_token"].as_str().expect("invite token");
+    let bob = Account::new("bob", b"bob-password", b"bob-secret-key");
+    register(&http, base, &bob.register_body(Some(invite_token))).await;
+    let sess_b = login(&http, base, &bob, None).await.expect("bob login");
+
+    let resp = http
+        .get(format!("{base}/v1/vaults/{vault}/header"))
+        .bearer_auth(&sess_b.bearer)
+        .send()
+        .await
+        .expect("bob get alice header");
+    assert_eq!(resp.status(), reqwest::StatusCode::FORBIDDEN);
+}

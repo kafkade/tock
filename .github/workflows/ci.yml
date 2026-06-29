@@ -32,6 +32,7 @@ jobs:
       rust: ${{ steps.filter.outputs.rust }}
       ci: ${{ steps.filter.outputs.ci }}
       docs: ${{ steps.filter.outputs.docs }}
+      web: ${{ steps.filter.outputs.web }}
     steps:
       - uses: actions/checkout@v7
       - uses: dorny/paths-filter@v4
@@ -53,6 +54,10 @@ jobs:
             docs:
               - '**/*.md'
               - '.markdownlint-cli2.jsonc'
+            web:
+              - 'apps/web/**'
+              - 'crates/tock-wasm/**'
+              - 'crates/tock-account/**'
 
   # ── Rust checks ──────────────────────────────────────────────────────────────
 
@@ -262,26 +267,39 @@ jobs:
   #         cd apps/ios
   #         xcodebuild build -scheme Tock -destination 'generic/platform=iOS Simulator' -skipMacroValidation
 
-  # --- Future: Web app build ---
-  # web:
-  #   name: Web build
-  #   needs: changes
-  #   if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - uses: actions/checkout@v7
-  #     - uses: dtolnay/rust-toolchain@master
-  #       with:
-  #         toolchain: ${{ env.RUST_TOOLCHAIN }}
-  #         targets: wasm32-unknown-unknown
-  #     - name: Install wasm-pack
-  #       run: cargo install wasm-pack
-  #     - name: Build WASM package
-  #       run: wasm-pack build crates/tock-core --target web --features core
-  #     - name: Install web dependencies
-  #       run: cd apps/web && npm ci
-  #     - name: Build web app
-  #       run: cd apps/web && npm run build
+  # --- Web app build + tests ---
+  web:
+    name: Web build
+    needs: changes
+    if: github.event_name == 'push' || needs.changes.outputs.web == 'true' || needs.changes.outputs.ci == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: web-wasm
+      - name: Install wasm-pack
+        run: cargo install wasm-pack --locked
+      - name: Build WASM package
+        run: wasm-pack build crates/tock-wasm --target web --release
+      - name: Check WASM size budget (2 MB gzip)
+        run: |
+          gz=$(gzip -c crates/tock-wasm/pkg/tock_wasm_bg.wasm | wc -c)
+          echo "gzip size: ${gz} bytes"
+          test "${gz}" -lt 2097152
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install web dependencies
+        run: cd apps/web && npm install
+      - name: Build web app
+        run: cd apps/web && npm run build
+      - name: Test web app
+        run: cd apps/web && npm test
 
   # ── Summary gate ─────────────────────────────────────────────────────────────
   # Single required status check for branch protection / auto-merge.
@@ -290,7 +308,7 @@ jobs:
   ci:
     name: CI
     if: always()
-    needs: [changes, check, test, clippy, fmt, wasm, msrv, deny, dist-plan, markdownlint, apple]
+    needs: [changes, check, test, clippy, fmt, wasm, msrv, deny, dist-plan, markdownlint, apple, web]
     runs-on: ubuntu-latest
     steps:
       - name: Fail if any dependency failed

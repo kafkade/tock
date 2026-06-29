@@ -1,5 +1,6 @@
 //! CLI subcommands.
 
+pub mod account;
 pub mod add;
 pub mod caldav;
 pub mod context;
@@ -136,6 +137,8 @@ pub enum Commands {
     Caldav(caldav::CalDavArgs),
     /// Multi-device sync: push/pull events and review conflicts.
     Sync(sync_cmd::SyncArgs),
+    /// Account signup, login, logout, and status (Secret Key + Emergency Kit).
+    Account(account::AccountArgs),
     /// Pair a new device with an existing vault.
     Onboard(sync_cmd::OnboardArgs),
     /// Inspect and revoke registered devices.

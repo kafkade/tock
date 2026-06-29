@@ -40,6 +40,9 @@ final class AppState {
     /// Hosted-mode bearer token stored in the Keychain.
     var syncAuthToken = ""
 
+    /// SRP channel-binding tag stored in the Keychain alongside the token.
+    var syncChannelBinding = ""
+
     /// Whether a sync run is currently in flight.
     var isSyncing = false
 
@@ -271,6 +274,14 @@ final class AppState {
         } catch {
             syncError = error.localizedDescription
         }
+
+        do {
+            syncChannelBinding = try KeychainService.loadSyncChannelBinding()
+        } catch KeychainError.itemNotFound {
+            syncChannelBinding = ""
+        } catch {
+            syncError = error.localizedDescription
+        }
     }
 
     func saveSyncSettings() async {
@@ -302,7 +313,7 @@ final class AppState {
         defer { isSyncing = false }
 
         do {
-            let result = try await syncClient.sync(authToken: currentSyncToken)
+            let result = try await syncClient.sync(authToken: currentSyncToken, channelBinding: currentChannelBinding)
             lastSyncAt = Date()
             lastSyncSummary = "Pushed \(result.pushed), pulled \(result.pulled), conflicts \(result.conflicts)."
             await refreshSyncState()
@@ -354,6 +365,11 @@ final class AppState {
 
     private var currentSyncToken: String? {
         let trimmed = syncAuthToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private var currentChannelBinding: String? {
+        let trimmed = syncChannelBinding.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
     }
 

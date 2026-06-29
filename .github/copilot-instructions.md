@@ -190,6 +190,14 @@ Use conventional commits: `feat:`, `fix:`, `docs:`, `test:`, `refactor:`, `chore
 - Break-bad-habit mode with inverted scoring, "days clean" display
 - Per-habit reminders (tock habit remind --at/--days/--list/--clear)
 
+**Account onboarding (#129):**
+
+- `tock-account` zero-I/O crate: signup material (Secret Key, 2SKD, SRP verifier), SRP login state machine, Emergency Kit + Setup Code codec
+- CLI `tock account signup/login/logout/status`, OS keyring creds, authed sync (Bearer + channel binding)
+- Server vault-header bootstrap (`PUT`/`GET /v1/vaults/:id/header`); `srp/start` returns kdf_params
+- UniFFI account API + Apple Keychain creds + channel-bound sync
+- `tock-wasm` web binding + React/Vite web app (`apps/web`): signup → kit/code → login → authed sync
+
 ### What's NOT yet implemented (for v1.0)
 
 - **Sync protocol** — wire format, E2EE sync, conflict resolution, device pairing, server implementation
@@ -197,8 +205,8 @@ Use conventional commits: `feat:`, `fix:`, `docs:`, `test:`, `refactor:`, `chore
 - **Markdown export** — only JSON export exists
 - **Accessibility audit** — screen reader support, color contrast
 - **Localization** — i18n framework
-- **iOS/macOS/watchOS apps** — UniFFI scaffolding exists but no SwiftUI app yet
-- **Web app** — WASM compilation works but no frontend
+- **iOS/macOS/watchOS apps** — UniFFI scaffolding + account API exist but no SwiftUI onboarding UI yet
+- **Web app** — onboarding (signup/login/authed sync) shipped; task UI is auth-smoke only (no browser vault)
 - **Checklist items** — sub-task checkboxes on tasks
 - **Annotations** — append-only log per task
 - **Scheduled tasks** — calendar slot scheduling (scheduled_for field exists in schema but unused)

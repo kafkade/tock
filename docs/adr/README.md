@@ -17,6 +17,7 @@ This directory contains Architecture Decision Records for the Tock project. Each
 | [ADR-009](ADR-009-natural-language-cli.md) | Natural language CLI with dual-mode parsing | Accepted |
 | [ADR-010](ADR-010-srp-authentication.md) | SRP-6a authentication | Accepted (amended by ADR-011) |
 | [ADR-011](ADR-011-account-based-self-host-two-secret-auth.md) | Account-based self-host with two-secret (1Password-style) auth | Accepted (2SKD core landed in #126) |
+| [ADR-012](ADR-012-client-account-onboarding.md) | Client account onboarding — Emergency Kit, Setup Code, shared orchestration | Accepted |
 
 ## Categories
 

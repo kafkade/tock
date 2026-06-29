@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/tock-core",
     "crates/tock-crypto",
+    "crates/tock-account",
     "crates/tock-parse",
     "crates/tock-storage",
     "crates/tock-sync",
@@ -12,11 +13,13 @@ members = [
     "crates/tock-cli",
     "crates/tock-server",
     "crates/tock-uniffi",
+    "crates/tock-wasm",
     "xtask",
 ]
 default-members = [
     "crates/tock-core",
     "crates/tock-crypto",
+    "crates/tock-account",
     "crates/tock-parse",
     "crates/tock-storage",
     "crates/tock-sync",
@@ -43,6 +46,7 @@ authors = ["The tock authors"]
 [workspace.dependencies]
 tock-core = { path = "crates/tock-core", version = "0.4.0" }
 tock-crypto = { path = "crates/tock-crypto", version = "0.4.0" }
+tock-account = { path = "crates/tock-account", version = "0.4.0" }
 tock-parse = { path = "crates/tock-parse", version = "0.4.0" }
 tock-storage = { path = "crates/tock-storage", version = "0.4.0" }
 tock-sync = { path = "crates/tock-sync", version = "0.4.0" }
@@ -69,6 +73,8 @@ subtle = "2.6"
 rand_core = { version = "0.6", features = ["getrandom"] }
 thiserror = "2"
 uniffi = "0.31"
+wasm-bindgen = "0.2"
+serde-wasm-bindgen = "0.6"
 
 # Domain & storage shared deps.
 uuid = { version = "1", features = ["v4", "v5", "v7", "serde"] }
@@ -106,6 +112,12 @@ i18n-embed = { version = "0.16", features = ["fluent-system", "desktop-requester
 i18n-embed-fl = "0.10"
 rust-embed = { version = "8", features = ["debug-embed"] }
 unic-langid = "0.9"
+
+# Account onboarding client-edge deps (CLI only): OS keyring, QR + PDF for
+# the Emergency Kit / Setup Code. Confined to the I/O edge, not the core.
+keyring = { version = "3", features = ["apple-native", "sync-secret-service"] }
+qrcode = "0.14"
+printpdf = "0.7"
 
 # Test-only utilities.
 proptest = "1"

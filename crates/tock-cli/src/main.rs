@@ -134,6 +134,9 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         Commands::Onboard(args) => {
             return run_onboard_cmd(cli, &args.cmd);
         }
+        Commands::Account(args) => {
+            return commands::account::run_account_cmd(cli, &args.cmd);
+        }
         _ => {}
     }
 
@@ -231,6 +234,7 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         Commands::Completions { .. } => unreachable!("completions handled before vault open"),
         Commands::Hooks(_) => unreachable!("hooks handled before vault open"),
         Commands::Onboard(_) => unreachable!("onboard handled before vault open"),
+        Commands::Account(_) => unreachable!("account handled before vault open"),
         Commands::Sync(_) | Commands::Device(_) => {
             unreachable!("sync/device handled before connection borrow")
         }

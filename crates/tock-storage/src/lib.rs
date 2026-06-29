@@ -19,7 +19,7 @@ pub mod vault;
 
 pub use error::Error;
 pub use event_log::EventLog;
-pub use vault::{LocalDevice, OpenVault, VaultStatus, init, open, status};
+pub use vault::{LocalDevice, OpenVault, VaultStatus, init, init_from_header, open, status};
 
 #[cfg(test)]
 mod tests {

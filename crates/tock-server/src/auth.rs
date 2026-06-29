@@ -107,6 +107,10 @@ pub struct StartResponse {
     pub salt: String,
     /// Base64-encoded server public ephemeral `B`.
     pub b_pub: String,
+    /// Opaque KDF parameters the account stored at registration, so a fresh
+    /// device can re-derive the Unlock Root Key before completing login
+    /// (issue #129). `null` for accounts registered without them.
+    pub kdf_params: serde_json::Value,
 }
 
 /// `POST /v1/auth/srp/start` — begin an SRP login.
@@ -162,6 +166,8 @@ pub async fn srp_start(
     .map_err(|e| Error::Internal(e.to_string()))??;
 
     let (creds, handshake, b_pub) = prepared;
+    let kdf_params: serde_json::Value =
+        serde_json::from_str(&creds.kdf_params).unwrap_or(serde_json::Value::Null);
     let handshake_id = uuid::Uuid::new_v4().to_string();
     let now = now_unix();
     let pending = PendingHandshake {
@@ -189,6 +195,7 @@ pub async fn srp_start(
         handshake_id,
         salt: base64_encode(&creds.srp_salt),
         b_pub: base64_encode(&b_pub),
+        kdf_params,
     }))
 }
 
