@@ -36,17 +36,18 @@ actor SyncClient {
         self.session = session
     }
 
-    func sync(authToken: String?) async throws -> SyncRunResult {
+    func sync(authToken: String?, channelBinding: String? = nil) async throws -> SyncRunResult {
         let info = try await workspace.syncDeviceInfo()
         let serverURL = try Self.normalizedBaseURL(info.serverUrl)
 
-        try await registerDevice(info: info, serverURL: serverURL, authToken: authToken)
+        try await registerDevice(info: info, serverURL: serverURL, authToken: authToken, channelBinding: channelBinding)
 
         let outbound = try await workspace.collectSyncLocalChanges()
         let pushed = try await push(
             vaultID: info.vaultId,
             serverURL: serverURL,
             authToken: authToken,
+            channelBinding: channelBinding,
             events: outbound
         )
 
@@ -59,6 +60,7 @@ actor SyncClient {
                 vaultID: info.vaultId,
                 serverURL: serverURL,
                 authToken: authToken,
+                channelBinding: channelBinding,
                 after: cursor,
                 limit: 256
             )
@@ -125,7 +127,8 @@ actor SyncClient {
     private func registerDevice(
         info: TockSyncDeviceInfo,
         serverURL: URL,
-        authToken: String?
+        authToken: String?,
+        channelBinding: String?
     ) async throws {
         let body = RegisterDeviceRequest(
             deviceId: info.deviceId,
@@ -137,6 +140,7 @@ actor SyncClient {
             path: "/v1/vaults/\(Self.hexVaultPath(info.vaultId))/devices",
             method: "POST",
             authToken: authToken,
+            channelBinding: channelBinding,
             body: body
         )
         let (_, response) = try await session.data(for: request)
@@ -147,6 +151,7 @@ actor SyncClient {
         vaultID: String,
         serverURL: URL,
         authToken: String?,
+        channelBinding: String?,
         events: [TockSyncEventFrame]
     ) async throws -> Int {
         guard !events.isEmpty else { return 0 }
@@ -165,6 +170,7 @@ actor SyncClient {
             path: "/v1/vaults/\(Self.hexVaultPath(vaultID))/events/push",
             method: "POST",
             authToken: authToken,
+            channelBinding: channelBinding,
             body: body
         )
         let (data, response) = try await session.data(for: request)
@@ -176,6 +182,7 @@ actor SyncClient {
         vaultID: String,
         serverURL: URL,
         authToken: String?,
+        channelBinding: String?,
         after: UInt64,
         limit: Int
     ) async throws -> PullPage {
@@ -194,6 +201,9 @@ actor SyncClient {
         request.httpMethod = "GET"
         if let authToken, !authToken.isEmpty {
             request.setValue("Bearer \(authToken)", forHTTPHeaderField: "Authorization")
+        }
+        if let channelBinding, !channelBinding.isEmpty {
+            request.setValue(channelBinding, forHTTPHeaderField: "X-Tock-Channel-Binding")
         }
         let (data, response) = try await session.data(for: request)
         try Self.ensureSuccess(response)
@@ -216,6 +226,7 @@ actor SyncClient {
         path: String,
         method: String,
         authToken: String?,
+        channelBinding: String? = nil,
         body: Body?
     ) throws -> URLRequest {
         var request = URLRequest(url: serverURL.appending(path: path))
@@ -223,6 +234,9 @@ actor SyncClient {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if let authToken, !authToken.isEmpty {
             request.setValue("Bearer \(authToken)", forHTTPHeaderField: "Authorization")
+        }
+        if let channelBinding, !channelBinding.isEmpty {
+            request.setValue(channelBinding, forHTTPHeaderField: "X-Tock-Channel-Binding")
         }
         if let body {
             let encoder = JSONEncoder()

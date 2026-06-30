@@ -15,6 +15,7 @@ use tock_sync::pairing;
 use tock_sync::transport::{SyncCursor, Transport};
 
 use crate::http_transport::HttpTransport;
+use tock_account::CredentialStore as _;
 
 /// Boxed dynamic error alias for command handlers.
 type CmdResult = Result<(), Box<dyn std::error::Error>>;
@@ -149,7 +150,7 @@ pub fn run_sync(vault: &OpenVault, args: &SyncArgs) -> CmdResult {
     let label = sync::device_label(vault)?;
     let vault_id = vault.header().vault_id;
 
-    let transport = HttpTransport::new(&server, vault_id)?;
+    let transport = authed_transport(&server, vault_id)?;
     let runtime = tokio_runtime()?;
 
     let outcome = runtime.block_on(async {
@@ -285,7 +286,7 @@ pub fn run_onboard_invite(vault: &OpenVault, server_flag: Option<&str>) -> CmdRe
         target,
     )?;
 
-    let transport = HttpTransport::new(&server, vault_id)?;
+    let transport = authed_transport(&server, vault_id)?;
     let runtime = tokio_runtime()?;
     runtime.block_on(transport.put_onboarding_blob(target, blob))?;
 
@@ -507,6 +508,22 @@ fn tokio_runtime() -> Result<tokio::runtime::Runtime, Box<dyn std::error::Error>
         .enable_all()
         .build()
         .map_err(Into::into)
+}
+
+/// Build an [`HttpTransport`], attaching SRP session credentials from the OS
+/// keyring when an account is signed in (issue #129). Pre-account device
+/// pairing still works against unauthenticated servers.
+fn authed_transport(
+    server: &str,
+    vault_id: uuid::Uuid,
+) -> Result<HttpTransport, Box<dyn std::error::Error>> {
+    let transport = HttpTransport::new(server, vault_id)?;
+    Ok(match crate::commands::account::KeyringStore.load() {
+        Ok(Some(creds)) if !creds.bearer_token.is_empty() => {
+            transport.with_auth(creds.bearer_token, creds.channel_binding)
+        }
+        _ => transport,
+    })
 }
 
 fn prompt_hex32(prompt: &str) -> Result<[u8; 32], Box<dyn std::error::Error>> {

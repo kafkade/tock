@@ -298,3 +298,93 @@ pub async fn get_onboarding_blob(
         |data| Ok(Json(serde_json::json!({ "blob": base64_encode(&data) }))),
     )
 }
+
+// ── Vault header bootstrap (issue #129) ──────────────────────────────
+
+/// Request body for storing a vault header.
+#[derive(Deserialize)]
+pub struct PutVaultHeaderRequest {
+    /// Base64-encoded non-secret vault header (KDF salts/params + wrapped VK).
+    pub header: String,
+}
+
+/// `PUT /v1/vaults/:vault_id/header`
+///
+/// Upload the non-secret vault header so a new device can recover the vault
+/// after SRP login. Authenticated and bound to the caller's account; the
+/// server stores the bytes opaquely (the Vault Key inside is wrapped under
+/// MEK←URK, never plaintext).
+pub async fn put_vault_header(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(vault_id): Path<String>,
+    Json(body): Json<PutVaultHeaderRequest>,
+) -> Result<impl IntoResponse, Error> {
+    let vault_bytes = parse_hex_16(&vault_id)?;
+    let header = base64_decode(&body.header)?;
+    if header.is_empty() {
+        return Err(Error::BadRequest("header is required".into()));
+    }
+    let auth = authorize_sync(&state, &headers).await?;
+    let account_id = auth.account_id;
+
+    let db = state.db.clone();
+    tokio::task::spawn_blocking(move || {
+        db.ensure_vault(&vault_bytes)?;
+        db.claim_vault_for_account(&vault_bytes, &account_id)?;
+        db.put_vault_header(&vault_bytes, &header)
+    })
+    .await
+    .map_err(|e| Error::Internal(e.to_string()))??;
+
+    Ok((StatusCode::OK, Json(serde_json::json!({ "ok": true }))))
+}
+
+/// `GET /v1/vaults/:vault_id/header`
+///
+/// Download the stored vault header during new-device login. Authenticated and
+/// authorized against the owning account.
+pub async fn get_vault_header(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(vault_id): Path<String>,
+) -> Result<impl IntoResponse, Error> {
+    let vault_bytes = parse_hex_16(&vault_id)?;
+    let auth = authorize_sync(&state, &headers).await?;
+    let account_id = auth.account_id;
+
+    let db = state.db.clone();
+    let header = tokio::task::spawn_blocking(move || {
+        db.require_vault_access(&vault_bytes, &account_id)?;
+        db.get_vault_header(&vault_bytes)
+    })
+    .await
+    .map_err(|e| Error::Internal(e.to_string()))??;
+
+    header.map_or_else(
+        || Err(Error::NotFound),
+        |data| Ok(Json(serde_json::json!({ "header": base64_encode(&data) }))),
+    )
+}
+
+/// `GET /v1/account/header` — fetch the calling account's vault header.
+///
+/// A fresh device that has only just completed SRP login knows its account but
+/// not the vault id, so it cannot use the vault-scoped route. The server
+/// resolves the vault from the session's account and returns the non-secret
+/// header (issue #129).
+pub async fn get_account_vault_header(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, Error> {
+    let auth = authorize_sync(&state, &headers).await?;
+    let account_id = auth.account_id;
+    let db = state.db.clone();
+    let header = tokio::task::spawn_blocking(move || db.get_vault_header_for_account(&account_id))
+        .await
+        .map_err(|e| Error::Internal(e.to_string()))??;
+    header.map_or_else(
+        || Err(Error::NotFound),
+        |data| Ok(Json(serde_json::json!({ "header": base64_encode(&data) }))),
+    )
+}

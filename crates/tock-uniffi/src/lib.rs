@@ -24,11 +24,16 @@
 //! this shim. That will land as a follow-up when the Swift app needs
 //! non-blocking vault operations.
 
+mod account;
 mod convert;
 mod error;
 mod types;
 mod workspace;
 
+pub use account::{
+    AccountLogin, TockSessionMaterial, TockSetupCode, TockSignupBundle, account_login_start,
+    account_signup_bundle, emergency_kit_text, parse_setup_code,
+};
 pub use error::TockError;
 pub use types::*;
 pub use workspace::{

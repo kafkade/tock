@@ -215,6 +215,15 @@ impl Workspace {
         let vault = guard.as_ref().ok_or(TockError::Locked)?;
         body(vault)
     }
+
+    /// Run a closure against the open vault's non-secret header. Used by the
+    /// account module to derive signup material without exposing the vault.
+    pub(crate) fn with_header<T>(
+        &self,
+        body: impl FnOnce(&tock_core::vault::VaultHeader) -> Result<T, TockError>,
+    ) -> Result<T, TockError> {
+        self.with_open_vault(|vault| body(vault.header()))
+    }
 }
 
 #[allow(

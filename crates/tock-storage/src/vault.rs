@@ -336,6 +336,70 @@ pub fn init_with_key(
     })
 }
 
+/// Materialize a local vault at `path` (must not exist) from a **remote vault
+/// header** plus the account `password` + `secret_key`.
+///
+/// This is the storage primitive behind 1Password-style new-device login
+/// (issue #129): the device fetches the non-secret header from the sync server
+/// after SRP authentication and re-creates a local vault that decrypts the same
+/// event payloads. The supplied header is adopted verbatim (same KDF salts and
+/// MEK-wrapped Vault Key), so deriving the Unlock Root Key from the user's two
+/// secrets unwraps the *same* Vault Key the account was created with. The new
+/// device gets its own random `device_id` and Ed25519 signing key.
+///
+/// # Errors
+/// - [`Error::Io`] if `path` already exists.
+/// - [`Error::InvalidVaultOrCredentials`] for a wrong password, wrong Secret
+///   Key, or a header that does not match the two secrets.
+/// - [`Error::Sqlite`] / [`Error::Crypto`] on the usual failure modes.
+pub fn init_from_header(
+    path: &Path,
+    password: &[u8],
+    secret_key: &SecretKey,
+    header: &VaultHeader,
+    label: Option<&str>,
+) -> Result<OpenVault, Error> {
+    let _span = tracing::info_span!("vault::init_from_header", path = %path.display()).entered();
+    if path.exists() {
+        return Err(Error::Io(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            "vault file already exists",
+        )));
+    }
+
+    // Derive keys from the adopted header and unwrap VK. A wrong password or
+    // Secret Key fails here, identically, as InvalidVaultOrCredentials.
+    let urk = KeyHierarchy::derive_unlock_root_key(password, secret_key, header)
+        .map_err(|_| Error::InvalidVaultOrCredentials)?;
+    let mek =
+        KeyHierarchy::derive_mek(&urk, header).map_err(|_| Error::InvalidVaultOrCredentials)?;
+    let vk = KeyHierarchy::unwrap_vk(&mek, header).map_err(|_| Error::InvalidVaultOrCredentials)?;
+
+    let mut conn = Connection::open(path)?;
+    migrations::migrate(&mut conn)?;
+    save_meta(&conn, &header.to_meta())?;
+
+    // Fresh per-device identity for event signing.
+    let mut device_id = [0_u8; 16];
+    tock_crypto::random::fill_random(&mut device_id)?;
+    let signing_key = SigningKey::try_generate().map_err(map_crypto_err)?;
+    let verifying = signing_key.verifying_key();
+    save_local_device(&conn, &vk, &device_id, &signing_key)?;
+    register_device(&conn, &device_id, &verifying, label)?;
+    tracing::info!(vault_id = %header.vault_id, "vault materialized from remote header");
+
+    Ok(OpenVault {
+        conn,
+        vk,
+        header: header.clone(),
+        device: LocalDevice {
+            device_id,
+            signing_key,
+        },
+        path: path.to_path_buf(),
+    })
+}
+
 /// Read the vault status (header + schema version) without unwrapping VK.
 ///
 /// # Errors

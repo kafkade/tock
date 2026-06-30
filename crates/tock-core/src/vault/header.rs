@@ -267,6 +267,74 @@ impl VaultHeader {
             storage_layout,
         })
     }
+
+    /// Serialize the header to a portable, self-describing byte string for
+    /// **transport** (e.g. uploading to / downloading from the sync server so
+    /// a new device can recover the vault after account login).
+    ///
+    /// This is deliberately distinct from the on-disk persistence (which the
+    /// storage layer owns): it is a length-prefixed encoding of the
+    /// [`Self::to_meta`] map in deterministic sorted-key order. The header is
+    /// non-secret — the Vault Key inside is wrapped under MEK←URK — so it is
+    /// safe to hand to the server, which never derives keys from it.
+    #[must_use]
+    pub fn to_bytes(&self) -> Vec<u8> {
+        const TAG: &[u8; 4] = b"THX1";
+        let meta = self.to_meta();
+        let mut out = Vec::with_capacity(256);
+        out.extend_from_slice(TAG);
+        out.extend_from_slice(&u16::try_from(meta.len()).unwrap_or(u16::MAX).to_le_bytes());
+        for (k, v) in &meta {
+            let kb = k.as_bytes();
+            out.extend_from_slice(&u16::try_from(kb.len()).unwrap_or(u16::MAX).to_le_bytes());
+            out.extend_from_slice(kb);
+            out.extend_from_slice(&u32::try_from(v.len()).unwrap_or(u32::MAX).to_le_bytes());
+            out.extend_from_slice(v);
+        }
+        out
+    }
+
+    /// Parse a header produced by [`Self::to_bytes`].
+    ///
+    /// # Errors
+    /// [`Error::InvalidEncoding`] if the tag, framing, or any length is
+    /// malformed; field-level errors are surfaced via [`Self::from_meta`].
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, Error> {
+        const TAG: &[u8; 4] = b"THX1";
+        let mut pos = 0_usize;
+        let take = |pos: &mut usize, n: usize| -> Result<&[u8], Error> {
+            let end = pos.checked_add(n).ok_or(Error::InvalidEncoding)?;
+            let slice = bytes.get(*pos..end).ok_or(Error::InvalidEncoding)?;
+            *pos = end;
+            Ok(slice)
+        };
+        if take(&mut pos, 4)? != TAG {
+            return Err(Error::InvalidEncoding);
+        }
+        let count = u16::from_le_bytes(
+            take(&mut pos, 2)?
+                .try_into()
+                .map_err(|_| Error::InvalidEncoding)?,
+        );
+        let mut map: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+        for _ in 0..count {
+            let klen = u16::from_le_bytes(
+                take(&mut pos, 2)?
+                    .try_into()
+                    .map_err(|_| Error::InvalidEncoding)?,
+            ) as usize;
+            let key = String::from_utf8(take(&mut pos, klen)?.to_vec())
+                .map_err(|_| Error::InvalidEncoding)?;
+            let vlen = u32::from_le_bytes(
+                take(&mut pos, 4)?
+                    .try_into()
+                    .map_err(|_| Error::InvalidEncoding)?,
+            ) as usize;
+            let value = take(&mut pos, vlen)?.to_vec();
+            map.insert(key, value);
+        }
+        Self::from_meta(&map)
+    }
 }
 
 #[cfg(test)]
@@ -311,6 +379,35 @@ mod tests {
         let h = sample_header();
         let parsed = VaultHeader::from_meta(&into_owned(h.to_meta())).expect("parse");
         assert_eq!(parsed, h);
+    }
+
+    #[test]
+    fn bytes_roundtrip() {
+        let h = sample_header();
+        let bytes = h.to_bytes();
+        let parsed = VaultHeader::from_bytes(&bytes).expect("parse");
+        assert_eq!(parsed, h);
+    }
+
+    #[test]
+    fn bytes_bad_tag_rejected() {
+        let h = sample_header();
+        let mut bytes = h.to_bytes();
+        bytes[0] = b'X';
+        assert!(matches!(
+            VaultHeader::from_bytes(&bytes),
+            Err(Error::InvalidEncoding)
+        ));
+    }
+
+    #[test]
+    fn bytes_truncated_rejected() {
+        let h = sample_header();
+        let bytes = h.to_bytes();
+        assert!(matches!(
+            VaultHeader::from_bytes(&bytes[..bytes.len() - 3]),
+            Err(Error::InvalidEncoding)
+        ));
     }
 
     #[test]

@@ -27,6 +27,10 @@ pub struct HttpTransport {
     base: String,
     /// Lowercase-hex 16-byte vault id; selects the server bucket.
     vault_hex: String,
+    /// Hex SRP session bearer token, attached as `Authorization: Bearer`.
+    bearer: Option<String>,
+    /// Hex SRP channel-binding tag, attached as `X-Tock-Channel-Binding`.
+    channel_binding: Option<String>,
 }
 
 impl HttpTransport {
@@ -42,11 +46,56 @@ impl HttpTransport {
             client,
             base: base_url.trim_end_matches('/').to_string(),
             vault_hex: hex_encode(vault_id.as_bytes()),
+            bearer: None,
+            channel_binding: None,
         })
+    }
+
+    /// Attach the SRP session bearer token + channel-binding tag (both hex)
+    /// so authenticated sync requests are accepted by a self-hosted server.
+    #[must_use]
+    pub fn with_auth(mut self, bearer: String, channel_binding: String) -> Self {
+        self.bearer = Some(bearer);
+        self.channel_binding = Some(channel_binding);
+        self
     }
 
     fn url(&self, suffix: &str) -> String {
         format!("{}/v1/vaults/{}/{suffix}", self.base, self.vault_hex)
+    }
+
+    /// Attach the auth headers (if present) to a request.
+    fn auth(&self, rb: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        let mut rb = rb;
+        if let Some(b) = &self.bearer {
+            rb = rb.header("authorization", format!("Bearer {b}"));
+        }
+        if let Some(cb) = &self.channel_binding {
+            rb = rb.header("x-tock-channel-binding", cb);
+        }
+        rb
+    }
+
+    /// Upload the (non-secret) vault header so a fresh device can recover the
+    /// wrapped Vault Key after SRP login (issue #129). Requires auth.
+    ///
+    /// # Errors
+    /// [`Error::Transport`] on a non-success response.
+    pub async fn put_vault_header(&self, header: &[u8]) -> Result<(), Error> {
+        #[derive(serde::Serialize)]
+        struct HeaderBody {
+            header: String,
+        }
+        let resp = self
+            .auth(self.client.put(self.url("header")))
+            .json(&HeaderBody {
+                header: base64_encode(header),
+            })
+            .send()
+            .await
+            .map_err(|e| Error::Transport(e.to_string()))?;
+        ensure_success(resp).await?;
+        Ok(())
     }
 }
 
@@ -115,8 +164,7 @@ impl Transport for HttpTransport {
             label,
         };
         let resp = self
-            .client
-            .post(self.url("devices"))
+            .auth(self.client.post(self.url("devices")))
             .json(&body)
             .send()
             .await
@@ -139,8 +187,7 @@ impl Transport for HttpTransport {
             });
         }
         let resp = self
-            .client
-            .post(self.url("events/push"))
+            .auth(self.client.post(self.url("events/push")))
             .json(&PushBody { events: items })
             .send()
             .await
@@ -160,8 +207,7 @@ impl Transport for HttpTransport {
     async fn pull(&self, cursor: SyncCursor, limit: usize) -> Result<PullBatch, Error> {
         let after = i64::try_from(cursor.position).unwrap_or(i64::MAX);
         let resp = self
-            .client
-            .get(self.url("events/pull"))
+            .auth(self.client.get(self.url("events/pull")))
             .query(&[("after", after.to_string()), ("limit", limit.to_string())])
             .send()
             .await
@@ -195,11 +241,10 @@ impl Transport for HttpTransport {
             blob: base64_encode(&blob.encode()),
         };
         let resp = self
-            .client
-            .put(self.url(&format!(
+            .auth(self.client.put(self.url(&format!(
                 "onboarding/{}",
                 hex_encode(target_device.as_bytes())
-            )))
+            ))))
             .json(&body)
             .send()
             .await
@@ -210,8 +255,10 @@ impl Transport for HttpTransport {
 
     async fn get_onboarding_blob(&self, device: DeviceId) -> Result<Option<OnboardingBlob>, Error> {
         let resp = self
-            .client
-            .get(self.url(&format!("onboarding/{}", hex_encode(device.as_bytes()))))
+            .auth(
+                self.client
+                    .get(self.url(&format!("onboarding/{}", hex_encode(device.as_bytes())))),
+            )
             .send()
             .await
             .map_err(|e| Error::Transport(e.to_string()))?;

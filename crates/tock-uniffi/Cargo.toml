@@ -50,6 +50,7 @@ tock-core = { workspace = true }
 tock-crypto = { workspace = true }
 tock-storage = { workspace = true }
 tock-sync = { workspace = true }
+tock-account = { workspace = true }
 uniffi = { workspace = true }
 uuid = { workspace = true }
 time = { workspace = true }

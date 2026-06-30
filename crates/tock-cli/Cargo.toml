@@ -26,6 +26,7 @@ workspace = true
 [dependencies]
 tock-core = { workspace = true }
 tock-crypto = { workspace = true }
+tock-account = { workspace = true }
 tock-storage = { workspace = true }
 tock-parse = { workspace = true }
 tock-sync = { workspace = true }
@@ -51,6 +52,9 @@ i18n-embed = { workspace = true }
 i18n-embed-fl = { workspace = true }
 rust-embed = { workspace = true }
 unic-langid = { workspace = true }
+keyring = { workspace = true }
+qrcode = { workspace = true }
+printpdf = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

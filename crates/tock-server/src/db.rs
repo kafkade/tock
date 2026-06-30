@@ -35,6 +35,9 @@ struct Migration {
 /// - **v3** adds `sessions` for authenticated sync (issue #130): SRP login
 ///   issues short-lived bearer tokens (derived from the session key `K`); only
 ///   their hash + channel-binding tag + expiry are persisted.
+/// - **v4** adds `vault_headers` (issue #129): the non-secret vault header
+///   (KDF salts/params + MEK-wrapped Vault Key) so a fresh device can recover
+///   the vault after SRP login without device-to-device pairing.
 const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 1,
@@ -148,6 +151,20 @@ const MIGRATIONS: &[Migration] = &[
             );
             CREATE INDEX sessions_expires_at ON sessions (expires_at);
             CREATE INDEX sessions_account_id ON sessions (account_id);",
+    },
+    Migration {
+        version: 4,
+        // Vault-header bootstrap for new-device account login (issue #129).
+        // The vault header is NON-secret: it carries KDF salts/params and the
+        // Vault Key *wrapped* under MEK←URK (password + Secret Key), so the
+        // server still never sees plaintext keys. Storing it lets a fresh
+        // device sign in with only email+password+Secret Key (no second device
+        // online) and recover the vault without device-to-device pairing.
+        sql: "CREATE TABLE vault_headers (
+                vault_id   BLOB PRIMARY KEY,
+                header     BLOB NOT NULL,
+                updated_at TEXT NOT NULL
+            );",
     },
 ];
 
@@ -456,6 +473,65 @@ impl ServerDb {
             )
             .optional()?;
         Ok(blob)
+    }
+
+    /// Store (or replace) the non-secret vault header blob for a vault.
+    ///
+    /// The header carries KDF salts/params and the MEK-wrapped Vault Key; the
+    /// server never decrypts it. Uploaded by the owning device at signup so a
+    /// new device can recover the vault after SRP login (issue #129).
+    pub fn put_vault_header(&self, vault_id: &[u8; 16], header: &[u8]) -> Result<(), Error> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))?;
+        let now = time::OffsetDateTime::now_utc()
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap_or_default();
+        conn.execute(
+            "INSERT OR REPLACE INTO vault_headers (vault_id, header, updated_at)
+             VALUES (?1, ?2, ?3)",
+            params![vault_id.to_vec(), header, now],
+        )?;
+        Ok(())
+    }
+
+    /// Fetch the stored vault header blob for a vault, if any.
+    pub fn get_vault_header(&self, vault_id: &[u8; 16]) -> Result<Option<Vec<u8>>, Error> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))?;
+        let header: Option<Vec<u8>> = conn
+            .query_row(
+                "SELECT header FROM vault_headers WHERE vault_id = ?1",
+                params![vault_id.to_vec()],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(header)
+    }
+
+    /// Fetch the stored header for whichever vault the account owns. Used by a
+    /// fresh device that knows its account but not yet its vault id
+    /// (issue #129 new-device login). Returns the most-recently updated header
+    /// if several vaults are claimed by the account.
+    pub fn get_vault_header_for_account(&self, account_id: &str) -> Result<Option<Vec<u8>>, Error> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))?;
+        let header: Option<Vec<u8>> = conn
+            .query_row(
+                "SELECT h.header FROM vault_headers h
+                 JOIN vaults v ON v.id = h.vault_id
+                 WHERE v.account_id = ?1
+                 ORDER BY h.updated_at DESC LIMIT 1",
+                params![account_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(header)
     }
 
     /// Get the maximum lamport value for a vault.
@@ -849,7 +925,7 @@ impl ServerDb {
             .lock()
             .map_err(|e| Error::Internal(e.to_string()))?;
         conn.query_row(
-            "SELECT id, srp_salt, srp_verifier, srp_group FROM accounts
+            "SELECT id, srp_salt, srp_verifier, srp_group, kdf_params FROM accounts
              WHERE username = ?1 AND status = 'active'
                AND srp_salt IS NOT NULL AND srp_verifier IS NOT NULL",
             params![username],
@@ -859,6 +935,7 @@ impl ServerDb {
                     srp_salt: r.get::<_, Vec<u8>>(1)?,
                     srp_verifier: r.get::<_, Vec<u8>>(2)?,
                     srp_group: r.get::<_, Option<String>>(3)?.unwrap_or_default(),
+                    kdf_params: r.get::<_, Option<String>>(4)?.unwrap_or_default(),
                 })
             },
         )
@@ -1024,6 +1101,10 @@ pub struct SrpCredentials {
     pub srp_verifier: Vec<u8>,
     /// SRP group/hash identifier.
     pub srp_group: String,
+    /// Opaque KDF parameters the client stored at registration. Returned at
+    /// `srp/start` so a fresh device can re-derive the URK before login
+    /// (issue #129); never interpreted by the server.
+    pub kdf_params: String,
 }
 
 /// A live authenticated-sync session resolved from a bearer token hash
