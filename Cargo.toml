@@ -115,7 +115,15 @@ unic-langid = "0.9"
 
 # Account onboarding client-edge deps (CLI only): OS keyring, QR + PDF for
 # the Emergency Kit / Setup Code. Confined to the I/O edge, not the core.
-keyring = { version = "3", features = ["apple-native", "sync-secret-service"] }
+# Linux uses the pure-Rust Secret Service backend (zbus) so building the CLI
+# needs no system `libdbus-1-dev`; `async-io` as the runtime avoids the
+# documented tokio main-thread deadlock in keyring's secret-service backend.
+keyring = { version = "3", features = [
+    "apple-native",
+    "async-secret-service",
+    "crypto-rust",
+    "async-io",
+] }
 qrcode = "0.14"
 printpdf = "0.7"
 
