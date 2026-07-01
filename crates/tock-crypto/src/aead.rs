@@ -95,7 +95,7 @@ impl Nonce {
 
 fn cipher(key: &Key) -> Aes256Gcm {
     let raw: &[u8; 32] = key.0.expose_secret();
-    Aes256Gcm::new(AesKey::<Aes256Gcm>::from_slice(raw))
+    Aes256Gcm::new(&AesKey::<Aes256Gcm>::from(*raw))
 }
 
 /// Encrypt `plaintext` under `(key, nonce, aad)`, returning
@@ -105,10 +105,10 @@ fn cipher(key: &Key) -> Aes256Gcm {
 /// Returns [`Error::AeadEncrypt`] if the plaintext is larger than the
 /// AES-GCM maximum message size (`~64 GiB`).
 pub fn seal(key: &Key, nonce: &Nonce, aad: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, Error> {
-    let nonce = AesNonce::from_slice(nonce.as_bytes());
+    let nonce = AesNonce::from(*nonce.as_bytes());
     cipher(key)
         .encrypt(
-            nonce,
+            &nonce,
             Payload {
                 aad,
                 msg: plaintext,
@@ -131,10 +131,10 @@ pub fn open(
     aad: &[u8],
     ciphertext: &[u8],
 ) -> Result<Zeroizing<Vec<u8>>, Error> {
-    let nonce = AesNonce::from_slice(nonce.as_bytes());
+    let nonce = AesNonce::from(*nonce.as_bytes());
     let pt = cipher(key)
         .decrypt(
-            nonce,
+            &nonce,
             Payload {
                 aad,
                 msg: ciphertext,
