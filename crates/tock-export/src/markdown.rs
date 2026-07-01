@@ -32,7 +32,9 @@ const TASK_LIST_TEMPLATE: &str = r#"# Today — {{ today }}
 {%- if t.deadline %} _due {{ t.deadline }}_{% endif %}
 {%- if t.tags | length > 0 %} {% for tag in t.tags %}`#{{ tag }}` {% endfor %}{% endif %}
 {%- if t.priority %} ({{ t.priority }}){% endif %}
-{% endfor %}
+{% if t.annotations | length > 0 %}{% for a in t.annotations %}  - _{{ a.created_at }}_ — {{ a.body }}
+{% endfor %}{% endif %}
+{%- endfor %}
 {% endfor -%}
 "#;
 
@@ -61,6 +63,15 @@ const TIME_REPORT_TEMPLATE: &str = r"# Time Report — {{ today }}
 // ---------------------------------------------------------------------------
 // Serializable context types
 // ---------------------------------------------------------------------------
+
+/// An annotation prepared for template rendering.
+#[derive(Clone, Debug, Serialize)]
+pub struct AnnotationContext {
+    /// Annotation text.
+    pub body: String,
+    /// ISO timestamp.
+    pub created_at: String,
+}
 
 /// A task prepared for template rendering.
 #[derive(Clone, Debug, Serialize)]
@@ -95,6 +106,8 @@ pub struct TaskContext {
     pub done_at: Option<String>,
     /// ISO timestamp.
     pub cancelled_at: Option<String>,
+    /// Append-only annotations, oldest first.
+    pub annotations: Vec<AnnotationContext>,
 }
 
 /// A habit prepared for template rendering.
@@ -275,6 +288,7 @@ fn task_to_context(task: &Task, project_map: &HashMap<uuid::Uuid, String>) -> Ta
         modified_at: format_ts(&task.modified_at),
         done_at: task.done_at.as_ref().map(format_ts),
         cancelled_at: task.cancelled_at.as_ref().map(format_ts),
+        annotations: Vec::new(),
     }
 }
 
@@ -457,6 +471,49 @@ pub fn render_markdown(
 // Convenience: load from Connection and render
 // ---------------------------------------------------------------------------
 
+/// Populate task annotations in an already-built [`ExportContext`].
+///
+/// Kept separate from [`build_context`] so the latter stays pure (no I/O).
+/// Annotations are matched to tasks by `sid`.
+///
+/// # Errors
+/// Returns errors from storage queries.
+pub fn attach_task_annotations(
+    conn: &Connection,
+    tasks: &[Task],
+    context: &mut ExportContext,
+) -> Result<(), Error> {
+    let mut by_sid: HashMap<u32, Vec<AnnotationContext>> = HashMap::new();
+    for task in tasks {
+        let annotations = tock_storage::repo::annotation_repo::list_for_entity(
+            conn,
+            task.id,
+            tock_core::domain::annotation::ENTITY_KIND_TASK,
+        )?
+        .iter()
+        .map(|annotation| AnnotationContext {
+            body: annotation.body.clone(),
+            created_at: format_ts(&annotation.created_at),
+        })
+        .collect();
+        by_sid.insert(task.sid, annotations);
+    }
+
+    for task_ctx in &mut context.tasks {
+        if let Some(annotations) = by_sid.get(&task_ctx.sid) {
+            task_ctx.annotations.clone_from(annotations);
+        }
+    }
+    for group in &mut context.tasks_by_project {
+        for task_ctx in &mut group.tasks {
+            if let Some(annotations) = by_sid.get(&task_ctx.sid) {
+                task_ctx.annotations.clone_from(annotations);
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Load all domain data from the vault and render a Markdown export.
 ///
 /// # Errors
@@ -467,7 +524,8 @@ pub fn export_markdown(conn: &Connection, template: &TemplateSource<'_>) -> Resu
     let time_blocks = tock_storage::repo::time_block_repo::list(conn, true)?;
     let projects = tock_storage::repo::project_repo::list(conn, false)?;
 
-    let context = build_context(&tasks, &habits, &time_blocks, &projects);
+    let mut context = build_context(&tasks, &habits, &time_blocks, &projects);
+    attach_task_annotations(conn, &tasks, &mut context)?;
     render_markdown(&context, template)
 }
 
@@ -603,6 +661,30 @@ mod tests {
         let ctx = build_context(&[task], &[], &[], &[]);
         let md = render_ok(&ctx, &TemplateSource::Builtin(BuiltinTemplate::TaskList));
         assert!(md.contains("## (no project)"));
+    }
+
+    #[test]
+    fn task_list_renders_annotations() {
+        let task = sample_task(None);
+        let mut ctx = build_context(&[task], &[], &[], &[]);
+        let annotation = AnnotationContext {
+            body: "reviewed with team".to_string(),
+            created_at: "2026-01-02".to_string(),
+        };
+        for t in &mut ctx.tasks {
+            t.annotations.push(annotation.clone());
+        }
+        for group in &mut ctx.tasks_by_project {
+            for t in &mut group.tasks {
+                t.annotations.push(annotation.clone());
+            }
+        }
+        let md = render_ok(&ctx, &TemplateSource::Builtin(BuiltinTemplate::TaskList));
+        assert!(
+            md.contains("reviewed with team"),
+            "missing annotation: {md}"
+        );
+        assert!(md.contains("_2026-01-02_"), "missing annotation date: {md}");
     }
 
     #[test]

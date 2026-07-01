@@ -174,8 +174,13 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // Handle imports that need &mut Connection (for transactions) early.
-    if let Commands::Import { format, file, map } = command
-        && run_transactional_import(&mut vault, format, file, map.as_deref())?
+    if let Commands::Import {
+        format,
+        file,
+        map,
+        include_trash,
+    } = command
+        && run_transactional_import(&mut vault, format, file, map.as_deref(), *include_trash)?
     {
         return Ok(());
     }
@@ -235,6 +240,8 @@ fn dispatch_command(
         | Commands::Delete { .. }
         | Commands::Depend { .. }
         | Commands::Undepend { .. }
+        | Commands::Annotate { .. }
+        | Commands::Denotate { .. }
         | Commands::List { .. }
         | Commands::Show { .. }
         | Commands::Urgency { .. } => {
@@ -316,6 +323,8 @@ fn undoable_label(command: &Commands) -> Option<String> {
         Commands::Depend { sid, on } => format!("depend #{sid} on #{on}"),
         Commands::Undepend { sid, from } => format!("undepend #{sid} from #{from}"),
         Commands::Checklist(_) => "checklist".to_owned(),
+        Commands::Annotate { sid, .. } => format!("annotate #{sid}"),
+        Commands::Denotate { sid, index } => format!("denotate #{sid} [{index}]"),
         Commands::Project(_) => "project".to_owned(),
         Commands::Area(_) => "area".to_owned(),
         Commands::Tag(_) => "tag".to_owned(),
@@ -435,11 +444,19 @@ fn run_transactional_import(
     format: &str,
     file: &std::path::Path,
     map: Option<&std::path::Path>,
+    include_trash: bool,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     if format.eq_ignore_ascii_case("taskwarrior") {
         let contents = std::fs::read_to_string(file)?;
         let conn_mut = vault.connection_mut();
         let report = tock_import::taskwarrior::import_taskwarrior(conn_mut, &contents)?;
+        print!("{report}");
+        return Ok(true);
+    }
+    if format.eq_ignore_ascii_case("things3") {
+        let contents = std::fs::read_to_string(file)?;
+        let conn_mut = vault.connection_mut();
+        let report = tock_import::things3::import_things3(conn_mut, &contents, include_trash)?;
         print!("{report}");
         return Ok(true);
     }
@@ -690,7 +707,9 @@ fn run_export_md(
     template_path: Option<&std::path::Path>,
     filter: &[String],
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use tock_export::markdown::{BuiltinTemplate, TemplateSource, build_context, render_markdown};
+    use tock_export::markdown::{
+        BuiltinTemplate, TemplateSource, attach_task_annotations, build_context, render_markdown,
+    };
 
     // Load domain data.
     let mut tasks = tock_storage::repo::task_repo::list(conn, false)?;
@@ -719,6 +738,8 @@ fn run_export_md(
     };
 
     let context = build_context(&tasks, &habits, &time_blocks, &projects);
+    let mut context = context;
+    attach_task_annotations(conn, &tasks, &mut context).map_err(|e| format!("{e}"))?;
     let md = render_markdown(&context, &template_source).map_err(|e| format!("{e}"))?;
 
     match out {
@@ -876,6 +897,53 @@ fn run_task_cmd(
                     from = i64::from(*from)
                 )
             );
+        }
+        Commands::Annotate { sid, words } => {
+            if let Some(task) = tock_storage::repo::task_repo::get_by_sid(conn, *sid)? {
+                let body = words.join(" ");
+                let body = body.trim();
+                if body.is_empty() {
+                    eprintln!("{}", tr!("annotate-empty"));
+                } else {
+                    tock_storage::repo::annotation_repo::add(
+                        conn,
+                        &tock_core::domain::annotation::NewAnnotation::for_task(task.id, body),
+                    )?;
+                    println!("{}", tr!("annotate-added", sid = i64::from(*sid)));
+                }
+            } else {
+                eprintln!("{}", tr!("task-not-found", sid = i64::from(*sid)));
+            }
+        }
+        Commands::Denotate { sid, index } => {
+            if let Some(task) = tock_storage::repo::task_repo::get_by_sid(conn, *sid)? {
+                match tock_storage::repo::annotation_repo::remove_by_index(
+                    conn,
+                    task.id,
+                    tock_core::domain::annotation::ENTITY_KIND_TASK,
+                    *index,
+                ) {
+                    Ok(_) => println!(
+                        "{}",
+                        tr!(
+                            "annotate-removed",
+                            sid = i64::from(*sid),
+                            index = i64::try_from(*index).unwrap_or(0)
+                        )
+                    ),
+                    Err(tock_storage::Error::NotFound) => eprintln!(
+                        "{}",
+                        tr!(
+                            "annotate-index-not-found",
+                            sid = i64::from(*sid),
+                            index = i64::try_from(*index).unwrap_or(0)
+                        )
+                    ),
+                    Err(other) => return Err(Box::new(other)),
+                }
+            } else {
+                eprintln!("{}", tr!("task-not-found", sid = i64::from(*sid)));
+            }
         }
         Commands::List { filter, json } => {
             let today = today_string();
@@ -3258,6 +3326,11 @@ fn print_task_show(
         conn,
         &tock_storage::repo::task_repo::get_dependents(conn, task.id)?,
     )?;
+    let annotations = tock_storage::repo::annotation_repo::list_for_entity(
+        conn,
+        task.id,
+        tock_core::domain::annotation::ENTITY_KIND_TASK,
+    )?;
 
     if matches!(format, OutputFormat::Json) {
         println!(
@@ -3283,6 +3356,10 @@ fn print_task_show(
                 },
                 "dependencies": dependencies,
                 "dependents": dependents,
+                "annotations": annotations.iter().map(|a| serde_json::json!({
+                    "body": a.body,
+                    "created_at": a.created_at.to_string(),
+                })).collect::<Vec<_>>(),
             }))?
         );
         return Ok(());
@@ -3312,6 +3389,19 @@ fn print_task_show(
                 value = format_related_task_summaries(&dependents)
             )
         );
+    }
+    if !annotations.is_empty() {
+        println!("  {}", tr!("task-show-annotations"));
+        for (idx, annotation) in annotations.iter().enumerate() {
+            let created = annotation.created_at;
+            let date = format!(
+                "{:04}-{:02}-{:02}",
+                created.year(),
+                u8::from(created.month()),
+                created.day()
+            );
+            println!("    [{}] {} — {}", idx + 1, date, annotation.body);
+        }
     }
     Ok(())
 }

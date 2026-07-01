@@ -82,6 +82,21 @@ pub enum Commands {
     /// Manage a task's checklist items (sub-task checkboxes).
     #[command(alias = "cl")]
     Checklist(checklist::ChecklistArgs),
+    /// Attach a timestamped annotation to a task.
+    Annotate {
+        /// Task SID.
+        sid: u32,
+        /// Annotation text.
+        #[arg(trailing_var_arg = true, num_args = 1..)]
+        words: Vec<String>,
+    },
+    /// Remove an annotation from a task by its 1-based index (see `tock show`).
+    Denotate {
+        /// Task SID.
+        sid: u32,
+        /// 1-based annotation index as shown by `tock show`.
+        index: usize,
+    },
     /// List tasks.
     #[command(alias = "ls")]
     List {
@@ -173,7 +188,7 @@ pub enum Commands {
     },
     /// Import data from a file.
     Import {
-        /// Format: 'json', 'taskwarrior', or 'csv'.
+        /// Format: 'json', 'taskwarrior', 'things3', or 'csv'.
         format: String,
         /// Input file path.
         #[arg(long, short)]
@@ -181,5 +196,8 @@ pub enum Commands {
         /// Column mapping TOML file (CSV only).
         #[arg(long, short)]
         map: Option<std::path::PathBuf>,
+        /// Include trashed items (Things 3 only).
+        #[arg(long)]
+        include_trash: bool,
     },
 }

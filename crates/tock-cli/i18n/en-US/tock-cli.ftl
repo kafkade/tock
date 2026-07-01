@@ -46,7 +46,7 @@ import-done = Imported { $count } { $count ->
     [one] task
    *[other] tasks
 }
-import-unsupported-format = unsupported format: { $format } (supported: json, taskwarrior, csv)
+import-unsupported-format = unsupported format: { $format } (supported: json, taskwarrior, things3, csv)
 export-unsupported-format = unsupported format: { $format } (supported: json, md)
 
 ## Views
@@ -235,6 +235,14 @@ uda-removed = Removed UDA '{ $key }'
 
 depend-added = Task #{ $sid } now depends on #{ $on }
 depend-removed = Task #{ $sid } no longer depends on #{ $from }
+
+## Annotations
+
+annotate-added = Annotated task #{ $sid }
+annotate-removed = Removed annotation [{ $index }] from task #{ $sid }
+annotate-empty = Annotation text cannot be empty
+annotate-index-not-found = task #{ $sid } has no annotation at index { $index }
+task-show-annotations = Annotations:
 
 ## Tasks
 
@@ -703,6 +711,7 @@ help-cli-export-arg-filter = Task filter expressions (Markdown export only)
 
 # help-cli-import
 help-cli-import-about = Import data from a file
-help-cli-import-arg-format = Format: 'json', 'taskwarrior', or 'csv'
+help-cli-import-arg-format = Format: 'json', 'taskwarrior', 'things3', or 'csv'
 help-cli-import-arg-file = Input file path
 help-cli-import-arg-map = Column mapping TOML file (CSV only)
+help-cli-import-arg-include-trash = Include trashed items (Things 3 only)
