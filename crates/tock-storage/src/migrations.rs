@@ -92,6 +92,11 @@ pub const ALL: &[Migration] = &[
         name: "undo_log",
         sql: include_str!("migrations/0013_undo_log.sql"),
     },
+    Migration {
+        version: 14,
+        name: "checklist_items",
+        sql: include_str!("migrations/0014_checklist_items.sql"),
+    },
 ];
 
 /// Compute the sha-256 hex digest of `sql`.

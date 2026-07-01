@@ -26,7 +26,7 @@
 //! | `priority` H/M/L   | `Priority`            |                                        |
 //! | `due`              | `deadline`            | Extracted as `YYYY-MM-DD`              |
 //! | `wait`             | `start_date`          | Extracted as `YYYY-MM-DD`              |
-//! | `annotations`      | `notes`               | Concatenated with newlines             |
+//! | `annotations`      | annotations           | Stored as real annotations, `entry` preserved |
 //! | `depends`          | dependencies          | Resolved via UUID→SID map              |
 //! | `recur`            | `recurrence`          | Mapped to `RecurrenceSpec`             |
 //! | UDA fields         | `udas`                | Stored as string values                |
@@ -43,6 +43,8 @@ use std::fmt;
 
 use rusqlite::Connection;
 use serde::Deserialize;
+use time::OffsetDateTime;
+use tock_core::domain::annotation::NewAnnotation;
 use tock_core::domain::project::NewProject;
 use tock_core::domain::recurrence::{RecurrenceMode, RecurrencePattern, RecurrenceSpec};
 use tock_core::domain::task::{NewTask, Priority, TaskStatus};
@@ -81,6 +83,9 @@ const KNOWN_FIELDS: &[&str] = &[
 struct TwAnnotation {
     #[serde(default)]
     description: String,
+    /// Creation timestamp (Taskwarrior `entry`, e.g. `20260115T120000Z`).
+    #[serde(default)]
+    entry: Option<String>,
 }
 
 /// Deserialization target for a single Taskwarrior task.
@@ -229,7 +234,7 @@ fn import_within_transaction(
             continue;
         }
 
-        let (new_task, tw_uuid, deps) = convert_task(
+        let (new_task, tw_uuid, deps, annotations) = convert_task(
             tw,
             status_str,
             conn,
@@ -243,6 +248,18 @@ fn import_within_transaction(
             &new_task,
             &tock_core::domain::urgency::UrgencyConfig::default(),
         )?;
+
+        for (body, created_at) in annotations {
+            tock_storage::repo::annotation_repo::add(
+                conn,
+                &NewAnnotation {
+                    entity_id: inserted.id,
+                    entity_kind: tock_core::domain::annotation::ENTITY_KIND_TASK.to_string(),
+                    body,
+                    created_at,
+                },
+            )?;
+        }
 
         if !tw_uuid.is_empty() {
             uuid_to_sid.insert(tw_uuid.clone(), inserted.sid);
@@ -261,8 +278,12 @@ fn import_within_transaction(
     Ok(report)
 }
 
+/// Parsed annotation ready to persist once the owning task's id is known.
+type ParsedAnnotation = (String, Option<OffsetDateTime>);
+
 /// Convert a single Taskwarrior task into a [`NewTask`], returning the
-/// Taskwarrior UUID and any dependency UUIDs for deferred linking.
+/// Taskwarrior UUID, any dependency UUIDs for deferred linking, and the
+/// task's annotations (persisted after insert).
 fn convert_task(
     tw: &TwTask,
     status_str: &str,
@@ -270,7 +291,7 @@ fn convert_task(
     project_cache: &mut HashMap<String, uuid::Uuid>,
     known_uda_keys: &mut HashSet<String>,
     report: &mut ImportReport,
-) -> Result<(NewTask, String, Vec<String>), tock_storage::Error> {
+) -> Result<(NewTask, String, Vec<String>, Vec<ParsedAnnotation>), tock_storage::Error> {
     let description = tw
         .description
         .as_deref()
@@ -315,17 +336,17 @@ fn convert_task(
         None
     };
 
-    let notes = if tw.annotations.is_empty() {
-        None
-    } else {
-        Some(
-            tw.annotations
-                .iter()
-                .map(|a| a.description.as_str())
-                .collect::<Vec<_>>()
-                .join("\n"),
-        )
-    };
+    let annotations: Vec<ParsedAnnotation> = tw
+        .annotations
+        .iter()
+        .filter(|a| !a.description.trim().is_empty())
+        .map(|a| {
+            (
+                a.description.clone(),
+                a.entry.as_deref().and_then(parse_tw_datetime),
+            )
+        })
+        .collect();
 
     let project_id = resolve_project(conn, tw.project.as_deref(), project_cache, report)?;
 
@@ -357,7 +378,7 @@ fn convert_task(
 
     let new_task = NewTask {
         title: description,
-        notes,
+        notes: None,
         status: tock_status,
         project_id,
         start_date,
@@ -369,7 +390,7 @@ fn convert_task(
         ..NewTask::default()
     };
 
-    Ok((new_task, tw_uuid, deps))
+    Ok((new_task, tw_uuid, deps, annotations))
 }
 
 /// Collect UDA fields from the task's extra map, registering definitions.
@@ -507,6 +528,33 @@ fn parse_tw_date(raw: &str) -> Option<String> {
     }
 
     Some(format!("{year:04}-{month:02}-{day:02}"))
+}
+
+/// Parse a full Taskwarrior timestamp (`YYYYMMDDTHHMMSSZ`) into a UTC
+/// [`OffsetDateTime`]. Returns `None` if the value is malformed.
+fn parse_tw_datetime(raw: &str) -> Option<OffsetDateTime> {
+    // Expected form: 20260115T120000Z (UTC, basic ISO-8601).
+    let bytes = raw.as_bytes();
+    if bytes.len() < 15 || bytes[8] != b'T' {
+        return None;
+    }
+    if !raw[..8].chars().all(|c| c.is_ascii_digit())
+        || !raw[9..15].chars().all(|c| c.is_ascii_digit())
+    {
+        return None;
+    }
+
+    let year: i32 = raw[..4].parse().ok()?;
+    let month: u8 = raw[4..6].parse().ok()?;
+    let day: u8 = raw[6..8].parse().ok()?;
+    let hour: u8 = raw[9..11].parse().ok()?;
+    let minute: u8 = raw[11..13].parse().ok()?;
+    let second: u8 = raw[13..15].parse().ok()?;
+
+    let month = time::Month::try_from(month).ok()?;
+    let date = time::Date::from_calendar_date(year, month, day).ok()?;
+    let t = time::Time::from_hms(hour, minute, second).ok()?;
+    Some(date.with_time(t).assume_utc())
 }
 
 /// Parse a Taskwarrior recurrence string into a [`RecurrenceSpec`].
@@ -811,7 +859,7 @@ mod tests {
     }
 
     #[test]
-    fn imports_annotations_as_notes() {
+    fn imports_annotations_as_real_annotations() {
         let mut conn = test_conn();
         let json = r#"[
             {
@@ -829,7 +877,19 @@ mod tests {
         assert_eq!(report.tasks_imported, 1);
 
         let tasks = tock_storage::repo::task_repo::list(&conn, false).expect("list tasks");
-        assert_eq!(tasks[0].notes.as_deref(), Some("First note\nSecond note"));
+        // Annotations are no longer flattened into notes.
+        assert_eq!(tasks[0].notes, None);
+
+        let annotations =
+            tock_storage::repo::annotation_repo::list_for_entity(&conn, tasks[0].id, "task")
+                .expect("list annotations");
+        assert_eq!(annotations.len(), 2);
+        assert_eq!(annotations[0].body, "First note");
+        assert_eq!(annotations[1].body, "Second note");
+        // The Taskwarrior `entry` timestamp is preserved.
+        assert_eq!(annotations[0].created_at.year(), 2026);
+        assert_eq!(u8::from(annotations[0].created_at.month()), 1);
+        assert_eq!(annotations[0].created_at.day(), 1);
     }
 
     #[test]

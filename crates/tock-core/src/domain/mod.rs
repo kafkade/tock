@@ -4,8 +4,10 @@
 //! domains used by the current CLI phases, and will continue to grow as
 //! habits and richer planning features land.
 
+pub mod annotation;
 pub mod area;
 pub mod cadence;
+pub mod checklist;
 pub mod focus;
 pub mod habit;
 pub mod heading;

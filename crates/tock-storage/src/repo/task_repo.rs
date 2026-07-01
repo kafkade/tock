@@ -11,7 +11,7 @@ use super::{
     parse_timestamp, parse_u32, parse_uuid_blob, uuid_to_blob,
 };
 use crate::Error;
-use crate::repo::{sid_repo, tag_repo};
+use crate::repo::{checklist_repo, sid_repo, tag_repo};
 use tock_core::domain::recurrence::RecurrenceSpec;
 use tock_core::domain::sid::SidKind;
 use tock_core::domain::task::{NewTask, Priority, Task, TaskPatch, TaskStatus};
@@ -220,6 +220,7 @@ pub fn list(conn: &Connection, include_deleted: bool) -> Result<Vec<Task>, Error
 
     for task in &mut tasks {
         task.tags = tag_repo::tags_for_entity(conn, task.id, ENTITY_KIND)?;
+        task.checklist = checklist_repo::list(conn, task.id)?;
     }
 
     Ok(tasks)
@@ -438,6 +439,7 @@ where
     if let Some(row) = rows.next()? {
         let mut task = read_task_row(conn, row)?;
         task.tags = tag_repo::tags_for_entity(conn, task.id, ENTITY_KIND)?;
+        task.checklist = checklist_repo::list(conn, task.id)?;
         return Ok(Some(task));
     }
     Ok(None)
@@ -476,6 +478,7 @@ fn read_task_row(conn: &Connection, row: &Row<'_>) -> Result<Task, Error> {
         udas: UdaValues::from_json(&udas_raw),
         tags: Vec::new(),
         depends_on: get_dependencies(conn, id)?,
+        checklist: Vec::new(),
         urgency: row.get("urgency_cache")?,
         created_at: parse_timestamp(&row.get::<_, String>("created_at")?)?,
         modified_at: parse_timestamp(&row.get::<_, String>("modified_at")?)?,

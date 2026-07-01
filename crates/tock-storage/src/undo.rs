@@ -50,6 +50,7 @@ const TRACKED_TABLES: &[&str] = &[
     "tasks",
     "entity_tags",
     "task_dependencies",
+    "checklist_items",
     "annotations",
     "time_blocks",
     "focus_sessions",

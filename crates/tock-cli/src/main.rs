@@ -20,8 +20,8 @@ use std::process;
 
 use clap::{CommandFactory, FromArgMatches, Parser};
 use commands::{
-    Commands, context::ContextCommand, focus::FocusCommand, habit::HabitCommand,
-    hooks_cmd::HooksCommand, time::TimeCommand, uda::UdaCommand,
+    Commands, checklist::ChecklistCommand, context::ContextCommand, focus::FocusCommand,
+    habit::HabitCommand, hooks_cmd::HooksCommand, time::TimeCommand, uda::UdaCommand,
 };
 use display::{OutputFormat, format_task_detail, format_tasks};
 use notify::notify;
@@ -240,6 +240,8 @@ fn dispatch_command(
         | Commands::Delete { .. }
         | Commands::Depend { .. }
         | Commands::Undepend { .. }
+        | Commands::Annotate { .. }
+        | Commands::Denotate { .. }
         | Commands::List { .. }
         | Commands::Show { .. }
         | Commands::Urgency { .. } => {
@@ -254,6 +256,7 @@ fn dispatch_command(
         Commands::Focus(args) => run_focus_cmd(conn, &args.command, cfg),
         Commands::Habit(args) => run_habit_cmd(conn, &args.command),
         Commands::Uda(args) => run_uda_cmd(conn, &args.command, cfg),
+        Commands::Checklist(args) => run_checklist_cmd(conn, &args.command),
         Commands::Tui => {
             tui::run(conn, cfg, urgency)?;
             Ok(())
@@ -319,6 +322,9 @@ fn undoable_label(command: &Commands) -> Option<String> {
         Commands::Delete { sids } => format!("delete {}", join_sids(sids)),
         Commands::Depend { sid, on } => format!("depend #{sid} on #{on}"),
         Commands::Undepend { sid, from } => format!("undepend #{sid} from #{from}"),
+        Commands::Checklist(_) => "checklist".to_owned(),
+        Commands::Annotate { sid, .. } => format!("annotate #{sid}"),
+        Commands::Denotate { sid, index } => format!("denotate #{sid} [{index}]"),
         Commands::Project(_) => "project".to_owned(),
         Commands::Area(_) => "area".to_owned(),
         Commands::Tag(_) => "tag".to_owned(),
@@ -701,7 +707,9 @@ fn run_export_md(
     template_path: Option<&std::path::Path>,
     filter: &[String],
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use tock_export::markdown::{BuiltinTemplate, TemplateSource, build_context, render_markdown};
+    use tock_export::markdown::{
+        BuiltinTemplate, TemplateSource, attach_task_annotations, build_context, render_markdown,
+    };
 
     // Load domain data.
     let mut tasks = tock_storage::repo::task_repo::list(conn, false)?;
@@ -730,6 +738,8 @@ fn run_export_md(
     };
 
     let context = build_context(&tasks, &habits, &time_blocks, &projects);
+    let mut context = context;
+    attach_task_annotations(conn, &tasks, &mut context).map_err(|e| format!("{e}"))?;
     let md = render_markdown(&context, &template_source).map_err(|e| format!("{e}"))?;
 
     match out {
@@ -887,6 +897,53 @@ fn run_task_cmd(
                     from = i64::from(*from)
                 )
             );
+        }
+        Commands::Annotate { sid, words } => {
+            if let Some(task) = tock_storage::repo::task_repo::get_by_sid(conn, *sid)? {
+                let body = words.join(" ");
+                let body = body.trim();
+                if body.is_empty() {
+                    eprintln!("{}", tr!("annotate-empty"));
+                } else {
+                    tock_storage::repo::annotation_repo::add(
+                        conn,
+                        &tock_core::domain::annotation::NewAnnotation::for_task(task.id, body),
+                    )?;
+                    println!("{}", tr!("annotate-added", sid = i64::from(*sid)));
+                }
+            } else {
+                eprintln!("{}", tr!("task-not-found", sid = i64::from(*sid)));
+            }
+        }
+        Commands::Denotate { sid, index } => {
+            if let Some(task) = tock_storage::repo::task_repo::get_by_sid(conn, *sid)? {
+                match tock_storage::repo::annotation_repo::remove_by_index(
+                    conn,
+                    task.id,
+                    tock_core::domain::annotation::ENTITY_KIND_TASK,
+                    *index,
+                ) {
+                    Ok(_) => println!(
+                        "{}",
+                        tr!(
+                            "annotate-removed",
+                            sid = i64::from(*sid),
+                            index = i64::try_from(*index).unwrap_or(0)
+                        )
+                    ),
+                    Err(tock_storage::Error::NotFound) => eprintln!(
+                        "{}",
+                        tr!(
+                            "annotate-index-not-found",
+                            sid = i64::from(*sid),
+                            index = i64::try_from(*index).unwrap_or(0)
+                        )
+                    ),
+                    Err(other) => return Err(Box::new(other)),
+                }
+            } else {
+                eprintln!("{}", tr!("task-not-found", sid = i64::from(*sid)));
+            }
         }
         Commands::List { filter, json } => {
             let today = today_string();
@@ -2470,6 +2527,120 @@ fn run_tag_cmd(
     Ok(())
 }
 
+fn run_checklist_cmd(
+    conn: &Connection,
+    cmd: &ChecklistCommand,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use tock_storage::repo::{checklist_repo, task_repo};
+
+    let sid = match cmd {
+        ChecklistCommand::Add { sid, .. }
+        | ChecklistCommand::List { sid }
+        | ChecklistCommand::Check { sid, .. }
+        | ChecklistCommand::Uncheck { sid, .. }
+        | ChecklistCommand::Rm { sid, .. }
+        | ChecklistCommand::Reorder { sid, .. } => *sid,
+    };
+
+    let Some(task) = task_repo::get_by_sid(conn, sid)? else {
+        eprintln!("{}", tr!("task-not-found", sid = i64::from(sid)));
+        return Ok(());
+    };
+
+    match cmd {
+        ChecklistCommand::Add { text, .. } => {
+            let title = text.join(" ");
+            let item = checklist_repo::add(conn, task.id, &title)?;
+            println!(
+                "{}",
+                tr!(
+                    "checklist-added",
+                    sid = i64::from(sid),
+                    title = item.title.as_str()
+                )
+            );
+        }
+        ChecklistCommand::List { .. } => {
+            print_checklist(conn, task.id, sid)?;
+        }
+        ChecklistCommand::Check { index, .. } => {
+            let item = checklist_repo::set_done(conn, task.id, *index, true)?;
+            println!(
+                "{}",
+                tr!(
+                    "checklist-checked",
+                    sid = i64::from(sid),
+                    title = item.title.as_str()
+                )
+            );
+        }
+        ChecklistCommand::Uncheck { index, .. } => {
+            let item = checklist_repo::set_done(conn, task.id, *index, false)?;
+            println!(
+                "{}",
+                tr!(
+                    "checklist-unchecked",
+                    sid = i64::from(sid),
+                    title = item.title.as_str()
+                )
+            );
+        }
+        ChecklistCommand::Rm { index, .. } => {
+            let title = checklist_repo::remove(conn, task.id, *index)?;
+            println!(
+                "{}",
+                tr!(
+                    "checklist-removed",
+                    sid = i64::from(sid),
+                    title = title.as_str()
+                )
+            );
+        }
+        ChecklistCommand::Reorder { from, to, .. } => {
+            checklist_repo::reorder(conn, task.id, *from, *to)?;
+            println!(
+                "{}",
+                tr!(
+                    "checklist-reordered",
+                    from = i64::from(*from),
+                    to = i64::from(*to)
+                )
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Print a task's checklist with `[x]`/`[ ]` markers and a progress header.
+fn print_checklist(
+    conn: &Connection,
+    task_id: Uuid,
+    sid: u32,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let items = tock_storage::repo::checklist_repo::list(conn, task_id)?;
+    match tock_core::domain::checklist::progress(&items) {
+        None => {
+            println!("{}", tr!("checklist-empty", sid = i64::from(sid)));
+        }
+        Some((done, total)) => {
+            println!(
+                "{}",
+                tr!(
+                    "checklist-header",
+                    sid = i64::from(sid),
+                    done = usize_to_i64(done),
+                    total = usize_to_i64(total)
+                )
+            );
+            for (position, item) in items.iter().enumerate() {
+                let marker = if item.is_done() { "x" } else { " " };
+                println!("  {}. [{}] {}", position + 1, marker, item.title);
+            }
+        }
+    }
+    Ok(())
+}
+
 fn run_uda_cmd(
     conn: &Connection,
     cmd: &UdaCommand,
@@ -3155,6 +3326,11 @@ fn print_task_show(
         conn,
         &tock_storage::repo::task_repo::get_dependents(conn, task.id)?,
     )?;
+    let annotations = tock_storage::repo::annotation_repo::list_for_entity(
+        conn,
+        task.id,
+        tock_core::domain::annotation::ENTITY_KIND_TASK,
+    )?;
 
     if matches!(format, OutputFormat::Json) {
         println!(
@@ -3180,6 +3356,10 @@ fn print_task_show(
                 },
                 "dependencies": dependencies,
                 "dependents": dependents,
+                "annotations": annotations.iter().map(|a| serde_json::json!({
+                    "body": a.body,
+                    "created_at": a.created_at.to_string(),
+                })).collect::<Vec<_>>(),
             }))?
         );
         return Ok(());
@@ -3209,6 +3389,19 @@ fn print_task_show(
                 value = format_related_task_summaries(&dependents)
             )
         );
+    }
+    if !annotations.is_empty() {
+        println!("  {}", tr!("task-show-annotations"));
+        for (idx, annotation) in annotations.iter().enumerate() {
+            let created = annotation.created_at;
+            let date = format!(
+                "{:04}-{:02}-{:02}",
+                created.year(),
+                u8::from(created.month()),
+                created.day()
+            );
+            println!("    [{}] {} — {}", idx + 1, date, annotation.body);
+        }
     }
     Ok(())
 }

@@ -567,6 +567,7 @@ mod tests {
             udas: UdaValues::default(),
             tags: vec![],
             depends_on: vec![],
+            checklist: vec![],
             urgency: 0.0,
             created_at: OffsetDateTime::UNIX_EPOCH,
             modified_at: OffsetDateTime::UNIX_EPOCH,

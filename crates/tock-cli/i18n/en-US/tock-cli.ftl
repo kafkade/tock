@@ -236,6 +236,14 @@ uda-removed = Removed UDA '{ $key }'
 depend-added = Task #{ $sid } now depends on #{ $on }
 depend-removed = Task #{ $sid } no longer depends on #{ $from }
 
+## Annotations
+
+annotate-added = Annotated task #{ $sid }
+annotate-removed = Removed annotation [{ $index }] from task #{ $sid }
+annotate-empty = Annotation text cannot be empty
+annotate-index-not-found = task #{ $sid } has no annotation at index { $index }
+task-show-annotations = Annotations:
+
 ## Tasks
 
 task-modified = Modified task #{ $sid } — { $title }
@@ -247,6 +255,15 @@ task-deleted = Deleted task #{ $sid }
 task-not-found = task #{ $sid } not found
 task-add-cancelled-by-hook = Add cancelled by hook
 task-created = Created task #{ $sid } — { $title }
+
+# Checklist items
+checklist-added = Added checklist item to task #{ $sid } — { $title }
+checklist-checked = Checked checklist item on task #{ $sid } — { $title }
+checklist-unchecked = Unchecked checklist item on task #{ $sid } — { $title }
+checklist-removed = Removed checklist item from task #{ $sid } — { $title }
+checklist-reordered = Moved checklist item { $from } → { $to }
+checklist-empty = Task #{ $sid } has no checklist items
+checklist-header = Checklist for task #{ $sid } ({ $done }/{ $total })
 
 # Undo / redo
 undo-done = Undid: { $action }
@@ -309,6 +326,7 @@ tui-detail-deadline = Deadline
 tui-detail-evening = Evening: yes
 tui-detail-tags = Tags
 tui-detail-notes = Notes
+tui-detail-checklist = Checklist
 
 # Bottom status bar default hint (compact key legend).
 tui-status-hint = Tab/←→: panes · j/k: move · Enter: select · d: done · x: delete · r: refresh · ?: help · q: quit
