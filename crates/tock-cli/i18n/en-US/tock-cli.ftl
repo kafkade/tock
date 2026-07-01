@@ -236,6 +236,14 @@ uda-removed = Removed UDA '{ $key }'
 depend-added = Task #{ $sid } now depends on #{ $on }
 depend-removed = Task #{ $sid } no longer depends on #{ $from }
 
+## Annotations
+
+annotate-added = Annotated task #{ $sid }
+annotate-removed = Removed annotation [{ $index }] from task #{ $sid }
+annotate-empty = Annotation text cannot be empty
+annotate-index-not-found = task #{ $sid } has no annotation at index { $index }
+task-show-annotations = Annotations:
+
 ## Tasks
 
 task-modified = Modified task #{ $sid } — { $title }

@@ -78,6 +78,21 @@ pub enum Commands {
         /// Dependency SID.
         from: u32,
     },
+    /// Attach a timestamped annotation to a task.
+    Annotate {
+        /// Task SID.
+        sid: u32,
+        /// Annotation text.
+        #[arg(trailing_var_arg = true, num_args = 1..)]
+        words: Vec<String>,
+    },
+    /// Remove an annotation from a task by its 1-based index (see `tock show`).
+    Denotate {
+        /// Task SID.
+        sid: u32,
+        /// 1-based annotation index as shown by `tock show`.
+        index: usize,
+    },
     /// List tasks.
     #[command(alias = "ls")]
     List {
