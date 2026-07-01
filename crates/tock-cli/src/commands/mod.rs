@@ -169,7 +169,7 @@ pub enum Commands {
     },
     /// Import data from a file.
     Import {
-        /// Format: 'json', 'taskwarrior', or 'csv'.
+        /// Format: 'json', 'taskwarrior', 'things3', or 'csv'.
         format: String,
         /// Input file path.
         #[arg(long, short)]
@@ -177,5 +177,8 @@ pub enum Commands {
         /// Column mapping TOML file (CSV only).
         #[arg(long, short)]
         map: Option<std::path::PathBuf>,
+        /// Include trashed items (Things 3 only).
+        #[arg(long)]
+        include_trash: bool,
     },
 }
