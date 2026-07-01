@@ -10,6 +10,7 @@ use crate::Error;
 pub mod annotation_repo;
 pub mod area_repo;
 pub mod caldav_link_repo;
+pub mod checklist_repo;
 pub mod context_repo;
 pub mod focus_repo;
 pub mod habit_repo;

@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
+use crate::domain::checklist::ChecklistItem;
 use crate::domain::uda::UdaValues;
 
 /// Task status — the lifecycle states a task can be in.
@@ -133,6 +134,8 @@ pub struct Task {
     pub tags: Vec<String>,
     /// Tasks this task depends on.
     pub depends_on: Vec<Uuid>,
+    /// Ordered checklist items (sub-task checkboxes).
+    pub checklist: Vec<ChecklistItem>,
     /// Cached urgency score (recomputed on write).
     pub urgency: f64,
     /// When the task was created.

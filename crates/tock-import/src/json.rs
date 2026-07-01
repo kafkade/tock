@@ -11,6 +11,13 @@ use tock_core::domain::task::{NewTask, Priority, TaskStatus};
 use tock_core::domain::uda::UdaValues;
 
 #[derive(Deserialize)]
+struct ChecklistItemImport {
+    title: String,
+    #[serde(default)]
+    done: bool,
+}
+
+#[derive(Deserialize)]
 struct AnnotationImport {
     body: String,
     #[serde(default)]
@@ -36,6 +43,8 @@ struct TaskImport {
     notes: Option<String>,
     #[serde(default)]
     evening: bool,
+    #[serde(default)]
+    checklist: Vec<ChecklistItemImport>,
     #[serde(default)]
     annotations: Vec<AnnotationImport>,
 }
@@ -66,11 +75,22 @@ pub fn import_tasks(conn: &Connection, json: &str) -> Result<usize, tock_storage
             evening: import.evening,
             ..NewTask::default()
         };
-        let inserted = tock_storage::repo::task_repo::insert(
+        let task = tock_storage::repo::task_repo::insert(
             conn,
             &new_task,
             &tock_core::domain::urgency::UrgencyConfig::default(),
         )?;
+        for entry in &import.checklist {
+            let item = tock_storage::repo::checklist_repo::add(conn, task.id, &entry.title)?;
+            if entry.done {
+                tock_storage::repo::checklist_repo::set_done(
+                    conn,
+                    task.id,
+                    item.position + 1,
+                    true,
+                )?;
+            }
+        }
 
         for annotation in &import.annotations {
             let created_at = annotation
@@ -80,7 +100,7 @@ pub fn import_tasks(conn: &Connection, json: &str) -> Result<usize, tock_storage
             tock_storage::repo::annotation_repo::add(
                 conn,
                 &NewAnnotation {
-                    entity_id: inserted.id,
+                    entity_id: task.id,
                     entity_kind: tock_core::domain::annotation::ENTITY_KIND_TASK.to_string(),
                     body: annotation.body.clone(),
                     created_at,
@@ -105,6 +125,31 @@ mod tests {
             .expect("enable foreign keys");
         tock_storage::migrations::migrate(&mut conn).expect("migrate");
         conn
+    }
+
+    #[test]
+    fn imports_checklist_items() {
+        let conn = test_conn();
+        let json = r#"[
+            {
+                "title": "Ship release",
+                "checklist": [
+                    { "title": "cut branch", "done": true },
+                    { "title": "tag version", "done": false }
+                ]
+            }
+        ]"#;
+        let count = import_tasks(&conn, json).expect("import");
+        assert_eq!(count, 1);
+
+        let task = tock_storage::repo::task_repo::get_by_sid(&conn, 1)
+            .expect("fetch")
+            .expect("task exists");
+        assert_eq!(task.checklist.len(), 2);
+        assert_eq!(task.checklist[0].title, "cut branch");
+        assert!(task.checklist[0].is_done());
+        assert_eq!(task.checklist[1].title, "tag version");
+        assert!(!task.checklist[1].is_done());
     }
 
     #[test]

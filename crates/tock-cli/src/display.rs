@@ -32,6 +32,12 @@ impl OutputFormat {
 }
 
 #[derive(Serialize)]
+struct ChecklistItemJson<'a> {
+    title: &'a str,
+    done: bool,
+}
+
+#[derive(Serialize)]
 struct TaskJson<'a> {
     sid: u32,
     title: &'a str,
@@ -40,6 +46,7 @@ struct TaskJson<'a> {
     deadline: Option<&'a str>,
     tags: &'a [String],
     udas: &'a std::collections::BTreeMap<String, serde_json::Value>,
+    checklist: Vec<ChecklistItemJson<'a>>,
     created_at: String,
 }
 
@@ -89,8 +96,22 @@ fn task_json(task: &Task) -> TaskJson<'_> {
         deadline: task.deadline.as_deref(),
         tags: &task.tags,
         udas: &task.udas.0,
+        checklist: task
+            .checklist
+            .iter()
+            .map(|item| ChecklistItemJson {
+                title: &item.title,
+                done: item.is_done(),
+            })
+            .collect(),
         created_at: task.created_at.to_string(),
     }
+}
+
+/// Render checklist progress as `done/total`, or `None` when empty.
+fn checklist_progress(task: &Task) -> Option<String> {
+    tock_core::domain::checklist::progress(&task.checklist)
+        .map(|(done, total)| format!("{done}/{total}"))
 }
 
 fn format_task_detail_table(task: &Task) -> String {
@@ -121,6 +142,13 @@ fn format_task_detail_table(task: &Task) -> String {
             lines.push(format!("    {key}: {value}"));
         }
     }
+    if let Some(progress) = checklist_progress(task) {
+        lines.push(format!("  Checklist: {progress}"));
+        for (position, item) in task.checklist.iter().enumerate() {
+            let marker = if item.is_done() { "x" } else { " " };
+            lines.push(format!("    {}. [{}] {}", position + 1, marker, item.title));
+        }
+    }
     if let Some(ref notes) = task.notes {
         lines.push(format!("  Notes:    {notes}"));
     }
@@ -147,7 +175,7 @@ fn format_task_row(task: &Task) -> String {
             .join(" ")
     };
     let deadline = task.deadline.as_deref().unwrap_or("");
-    format!(
+    let mut row = format!(
         "{:>4}  {:<1}  {:<7}  {:<40}  {:<12}  {}",
         task.sid,
         priority,
@@ -155,7 +183,11 @@ fn format_task_row(task: &Task) -> String {
         truncate(&task.title, 40),
         deadline,
         tags,
-    )
+    );
+    if let Some(progress) = checklist_progress(task) {
+        let _ = write!(row, " [{progress}]");
+    }
+    row
 }
 
 fn format_task_header() -> String {
@@ -182,6 +214,9 @@ fn format_task_compact(task: &Task) -> String {
             .join(" ");
         line.push(' ');
         line.push_str(&tags);
+    }
+    if let Some(progress) = checklist_progress(task) {
+        let _ = write!(line, " [{progress}]");
     }
     line
 }
@@ -230,6 +265,7 @@ mod tests {
             },
             tags: vec![String::from("errands")],
             depends_on: Vec::new(),
+            checklist: Vec::new(),
             urgency: 0.0,
             created_at: OffsetDateTime::UNIX_EPOCH,
             modified_at: OffsetDateTime::UNIX_EPOCH,
@@ -274,5 +310,42 @@ mod tests {
         let rendered = format_task_detail(&sample_task(), OutputFormat::Table);
         assert!(rendered.contains("UDAs:"));
         assert!(rendered.contains("effort: 3"));
+    }
+
+    #[test]
+    fn surfaces_checklist_progress() {
+        use tock_core::domain::checklist::ChecklistItem;
+        let mut task = sample_task();
+        task.checklist = vec![
+            ChecklistItem {
+                id: Uuid::nil(),
+                task_id: task.id,
+                title: String::from("step one"),
+                position: 0,
+                done_at: Some(OffsetDateTime::UNIX_EPOCH),
+                created_at: OffsetDateTime::UNIX_EPOCH,
+            },
+            ChecklistItem {
+                id: Uuid::nil(),
+                task_id: task.id,
+                title: String::from("step two"),
+                position: 1,
+                done_at: None,
+                created_at: OffsetDateTime::UNIX_EPOCH,
+            },
+        ];
+
+        let compact = format_tasks(std::slice::from_ref(&task), OutputFormat::Compact);
+        assert!(compact.contains("[1/2]"));
+
+        let detail = format_task_detail(&task, OutputFormat::Table);
+        assert!(detail.contains("Checklist: 1/2"));
+        assert!(detail.contains("1. [x] step one"));
+        assert!(detail.contains("2. [ ] step two"));
+
+        let json = format_task_detail(&task, OutputFormat::Json);
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["checklist"][0]["title"], "step one");
+        assert_eq!(parsed["checklist"][0]["done"], true);
     }
 }
