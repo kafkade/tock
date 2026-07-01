@@ -3,6 +3,7 @@
 pub mod account;
 pub mod add;
 pub mod caldav;
+pub mod checklist;
 pub mod config;
 pub mod context;
 pub mod done;
@@ -78,6 +79,9 @@ pub enum Commands {
         /// Dependency SID.
         from: u32,
     },
+    /// Manage a task's checklist items (sub-task checkboxes).
+    #[command(alias = "cl")]
+    Checklist(checklist::ChecklistArgs),
     /// List tasks.
     #[command(alias = "ls")]
     List {

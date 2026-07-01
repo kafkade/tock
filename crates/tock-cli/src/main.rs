@@ -20,8 +20,8 @@ use std::process;
 
 use clap::{CommandFactory, FromArgMatches, Parser};
 use commands::{
-    Commands, context::ContextCommand, focus::FocusCommand, habit::HabitCommand,
-    hooks_cmd::HooksCommand, time::TimeCommand, uda::UdaCommand,
+    Commands, checklist::ChecklistCommand, context::ContextCommand, focus::FocusCommand,
+    habit::HabitCommand, hooks_cmd::HooksCommand, time::TimeCommand, uda::UdaCommand,
 };
 use display::{OutputFormat, format_task_detail, format_tasks};
 use notify::notify;
@@ -249,6 +249,7 @@ fn dispatch_command(
         Commands::Focus(args) => run_focus_cmd(conn, &args.command, cfg),
         Commands::Habit(args) => run_habit_cmd(conn, &args.command),
         Commands::Uda(args) => run_uda_cmd(conn, &args.command, cfg),
+        Commands::Checklist(args) => run_checklist_cmd(conn, &args.command),
         Commands::Tui => {
             tui::run(conn, cfg, urgency)?;
             Ok(())
@@ -314,6 +315,7 @@ fn undoable_label(command: &Commands) -> Option<String> {
         Commands::Delete { sids } => format!("delete {}", join_sids(sids)),
         Commands::Depend { sid, on } => format!("depend #{sid} on #{on}"),
         Commands::Undepend { sid, from } => format!("undepend #{sid} from #{from}"),
+        Commands::Checklist(_) => "checklist".to_owned(),
         Commands::Project(_) => "project".to_owned(),
         Commands::Area(_) => "area".to_owned(),
         Commands::Tag(_) => "tag".to_owned(),
@@ -2452,6 +2454,120 @@ fn run_tag_cmd(
         commands::tag::TagCommand::Rename { old, new } => {
             tock_storage::repo::tag_repo::rename(conn, old, new)?;
             println!("{}", tr!("tag-renamed", old = old, new = new));
+        }
+    }
+    Ok(())
+}
+
+fn run_checklist_cmd(
+    conn: &Connection,
+    cmd: &ChecklistCommand,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use tock_storage::repo::{checklist_repo, task_repo};
+
+    let sid = match cmd {
+        ChecklistCommand::Add { sid, .. }
+        | ChecklistCommand::List { sid }
+        | ChecklistCommand::Check { sid, .. }
+        | ChecklistCommand::Uncheck { sid, .. }
+        | ChecklistCommand::Rm { sid, .. }
+        | ChecklistCommand::Reorder { sid, .. } => *sid,
+    };
+
+    let Some(task) = task_repo::get_by_sid(conn, sid)? else {
+        eprintln!("{}", tr!("task-not-found", sid = i64::from(sid)));
+        return Ok(());
+    };
+
+    match cmd {
+        ChecklistCommand::Add { text, .. } => {
+            let title = text.join(" ");
+            let item = checklist_repo::add(conn, task.id, &title)?;
+            println!(
+                "{}",
+                tr!(
+                    "checklist-added",
+                    sid = i64::from(sid),
+                    title = item.title.as_str()
+                )
+            );
+        }
+        ChecklistCommand::List { .. } => {
+            print_checklist(conn, task.id, sid)?;
+        }
+        ChecklistCommand::Check { index, .. } => {
+            let item = checklist_repo::set_done(conn, task.id, *index, true)?;
+            println!(
+                "{}",
+                tr!(
+                    "checklist-checked",
+                    sid = i64::from(sid),
+                    title = item.title.as_str()
+                )
+            );
+        }
+        ChecklistCommand::Uncheck { index, .. } => {
+            let item = checklist_repo::set_done(conn, task.id, *index, false)?;
+            println!(
+                "{}",
+                tr!(
+                    "checklist-unchecked",
+                    sid = i64::from(sid),
+                    title = item.title.as_str()
+                )
+            );
+        }
+        ChecklistCommand::Rm { index, .. } => {
+            let title = checklist_repo::remove(conn, task.id, *index)?;
+            println!(
+                "{}",
+                tr!(
+                    "checklist-removed",
+                    sid = i64::from(sid),
+                    title = title.as_str()
+                )
+            );
+        }
+        ChecklistCommand::Reorder { from, to, .. } => {
+            checklist_repo::reorder(conn, task.id, *from, *to)?;
+            println!(
+                "{}",
+                tr!(
+                    "checklist-reordered",
+                    from = i64::from(*from),
+                    to = i64::from(*to)
+                )
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Print a task's checklist with `[x]`/`[ ]` markers and a progress header.
+fn print_checklist(
+    conn: &Connection,
+    task_id: Uuid,
+    sid: u32,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let items = tock_storage::repo::checklist_repo::list(conn, task_id)?;
+    match tock_core::domain::checklist::progress(&items) {
+        None => {
+            println!("{}", tr!("checklist-empty", sid = i64::from(sid)));
+        }
+        Some((done, total)) => {
+            println!(
+                "{}",
+                tr!(
+                    "checklist-header",
+                    sid = i64::from(sid),
+                    done = usize_to_i64(done),
+                    total = usize_to_i64(total)
+                )
+            );
+            for (position, item) in items.iter().enumerate() {
+                let marker = if item.is_done() { "x" } else { " " };
+                println!("  {}. [{}] {}", position + 1, marker, item.title);
+            }
         }
     }
     Ok(())

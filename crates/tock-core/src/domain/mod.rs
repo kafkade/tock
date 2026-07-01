@@ -6,6 +6,7 @@
 
 pub mod area;
 pub mod cadence;
+pub mod checklist;
 pub mod focus;
 pub mod habit;
 pub mod heading;

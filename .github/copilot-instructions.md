@@ -169,6 +169,7 @@ Use conventional commits: `feat:`, `fix:`, `docs:`, `test:`, `refactor:`, `chore
 - Task dependencies: tock depend/undepend, circular detection, +BLOCKED/+BLOCKING filters
 - Recurring tasks: --recur daily|weekly|monthly|yearly|every-Nd|every-Nw, auto-creates next instance
 - Named contexts: tock context define/set/clear/ls/rm, auto-applied to listings
+- Checklist items: tock checklist add/ls/check/uncheck/rm/reorder, done/total progress in list/show/TUI, JSON round-trip
 - Interactive ratatui TUI: 3-pane (sidebar, task list, detail), vim keys
 
 **Time tracking:**
@@ -207,7 +208,6 @@ Use conventional commits: `feat:`, `fix:`, `docs:`, `test:`, `refactor:`, `chore
 - **Localization** — i18n framework
 - **iOS/macOS/watchOS apps** — UniFFI scaffolding + account API exist but no SwiftUI onboarding UI yet
 - **Web app** — onboarding (signup/login/authed sync) shipped; task UI is auth-smoke only (no browser vault)
-- **Checklist items** — sub-task checkboxes on tasks
 - **Annotations** — append-only log per task
 - **Scheduled tasks** — calendar slot scheduling (scheduled_for field exists in schema but unused)
 - **Config file** — ~/.config/tock/config.toml for urgency weights, UDA declarations
@@ -217,20 +217,20 @@ Use conventional commits: `feat:`, `fix:`, `docs:`, `test:`, `refactor:`, `chore
 
 **Domain model (tock-core/src/domain/):**
 
-- task.rs, project.rs, area.rs, heading.rs, tag.rs, sid.rs
+- task.rs, project.rs, area.rs, heading.rs, tag.rs, sid.rs, checklist.rs
 - time_block.rs, focus.rs, habit.rs, cadence.rs
 - uda.rs, urgency.rs, recurrence.rs, report.rs
 
 **Storage (tock-storage/src/):**
 
 - vault.rs (OpenVault lifecycle), event_log.rs, migrations.rs (9 migrations)
-- repo/: task_repo, project_repo, area_repo, heading_repo, tag_repo, sid_repo
+- repo/: task_repo, project_repo, area_repo, heading_repo, tag_repo, sid_repo, checklist_repo
 - repo/: time_block_repo, focus_repo, habit_repo, uda_repo, report_repo, context_repo
 
 **CLI (tock-cli/src/):**
 
 - main.rs (~1600+ lines, all command handlers)
-- commands/: add, modify, done, list, show, project, tag, time, focus, habit, views, report, uda, hooks_cmd, context
+- commands/: add, modify, done, list, show, project, tag, time, focus, habit, views, report, uda, hooks_cmd, context, checklist
 - tui/: mod (event loop + terminal cleanup), state (AppState, pane navigation, task CRUD), ui (3-pane rendering)
 - tracing_setup.rs, hooks.rs, display.rs, notify.rs
 

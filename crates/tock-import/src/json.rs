@@ -8,6 +8,13 @@ use tock_core::domain::task::{NewTask, Priority, TaskStatus};
 use tock_core::domain::uda::UdaValues;
 
 #[derive(Deserialize)]
+struct ChecklistItemImport {
+    title: String,
+    #[serde(default)]
+    done: bool,
+}
+
+#[derive(Deserialize)]
 struct TaskImport {
     title: String,
     #[serde(default)]
@@ -26,6 +33,8 @@ struct TaskImport {
     notes: Option<String>,
     #[serde(default)]
     evening: bool,
+    #[serde(default)]
+    checklist: Vec<ChecklistItemImport>,
 }
 
 /// Import tasks from a JSON string (array of task objects).
@@ -54,12 +63,65 @@ pub fn import_tasks(conn: &Connection, json: &str) -> Result<usize, tock_storage
             evening: import.evening,
             ..NewTask::default()
         };
-        tock_storage::repo::task_repo::insert(
+        let task = tock_storage::repo::task_repo::insert(
             conn,
             &new_task,
             &tock_core::domain::urgency::UrgencyConfig::default(),
         )?;
+        for entry in &import.checklist {
+            let item = tock_storage::repo::checklist_repo::add(conn, task.id, &entry.title)?;
+            if entry.done {
+                tock_storage::repo::checklist_repo::set_done(
+                    conn,
+                    task.id,
+                    item.position + 1,
+                    true,
+                )?;
+            }
+        }
         count += 1;
     }
     Ok(count)
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::expect_used, clippy::unwrap_used)]
+
+    use rusqlite::Connection;
+
+    use super::import_tasks;
+
+    fn test_conn() -> Connection {
+        let mut conn = Connection::open_in_memory().expect("open in-memory db");
+        conn.execute_batch("PRAGMA foreign_keys = ON;")
+            .expect("enable foreign keys");
+        tock_storage::migrations::migrate(&mut conn).expect("migrate");
+        conn
+    }
+
+    #[test]
+    fn imports_checklist_items() {
+        let conn = test_conn();
+        let json = r#"[
+            {
+                "title": "Ship release",
+                "checklist": [
+                    { "title": "cut branch", "done": true },
+                    { "title": "tag version", "done": false }
+                ]
+            }
+        ]"#;
+        let count = import_tasks(&conn, json).expect("import");
+        assert_eq!(count, 1);
+
+        let task = tock_storage::repo::task_repo::get_by_sid(&conn, 1)
+            .expect("fetch")
+            .expect("task exists");
+        assert_eq!(task.checklist.len(), 2);
+        assert_eq!(task.checklist[0].title, "cut branch");
+        assert!(task.checklist[0].is_done());
+        assert_eq!(task.checklist[1].title, "tag version");
+        assert!(!task.checklist[1].is_done());
+    }
 }

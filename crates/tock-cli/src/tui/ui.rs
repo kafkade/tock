@@ -225,6 +225,17 @@ fn draw_detail(frame: &mut Frame, state: &AppState, area: Rect) {
                     .join(" ")
             ));
         }
+        if let Some((done, total)) = tock_core::domain::checklist::progress(&task.checklist) {
+            lines.push(String::new());
+            lines.push(format!(
+                "{} ({done}/{total}):",
+                crate::tr!("tui-detail-checklist")
+            ));
+            for (position, item) in task.checklist.iter().enumerate() {
+                let marker = if item.is_done() { "x" } else { " " };
+                lines.push(format!("  {}. [{}] {}", position + 1, marker, item.title));
+            }
+        }
         if let Some(notes) = &task.notes {
             lines.push(String::new());
             lines.push(format!("{}:", crate::tr!("tui-detail-notes")));
