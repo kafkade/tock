@@ -21,6 +21,13 @@ PrivateTmp=yes
 
 # Environment.
 Environment=RUST_LOG=info
+# Account / auth configuration (see docs/self-hosting.md):
+Environment=TOCK_MODE=self-hosted
+Environment=TOCK_REGISTRATION_POLICY=disabled
+# Optional: bootstrap an admin invite for this username on a fresh instance
+# (the setup token is written to the journal). Leave unset to use the web
+# first-run wizard instead.
+#Environment=TOCK_ADMIN_USERNAME=admin@example.com
 
 [Install]
 WantedBy=multi-user.target

@@ -22,6 +22,45 @@ pub async fn health() -> impl IntoResponse {
     (StatusCode::OK, Json(serde_json::json!({ "status": "ok" })))
 }
 
+// ── Server info ──────────────────────────────────────────────────────
+
+/// Public instance metadata returned by `GET /v1/server/info`.
+///
+/// This is unauthenticated on purpose: the web console fetches it before any
+/// account exists to decide whether to show the first-run setup wizard. It
+/// exposes only non-secret operational facts.
+#[derive(Serialize)]
+pub struct ServerInfo {
+    /// `true` when no account exists yet, so the first registrant will be
+    /// bootstrapped as the admin (the browser should show the setup wizard).
+    pub setup_required: bool,
+    /// Current registration policy (`open`, `invite-only`, `disabled`).
+    pub registration_policy: String,
+    /// Operating mode (`self-hosted` or `hosted`).
+    pub mode: String,
+    /// Server crate version.
+    pub version: String,
+}
+
+/// `GET /v1/server/info` — public instance metadata for first-run gating.
+pub async fn server_info(State(state): State<AppState>) -> Result<Json<ServerInfo>, Error> {
+    let db = state.db.clone();
+    let (count, policy) = tokio::task::spawn_blocking(move || {
+        let count = db.account_count()?;
+        let policy = db.registration_policy()?;
+        Ok::<_, Error>((count, policy))
+    })
+    .await
+    .map_err(|e| Error::Internal(e.to_string()))??;
+
+    Ok(Json(ServerInfo {
+        setup_required: count == 0,
+        registration_policy: policy.as_str().to_string(),
+        mode: state.mode.to_string(),
+        version: env!("CARGO_PKG_VERSION").to_string(),
+    }))
+}
+
 // ── Device registration ──────────────────────────────────────────────
 
 /// Request body for device registration.

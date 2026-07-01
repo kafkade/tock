@@ -2,7 +2,8 @@ import { useState } from "react";
 import QRCode from "qrcode";
 import { signup, type SignupBundle } from "../lib/account";
 
-const DEFAULT_SERVER = "http://localhost:8787";
+const DEFAULT_SERVER =
+  typeof window !== "undefined" ? window.location.origin : "";
 
 export function SignupPage({ onDone }: { onDone: () => void }) {
   const [server, setServer] = useState(DEFAULT_SERVER);

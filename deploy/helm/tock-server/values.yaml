@@ -27,6 +27,12 @@ persistence:
 
 env:
   RUST_LOG: info
+  # Account / auth configuration (see docs/self-hosting.md).
+  TOCK_MODE: self-hosted
+  TOCK_REGISTRATION_POLICY: disabled
+  # Optional: bootstrap an admin invite for this username on a fresh instance
+  # (the setup token is logged). Leave empty to use the web first-run wizard.
+  TOCK_ADMIN_USERNAME: ""
 
 nodeSelector: {}
 tolerations: []
