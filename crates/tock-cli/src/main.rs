@@ -5,6 +5,7 @@
 
 mod clap_i18n;
 mod commands;
+mod config;
 mod display;
 mod hooks;
 mod http_transport;
@@ -57,13 +58,18 @@ struct Cli {
     #[arg(long, default_value = "table")]
     format: String,
 
+    /// Path to the config file (overrides `TOCK_CONFIG` and the default
+    /// `~/.config/tock/config.toml`).
+    #[arg(long, env = "TOCK_CONFIG", global = true)]
+    config: Option<PathBuf>,
+
     /// Language for messages (BCP-47, e.g. `en-US`); overrides `TOCK_LANG`.
     #[arg(long, env = "TOCK_LANG", global = true)]
     lang: Option<String>,
 
     /// Subcommand to execute.
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
 
 #[derive(Clone, Debug)]
@@ -121,7 +127,19 @@ fn prescan_lang() -> Option<String> {
 
 fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     #![allow(clippy::too_many_lines)]
-    match &cli.command {
+    let (cfg, cfg_path) = config::load(cli.config.as_deref())?;
+
+    // Resolve the command, falling back to the configured default view when
+    // `tock` is invoked with no subcommand.
+    let default_command = Commands::View {
+        name: cfg.general.default_view.clone(),
+        json: false,
+    };
+    let command = cli.command.as_ref().unwrap_or(&default_command);
+    let urgency = cfg.urgency.to_core();
+    notify::set_enabled(cfg.notifications.enabled);
+
+    match command {
         Commands::Completions { shell } => {
             let mut cmd = Cli::command();
             clap_complete::generate(*shell, &mut cmd, "tock", &mut std::io::stdout());
@@ -136,6 +154,9 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         }
         Commands::Account(args) => {
             return commands::account::run_account_cmd(cli, &args.cmd);
+        }
+        Commands::Config(args) => {
+            return run_config_cmd(&args.command, &cfg, cfg_path.as_deref());
         }
         _ => {}
     }
@@ -153,7 +174,7 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // Handle imports that need &mut Connection (for transactions) early.
-    if let Commands::Import { format, file, map } = &cli.command
+    if let Commands::Import { format, file, map } = command
         && run_transactional_import(&mut vault, format, file, map.as_deref())?
     {
         return Ok(());
@@ -161,7 +182,7 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
 
     // Sync and device commands need the whole `OpenVault`, not just the
     // connection, so handle them before the connection borrow below.
-    match &cli.command {
+    match command {
         Commands::Sync(args) => return commands::sync_cmd::run_sync(&vault, args),
         Commands::Device(args) => return commands::sync_cmd::run_device(&vault, &args.cmd),
         _ => {}
@@ -170,7 +191,7 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     let conn = vault.connection();
     let active_context = load_active_context(conn)?;
 
-    match &cli.command {
+    match command {
         Commands::Add { .. }
         | Commands::Modify { .. }
         | Commands::Done { .. }
@@ -180,20 +201,24 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         | Commands::Undepend { .. }
         | Commands::List { .. }
         | Commands::Show { .. }
-        | Commands::Urgency { .. } => {
-            run_task_cmd(conn, &cli.command, &cli.format, active_context.as_ref())
-        }
+        | Commands::Urgency { .. } => run_task_cmd(
+            conn,
+            command,
+            &cli.format,
+            active_context.as_ref(),
+            &urgency,
+        ),
         Commands::Project(args) => run_project_cmd(conn, &args.command),
         Commands::Area(args) => run_area_cmd(conn, &args.command),
         Commands::Tag(args) => run_tag_cmd(conn, &args.command),
         Commands::Report(args) => run_report_cmd(conn, &args.command, active_context.as_ref()),
         Commands::Context(args) => run_context_cmd(conn, &args.command),
         Commands::Time(args) => run_time_cmd(conn, &args.command),
-        Commands::Focus(args) => run_focus_cmd(conn, &args.command),
+        Commands::Focus(args) => run_focus_cmd(conn, &args.command, &cfg),
         Commands::Habit(args) => run_habit_cmd(conn, &args.command),
-        Commands::Uda(args) => run_uda_cmd(conn, &args.command),
+        Commands::Uda(args) => run_uda_cmd(conn, &args.command, &cfg),
         Commands::Tui => {
-            tui::run(conn)?;
+            tui::run(conn, &cfg, &urgency)?;
             Ok(())
         }
         Commands::View { name, json } => {
@@ -235,6 +260,7 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         Commands::Hooks(_) => unreachable!("hooks handled before vault open"),
         Commands::Onboard(_) => unreachable!("onboard handled before vault open"),
         Commands::Account(_) => unreachable!("account handled before vault open"),
+        Commands::Config(_) => unreachable!("config handled before vault open"),
         Commands::Sync(_) | Commands::Device(_) => {
             unreachable!("sync/device handled before connection borrow")
         }
@@ -665,12 +691,13 @@ fn run_task_cmd(
     cmd: &Commands,
     global_format: &str,
     active_context: Option<&ActiveContext>,
+    urgency: &tock_core::domain::urgency::UrgencyConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
     match cmd {
-        Commands::Add { words, recur, .. } => run_add_cmd(conn, words, recur.as_deref())?,
+        Commands::Add { words, recur, .. } => run_add_cmd(conn, words, recur.as_deref(), urgency)?,
         Commands::Modify { sid, args } => {
             let patch = commands::modify::parse_modify_args(args);
-            let task = tock_storage::repo::task_repo::update(conn, *sid, &patch)?;
+            let task = tock_storage::repo::task_repo::update(conn, *sid, &patch, urgency)?;
             println!(
                 "{}",
                 tr!(
@@ -686,6 +713,7 @@ fn run_task_cmd(
                     conn,
                     *sid,
                     commands::done::done_status(),
+                    urgency,
                 )?;
                 // Auto-stop any active focus session linked to this task.
                 if let Some(active) = tock_storage::repo::focus_repo::get_active(conn)?
@@ -724,6 +752,7 @@ fn run_task_cmd(
                     conn,
                     *sid,
                     commands::done::cancel_status(),
+                    urgency,
                 )?;
                 println!(
                     "{}",
@@ -742,14 +771,14 @@ fn run_task_cmd(
             }
         }
         Commands::Depend { sid, on } => {
-            tock_storage::repo::task_repo::add_dependency(conn, *sid, *on)?;
+            tock_storage::repo::task_repo::add_dependency(conn, *sid, *on, urgency)?;
             println!(
                 "{}",
                 tr!("depend-added", sid = i64::from(*sid), on = i64::from(*on))
             );
         }
         Commands::Undepend { sid, from } => {
-            tock_storage::repo::task_repo::remove_dependency(conn, *sid, *from)?;
+            tock_storage::repo::task_repo::remove_dependency(conn, *sid, *from, urgency)?;
             println!(
                 "{}",
                 tr!(
@@ -783,7 +812,7 @@ fn run_task_cmd(
                 eprintln!("{}", tr!("task-not-found", sid = i64::from(*sid)));
             }
         }
-        Commands::Urgency { sid } => run_urgency_cmd(conn, *sid)?,
+        Commands::Urgency { sid } => run_urgency_cmd(conn, *sid, urgency)?,
         _ => {}
     }
     Ok(())
@@ -793,6 +822,7 @@ fn run_add_cmd(
     conn: &Connection,
     words: &[String],
     recur: Option<&str>,
+    urgency: &tock_core::domain::urgency::UrgencyConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut parsed_task = commands::add::parse_add_input(words);
     parsed_task.recurrence =
@@ -803,7 +833,7 @@ fn run_add_cmd(
         return Ok(());
     };
     let new_task = new_task_from_hook_json(&parsed_task, &hooked_json)?;
-    let task = tock_storage::repo::task_repo::insert(conn, &new_task)?;
+    let task = tock_storage::repo::task_repo::insert(conn, &new_task, urgency)?;
     println!(
         "{}",
         tr!(
@@ -815,11 +845,16 @@ fn run_add_cmd(
     Ok(())
 }
 
-fn run_urgency_cmd(conn: &Connection, sid: u32) -> Result<(), Box<dyn std::error::Error>> {
+fn run_urgency_cmd(
+    conn: &Connection,
+    sid: u32,
+    urgency: &tock_core::domain::urgency::UrgencyConfig,
+) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(task) = tock_storage::repo::task_repo::get_by_sid(conn, sid)? {
         let breakdown = explain_task_urgency(
             &task,
             tock_storage::repo::task_repo::is_blocked(conn, task.id)?,
+            urgency,
         );
         let total: f64 = breakdown
             .iter()
@@ -1500,6 +1535,7 @@ fn run_habit_status(conn: &Connection) -> Result<(), Box<dyn std::error::Error>>
 fn run_focus_cmd(
     conn: &Connection,
     cmd: &commands::focus::FocusCommand,
+    cfg: &config::Config,
 ) -> Result<(), Box<dyn std::error::Error>> {
     match cmd {
         FocusCommand::Start {
@@ -1508,7 +1544,15 @@ fn run_focus_cmd(
             work,
             short_break,
             long_break,
-        } => run_focus_start(conn, *task, *cycles, *work, *short_break, *long_break),
+        } => run_focus_start(
+            conn,
+            *task,
+            *cycles,
+            *work,
+            *short_break,
+            *long_break,
+            &cfg.focus,
+        ),
         FocusCommand::Done => run_focus_done(conn),
         FocusCommand::SkipBreak => run_focus_skip_break(conn),
         FocusCommand::Pause => run_focus_pause(conn),
@@ -1523,10 +1567,11 @@ fn run_focus_cmd(
 fn run_focus_start(
     conn: &Connection,
     task: Option<u32>,
-    cycles: u32,
-    work: u32,
-    short_break: u32,
-    long_break: u32,
+    cycles: Option<u32>,
+    work: Option<u32>,
+    short_break: Option<u32>,
+    long_break: Option<u32>,
+    focus_cfg: &config::Focus,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(active) = tock_storage::repo::focus_repo::get_active(conn)? {
         eprintln!(
@@ -1545,16 +1590,16 @@ fn run_focus_start(
     } else {
         None
     };
-    let default_config = tock_core::domain::focus::FocusConfig::default();
+    let base_config = focus_cfg.to_core();
     let new = tock_core::domain::focus::NewFocusSession {
         task_id,
         project_id: None,
-        planned_cycles: cycles,
+        planned_cycles: cycles.unwrap_or(focus_cfg.cycles),
         config: tock_core::domain::focus::FocusConfig {
-            work_minutes: work,
-            short_break_minutes: short_break,
-            long_break_minutes: long_break,
-            cycles_before_long_break: default_config.cycles_before_long_break,
+            work_minutes: work.unwrap_or(base_config.work_minutes),
+            short_break_minutes: short_break.unwrap_or(base_config.short_break_minutes),
+            long_break_minutes: long_break.unwrap_or(base_config.long_break_minutes),
+            cycles_before_long_break: base_config.cycles_before_long_break,
         },
     };
     let session = tock_storage::repo::focus_repo::insert(conn, &new)?;
@@ -2082,7 +2127,11 @@ fn resolve_time_start_input(
     }
 
     let new_task = commands::add::parse_add_input(words);
-    let task = tock_storage::repo::task_repo::insert(conn, &new_task)?;
+    let task = tock_storage::repo::task_repo::insert(
+        conn,
+        &new_task,
+        &tock_core::domain::urgency::UrgencyConfig::default(),
+    )?;
     println!(
         "{}",
         tr!(
@@ -2321,7 +2370,11 @@ fn run_tag_cmd(
     Ok(())
 }
 
-fn run_uda_cmd(conn: &Connection, cmd: &UdaCommand) -> Result<(), Box<dyn std::error::Error>> {
+fn run_uda_cmd(
+    conn: &Connection,
+    cmd: &UdaCommand,
+    cfg: &config::Config,
+) -> Result<(), Box<dyn std::error::Error>> {
     match cmd {
         UdaCommand::Add {
             key,
@@ -2354,7 +2407,7 @@ fn run_uda_cmd(conn: &Connection, cmd: &UdaCommand) -> Result<(), Box<dyn std::e
             );
         }
         UdaCommand::List => {
-            let definitions = tock_storage::repo::uda_repo::list_definitions(conn)?;
+            let definitions = merged_uda_definitions(conn, cfg)?;
             for definition in &definitions {
                 println!(
                     "{:<20}  {:<8}  {:<20}  {}",
@@ -2372,6 +2425,71 @@ fn run_uda_cmd(conn: &Connection, cmd: &UdaCommand) -> Result<(), Box<dyn std::e
         UdaCommand::Rm { key } => {
             tock_storage::repo::uda_repo::remove_definition(conn, key)?;
             println!("{}", tr!("uda-removed", key = key));
+        }
+    }
+    Ok(())
+}
+
+/// Merge config `[uda.*]` declarations over the per-vault DB definitions.
+/// Config declarations win on key conflict.
+fn merged_uda_definitions(
+    conn: &Connection,
+    cfg: &config::Config,
+) -> Result<Vec<tock_core::domain::uda::UdaDefinition>, Box<dyn std::error::Error>> {
+    use std::collections::BTreeMap;
+    let mut merged: BTreeMap<String, tock_core::domain::uda::UdaDefinition> =
+        tock_storage::repo::uda_repo::list_definitions(conn)?
+            .into_iter()
+            .map(|definition| (definition.key.clone(), definition))
+            .collect();
+    for (key, uda) in &cfg.uda {
+        let uda_type = tock_core::domain::uda::UdaType::from_str_opt(&uda.uda_type)
+            .unwrap_or(tock_core::domain::uda::UdaType::String);
+        merged.insert(
+            key.clone(),
+            tock_core::domain::uda::UdaDefinition {
+                key: key.clone(),
+                uda_type,
+                label: uda.label.clone(),
+                default: uda.default.clone(),
+            },
+        );
+    }
+    Ok(merged.into_values().collect())
+}
+
+/// Handle `tock config show|path|init`.
+fn run_config_cmd(
+    cmd: &commands::config::ConfigCommand,
+    cfg: &config::Config,
+    path: Option<&std::path::Path>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match cmd {
+        commands::config::ConfigCommand::Show { json } => {
+            if *json {
+                println!("{}", serde_json::to_string_pretty(cfg)?);
+            } else {
+                print!("{}", config::to_toml(cfg)?);
+            }
+        }
+        commands::config::ConfigCommand::Path => match path {
+            Some(path) => println!("{}", path.display()),
+            None => eprintln!("no config path could be resolved"),
+        },
+        commands::config::ConfigCommand::Init { force } => {
+            let Some(path) = path else {
+                return Err("no config path could be resolved".into());
+            };
+            if path.exists() && !force {
+                println!("config already exists: {}", path.display());
+                println!("re-run with --force to overwrite");
+                return Ok(());
+            }
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(path, config::SAMPLE_CONFIG)?;
+            println!("wrote sample config: {}", path.display());
         }
     }
     Ok(())
@@ -3153,7 +3271,11 @@ fn task_to_hook_json(task: &Task) -> String {
     .to_string()
 }
 
-fn explain_task_urgency(task: &Task, is_blocked: bool) -> Vec<(String, f64, f64, f64)> {
+fn explain_task_urgency(
+    task: &Task,
+    is_blocked: bool,
+    urgency: &tock_core::domain::urgency::UrgencyConfig,
+) -> Vec<(String, f64, f64, f64)> {
     let now = time::OffsetDateTime::now_utc();
     let today = today_string_for(now);
     let input = tock_core::domain::urgency::UrgencyInput {
@@ -3166,10 +3288,7 @@ fn explain_task_urgency(task: &Task, is_blocked: bool) -> Vec<(String, f64, f64,
         created_at_days_ago: task_age_days(task.created_at, now),
         today: &today,
     };
-    tock_core::domain::urgency::explain(
-        &input,
-        &tock_core::domain::urgency::UrgencyConfig::default(),
-    )
+    tock_core::domain::urgency::explain(&input, urgency)
 }
 
 fn apply_optional_string_field(

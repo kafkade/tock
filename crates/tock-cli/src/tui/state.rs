@@ -6,8 +6,11 @@ use std::error::Error;
 use rusqlite::Connection;
 use time::OffsetDateTime;
 use tock_core::domain::task::{Task, TaskStatus};
+use tock_core::domain::urgency::UrgencyConfig;
 use tock_parse::filter::{self, Filter, Filterable};
 use uuid::Uuid;
+
+use crate::config::Keymap;
 
 /// The pane that currently has keyboard focus.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -48,6 +51,10 @@ pub struct AppState {
     pub show_help: bool,
     /// Status text shown at the bottom of the screen.
     pub status_message: Option<String>,
+    /// Keymap resolved from `[keys]` config.
+    pub(crate) keymap: Keymap,
+    /// Urgency coefficients resolved from `[urgency]` config.
+    urgency: UrgencyConfig,
     project_names: HashMap<Uuid, String>,
 }
 
@@ -56,7 +63,11 @@ impl AppState {
     ///
     /// # Errors
     /// Returns an error if the repository queries fail.
-    pub(crate) fn new(conn: &Connection) -> Result<Self, Box<dyn Error>> {
+    pub(crate) fn new(
+        conn: &Connection,
+        urgency: UrgencyConfig,
+        keymap: Keymap,
+    ) -> Result<Self, Box<dyn Error>> {
         let mut state = Self {
             active_pane: ActivePane::Sidebar,
             sidebar_items: Vec::new(),
@@ -66,6 +77,8 @@ impl AppState {
             should_quit: false,
             show_help: false,
             status_message: Some(crate::tr!("tui-status-hint")),
+            keymap,
+            urgency,
             project_names: HashMap::new(),
         };
         state.reload_sidebar(conn)?;
@@ -180,7 +193,12 @@ impl AppState {
             return Ok(());
         };
 
-        let updated = tock_storage::repo::task_repo::set_status(conn, task.sid, TaskStatus::Done)?;
+        let updated = tock_storage::repo::task_repo::set_status(
+            conn,
+            task.sid,
+            TaskStatus::Done,
+            &self.urgency,
+        )?;
         self.reload_tasks_with_selection(conn, Some(updated.sid))?;
         self.status_message = Some(crate::tr!(
             "tui-completed-task",
@@ -411,6 +429,8 @@ mod tests {
 
     use super::{ActivePane, AppState, SidebarItem};
     use crate::commands;
+    use crate::config::Keymap;
+    use tock_core::domain::urgency::UrgencyConfig;
     use tock_storage::migrations;
 
     fn test_conn() -> Connection {
@@ -442,6 +462,7 @@ mod tests {
                 status: Some(TaskStatus::Inbox),
                 ..NewTask::default()
             },
+            &UrgencyConfig::default(),
         )
         .expect("insert inbox task");
         tock_storage::repo::task_repo::insert(
@@ -452,10 +473,12 @@ mod tests {
                 project_id: Some(project.id),
                 ..NewTask::default()
             },
+            &UrgencyConfig::default(),
         )
         .expect("insert project task");
 
-        let state = AppState::new(&conn).expect("build state");
+        let state =
+            AppState::new(&conn, UrgencyConfig::default(), Keymap::default()).expect("build state");
         let expected_views = commands::views::all_views("2026-01-01").len();
 
         assert_eq!(state.sidebar_items.len(), expected_views + 1);
@@ -493,6 +516,7 @@ mod tests {
                 project_id: Some(project.id),
                 ..NewTask::default()
             },
+            &UrgencyConfig::default(),
         )
         .expect("insert project task");
         tock_storage::repo::task_repo::insert(
@@ -502,10 +526,12 @@ mod tests {
                 status: Some(TaskStatus::Pending),
                 ..NewTask::default()
             },
+            &UrgencyConfig::default(),
         )
         .expect("insert other task");
 
-        let mut state = AppState::new(&conn).expect("build state");
+        let mut state =
+            AppState::new(&conn, UrgencyConfig::default(), Keymap::default()).expect("build state");
         state.sidebar_selected = state.sidebar_items.len().saturating_sub(1);
         state.activate_selected(&conn).expect("activate project");
 
@@ -524,10 +550,12 @@ mod tests {
                 status: Some(TaskStatus::Inbox),
                 ..NewTask::default()
             },
+            &UrgencyConfig::default(),
         )
         .expect("insert task");
 
-        let mut state = AppState::new(&conn).expect("build state");
+        let mut state =
+            AppState::new(&conn, UrgencyConfig::default(), Keymap::default()).expect("build state");
         state.complete_selected_task(&conn).expect("complete task");
 
         assert!(state.tasks.is_empty());
@@ -548,6 +576,8 @@ mod tests {
             should_quit: false,
             show_help: false,
             status_message: None,
+            keymap: Keymap::default(),
+            urgency: UrgencyConfig::default(),
             project_names: std::collections::HashMap::new(),
         };
 

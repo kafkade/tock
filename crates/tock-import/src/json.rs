@@ -54,7 +54,11 @@ pub fn import_tasks(conn: &Connection, json: &str) -> Result<usize, tock_storage
             evening: import.evening,
             ..NewTask::default()
         };
-        tock_storage::repo::task_repo::insert(conn, &new_task)?;
+        tock_storage::repo::task_repo::insert(
+            conn,
+            &new_task,
+            &tock_core::domain::urgency::UrgencyConfig::default(),
+        )?;
         count += 1;
     }
     Ok(count)

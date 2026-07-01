@@ -17,18 +17,25 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use rusqlite::Connection;
 
+use crate::config::{Action, Config, Keymap};
+
 /// Run the interactive terminal user interface.
 ///
 /// # Errors
 /// Returns an error if terminal setup, event handling, drawing, or task
 /// repository operations fail.
-pub fn run(conn: &Connection) -> Result<(), Box<dyn Error>> {
+pub fn run(
+    conn: &Connection,
+    cfg: &Config,
+    urgency: &tock_core::domain::urgency::UrgencyConfig,
+) -> Result<(), Box<dyn Error>> {
     let cleanup = TerminalCleanup::enter()?;
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend)?;
     terminal.hide_cursor()?;
 
-    let mut state = state::AppState::new(conn)?;
+    let keymap = Keymap::from_config(&cfg.keys);
+    let mut state = state::AppState::new(conn, urgency.clone(), keymap)?;
 
     loop {
         terminal.draw(|frame| ui::draw(frame, &state))?;
@@ -56,30 +63,55 @@ fn handle_key(
     code: KeyCode,
     modifiers: KeyModifiers,
 ) -> Result<(), Box<dyn Error>> {
+    // Ctrl-C always quits, regardless of the configured keymap.
+    if code == KeyCode::Char('c') && modifiers.contains(KeyModifiers::CONTROL) {
+        state.should_quit = true;
+        return Ok(());
+    }
+
+    // Configured keybindings take precedence over the navigational fallbacks.
+    if let Some(action) = state.keymap.action(code) {
+        return apply_action(state, conn, action);
+    }
+
+    // Built-in fallbacks for keys the config does not (re)bind.
     match code {
-        KeyCode::Char('q') | KeyCode::Esc => state.should_quit = true,
-        KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => {
-            state.should_quit = true;
-        }
-        KeyCode::Tab | KeyCode::Right => state.next_pane(),
-        KeyCode::BackTab | KeyCode::Left => state.prev_pane(),
+        KeyCode::Esc => state.should_quit = true,
+        KeyCode::Right => state.next_pane(),
+        KeyCode::Left => state.prev_pane(),
         KeyCode::Char('1') => state.active_pane = state::ActivePane::Sidebar,
         KeyCode::Char('2') => state.active_pane = state::ActivePane::TaskList,
         KeyCode::Char('3') => state.active_pane = state::ActivePane::Detail,
-        KeyCode::Char('j') | KeyCode::Down => state.move_down(),
-        KeyCode::Char('k') | KeyCode::Up => state.move_up(),
-        KeyCode::Char('g') => state.move_to_top(),
-        KeyCode::Char('G') => state.move_to_bottom(),
-        KeyCode::Enter => state.activate_selected(conn)?,
-        KeyCode::Char('d') if matches!(state.active_pane, state::ActivePane::TaskList) => {
+        KeyCode::Down => state.move_down(),
+        KeyCode::Up => state.move_up(),
+        _ => {}
+    }
+    Ok(())
+}
+
+fn apply_action(
+    state: &mut state::AppState,
+    conn: &Connection,
+    action: Action,
+) -> Result<(), Box<dyn Error>> {
+    match action {
+        Action::Quit => state.should_quit = true,
+        Action::NextPane => state.next_pane(),
+        Action::PrevPane => state.prev_pane(),
+        Action::Down => state.move_down(),
+        Action::Up => state.move_up(),
+        Action::Top => state.move_to_top(),
+        Action::Bottom => state.move_to_bottom(),
+        Action::Activate => state.activate_selected(conn)?,
+        Action::Complete if matches!(state.active_pane, state::ActivePane::TaskList) => {
             state.complete_selected_task(conn)?;
         }
-        KeyCode::Char('x') if matches!(state.active_pane, state::ActivePane::TaskList) => {
+        Action::Delete if matches!(state.active_pane, state::ActivePane::TaskList) => {
             state.delete_selected_task(conn)?;
         }
-        KeyCode::Char('r') => state.reload_tasks(conn)?,
-        KeyCode::Char('?') => state.show_help = !state.show_help,
-        _ => {}
+        Action::Complete | Action::Delete => {}
+        Action::Reload => state.reload_tasks(conn)?,
+        Action::Help => state.show_help = !state.show_help,
     }
     Ok(())
 }

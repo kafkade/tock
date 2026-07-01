@@ -13,23 +13,23 @@ pub struct FocusArgs {
 /// Focus timer subcommands.
 #[derive(Debug, Subcommand)]
 pub enum FocusCommand {
-    /// Start a focus session (default: 4 cycles of 25/5/15).
+    /// Start a focus session (defaults come from `[focus]` config).
     Start {
         /// Task SID to focus on (optional).
         #[arg(short, long)]
         task: Option<u32>,
-        /// Number of Pomodoro cycles (default: 4).
-        #[arg(short, long, default_value = "4")]
-        cycles: u32,
-        /// Work interval in minutes (default: 25).
-        #[arg(long, default_value = "25")]
-        work: u32,
-        /// Short break in minutes (default: 5).
-        #[arg(long, default_value = "5")]
-        short_break: u32,
-        /// Long break in minutes (default: 15).
-        #[arg(long, default_value = "15")]
-        long_break: u32,
+        /// Number of Pomodoro cycles (overrides config).
+        #[arg(short, long)]
+        cycles: Option<u32>,
+        /// Work interval in minutes (overrides config).
+        #[arg(long)]
+        work: Option<u32>,
+        /// Short break in minutes (overrides config).
+        #[arg(long)]
+        short_break: Option<u32>,
+        /// Long break in minutes (overrides config).
+        #[arg(long)]
+        long_break: Option<u32>,
     },
     /// Complete the current work interval (mark a pomodoro done).
     Done,

@@ -1,0 +1,117 @@
+# tock configuration — ~/.config/tock/config.toml
+#
+# Every key below is optional; omitted keys fall back to the built-in
+# defaults shown here. Run `tock config show` to print the effective,
+# merged configuration and `tock config path` to see which file is used.
+#
+# Precedence (low → high): defaults → this file → environment → CLI flags.
+
+# ─── General ────────────────────────────────────────────────────────────────
+[general]
+default_view        = "today"   # what `tock` with no args shows
+confirm_destructive = true       # ask before delete/purge
+format              = "table"    # table | compact | json
+
+# ─── Locale ─────────────────────────────────────────────────────────────────
+[locale]
+timezone    = "system"
+week_starts = "monday"           # monday | sunday | saturday
+time_format = "24h"              # 24h | 12h
+language    = "en"
+
+# ─── Tasks ──────────────────────────────────────────────────────────────────
+[tasks]
+default_priority  = "none"       # none | H | M | L
+auto_today_at     = "04:00"      # when "today" rolls over
+evening_starts_at = "18:00"      # when the evening bucket begins
+
+# ─── Urgency coefficients (§2.1.4) ──────────────────────────────────────────
+# These weight the components of the urgency score. `tag` is the general
+# per-tag-count weight; per-tag additive overrides go in [urgency.tags].
+[urgency]
+deadline   = 1.0
+start_date = 0.8
+priority   = 0.6
+age        = 0.5
+tag        = 0.4
+project    = 0.4
+next       = 0.7
+blocked    = -5.0
+waiting    = -2.0
+
+[urgency.tags]
+# urgent  = 4.0
+# someday = -3.0
+# waiting = -2.0
+
+# ─── Habits ─────────────────────────────────────────────────────────────────
+[habits]
+streak_grace_days = 1            # missed days tolerated before a streak breaks
+level_curve       = "fibonacci"  # linear | fibonacci
+identity_required = false
+
+# ─── Time tracking ──────────────────────────────────────────────────────────
+[time]
+allow_overlap    = false
+billable_default = false
+
+# ─── Focus / Pomodoro ───────────────────────────────────────────────────────
+# Durations accept minutes as an integer or a string ("25m", "1h").
+[focus]
+length           = "25m"
+short_break      = "5m"
+long_break       = "15m"
+cycles           = 4
+auto_start_break = true
+
+# ─── Notifications ──────────────────────────────────────────────────────────
+[notifications]
+enabled = true                   # master switch for desktop notifications
+
+# ─── Contexts (named global filters) ────────────────────────────────────────
+[contexts]
+active = ""                      # currently active context, or "" for none
+
+# [contexts.work]
+# filter = "+work -archived"
+# [contexts.personal]
+# filter = "-work -client"
+
+# ─── Custom reports ─────────────────────────────────────────────────────────
+# [reports.standup]
+# description = "Yesterday + today"
+# filter      = "+TODAY"
+# columns     = ["sid", "description", "project"]
+# sort        = ["urgency-"]
+# group_by    = "project"
+
+# ─── User-defined attributes ────────────────────────────────────────────────
+# [uda.effort]
+# type  = "int"
+# label = "Effort (1-5)"
+#
+# [uda.energy]
+# type   = "enum"
+# values = ["low", "medium", "high"]
+
+# ─── Hooks ──────────────────────────────────────────────────────────────────
+[hooks]
+dir     = "~/.config/tock/hooks"
+timeout = "5s"
+
+# ─── TUI keybindings (§7.3) ─────────────────────────────────────────────────
+# Values are a single character or a named key: tab, backtab, enter, esc,
+# up, down, left, right, space, home, end.
+[keys]
+quit      = "q"
+next_pane = "tab"
+prev_pane = "backtab"
+down      = "j"
+up        = "k"
+top       = "g"
+bottom    = "G"
+activate  = "enter"
+complete  = "d"
+delete    = "x"
+reload    = "r"
+help      = "?"
