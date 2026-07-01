@@ -33,8 +33,12 @@ spec:
               containerPort: 8080
               protocol: TCP
           env:
-            - name: RUST_LOG
-              value: {{ .Values.env.RUST_LOG | quote }}
+            {{- range $k, $v := .Values.env }}
+            {{- if ne (toString $v) "" }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+            {{- end }}
           livenessProbe:
             httpGet:
               path: /health

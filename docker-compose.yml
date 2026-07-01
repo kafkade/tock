@@ -1,22 +1,31 @@
-# docker-compose.yml — simple self-hosting for tock-server.
+# docker-compose.yml — one-command self-hosting for tock.
 #
-# Usage:
-#   docker compose up -d
+# Quick start:
+#   cp .env.example .env      # then edit .env
+#   docker compose up -d      # builds + starts tock-server and the web console
+#   open http://localhost:8080   # run the first-run setup wizard
 #
-# The server stores data in a named volume. The AGPL-3.0 license
-# applies to tock-server; source is at https://github.com/kafkade/tock.
+# Add TLS (Let's Encrypt via Caddy) once DNS points at this host:
+#   docker compose --profile tls up -d   # serves https://${TOCK_DOMAIN}
+#
+# tock-server is AGPL-3.0 (source: https://github.com/kafkade/tock); the web
+# console is Apache-2.0 and talks to the server only over HTTP. See
+# docs/self-hosting.md and ADR-006.
 
 services:
+  # Encrypted blob store + account/auth API. Never sees plaintext user data.
   tock-server:
+    image: ${TOCK_SERVER_IMAGE:-ghcr.io/kafkade/tock-server:latest}
     build:
       context: .
       dockerfile: Dockerfile
-    ports:
-      - "8080:8080"
     environment:
       - TOCK_BIND=0.0.0.0:8080
       - TOCK_DATA_DIR=/var/lib/tock-server
-      - RUST_LOG=info
+      - TOCK_MODE=${TOCK_MODE:-self-hosted}
+      - TOCK_REGISTRATION_POLICY=${TOCK_REGISTRATION_POLICY:-disabled}
+      - TOCK_ADMIN_USERNAME=${TOCK_ADMIN_USERNAME:-}
+      - RUST_LOG=${RUST_LOG:-info}
     volumes:
       - tock-data:/var/lib/tock-server
     restart: unless-stopped
@@ -27,6 +36,48 @@ services:
       retries: 3
       start_period: 10s
 
+  # Web console + first-run wizard. Serves the SPA and proxies the API to
+  # tock-server, so this is the single plain-HTTP entrypoint.
+  tock-web:
+    image: ${TOCK_WEB_IMAGE:-ghcr.io/kafkade/tock-web:latest}
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    ports:
+      - "${TOCK_HTTP_PORT:-8080}:80"
+    depends_on:
+      tock-server:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  # Optional TLS terminator (auto Let's Encrypt). Enable with `--profile tls`.
+  caddy:
+    image: caddy:2
+    profiles: ["tls"]
+    depends_on:
+      - tock-web
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - TOCK_DOMAIN=${TOCK_DOMAIN:?set TOCK_DOMAIN in .env}
+      - TOCK_ACME_EMAIL=${TOCK_ACME_EMAIL:?set TOCK_ACME_EMAIL in .env}
+    volumes:
+      - ./deploy/proxy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    restart: unless-stopped
+
 volumes:
   tock-data:
+    driver: local
+  caddy-data:
+    driver: local
+  caddy-config:
     driver: local

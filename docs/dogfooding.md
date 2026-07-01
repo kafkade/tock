@@ -41,16 +41,22 @@ non-interactively:
 From the repository root:
 
 ```sh
+cp .env.example .env
 docker compose up -d
 ```
 
-This builds the image from the [`Dockerfile`](../Dockerfile) and starts
-`tock-server` on port `8080`, persisting its encrypted database in the
+This builds the stack from [`Dockerfile`](../Dockerfile) +
+[`Dockerfile.web`](../Dockerfile.web) and starts `tock-server` behind the
+`tock-web` console on port `8080`, persisting the encrypted database in the
 `tock-data` named volume. Confirm it is healthy:
 
 ```sh
 curl -f http://localhost:8080/health
 ```
+
+For the full self-host walkthrough — first-run admin wizard, TLS, user
+management, backup/restore — see the
+[self-hosting guide](self-hosting.md).
 
 ### Option B — `cargo run`
 

@@ -37,6 +37,13 @@
 //! - `tock-server admin create-admin --username <u>`
 //! - `tock-server admin list-users`
 //! - `tock-server admin reset-registration --policy <open|invite-only|disabled>`
+//!
+//! ## Environment bootstrap
+//!
+//! - `TOCK_REGISTRATION_POLICY=<open|invite-only|disabled>` — pin the policy on
+//!   startup.
+//! - `TOCK_ADMIN_USERNAME=<u>` — on a fresh instance, mint an admin invite for
+//!   `<u>` and log the setup token (skipped once an admin exists).
 
 use std::net::SocketAddr;
 use std::path::PathBuf;

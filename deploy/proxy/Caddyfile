@@ -1,0 +1,15 @@
+# Caddyfile — automatic HTTPS for tock via Let's Encrypt.
+#
+# Used by the `caddy` service in docker-compose.yml (`--profile tls`). Caddy
+# terminates TLS and reverse-proxies everything to the tock-web container,
+# which serves the console and proxies the API to tock-server. TOCK_DOMAIN and
+# TOCK_ACME_EMAIL come from your .env.
+#
+# Requirements: a public DNS A/AAAA record for {$TOCK_DOMAIN} pointing at this
+# host, with ports 80 and 443 reachable from the internet.
+
+{$TOCK_DOMAIN} {
+	encode gzip zstd
+	reverse_proxy tock-web:80
+	tls {$TOCK_ACME_EMAIL}
+}

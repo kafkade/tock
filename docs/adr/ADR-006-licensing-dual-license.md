@@ -50,3 +50,23 @@ Apache-2.0 is GPL-compatible (clients can link AGPL server code if they choose).
 **Neutral:**
 - Enterprise users wanting proprietary modifications to the server can negotiate a commercial license (future revenue opportunity).
 - Documentation must clearly explain the licensing split (`LICENSE-APACHE-2.0` and `LICENSE-AGPL-3.0` in repo root, per-crate `README.md` specifies which applies).
+
+## Addendum: self-host deployment topology (#132)
+
+The one-command self-host stack ships the **web console as a separate
+`tock-web` container** (Apache-2.0) rather than embedding it in the AGPL
+`tock-server` binary. The console talks to the server only over HTTP — the
+arm's-length aggregation boundary — so it remains a separate work, and the
+existing split above holds unchanged:
+
+- `tock-server` (AGPL-3.0) satisfies its network-source obligation because its
+  Corresponding Source is this public repository.
+- The console stays Apache-2.0 and reusable outside the server context.
+
+Embedding the SPA into the server binary would be *legally* permissible
+(Apache-2.0 is one-way compatible with (A)GPLv3, making the combined work
+AGPL), but it would pull the UI under network copyleft and blur the client/
+server license split for no operational benefit on a self-host box. The
+reverse proxy therefore routes `/v1`, `/health`, and `/metrics` to the server
+and everything else to the web container. See
+[`docs/self-hosting.md`](../self-hosting.md).

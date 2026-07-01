@@ -16,6 +16,7 @@
 //!
 //! - `GET /health` — health check
 //! - `GET /metrics` — server metrics (JSON counters)
+//! - `GET /v1/server/info` — public instance metadata (first-run gating)
 //! - `POST /v1/vaults/:vault_id/devices` — register a device (authenticated)
 //! - `POST /v1/vaults/:vault_id/events/push` — push encrypted events (authenticated)
 //! - `GET /v1/vaults/:vault_id/events/pull` — pull events by cursor (authenticated)
@@ -98,6 +99,32 @@ pub fn open_app_state(
         }
     }
 
+    // Bootstrap an admin from the environment for headless/compose deploys.
+    // When `TOCK_ADMIN_USERNAME` is set and no admin account exists yet, mint
+    // an admin-role invite pinned to that username and log the setup token so
+    // the operator can finish registration from a client. Idempotent: skipped
+    // once any admin exists.
+    if let Ok(raw) = std::env::var("TOCK_ADMIN_USERNAME") {
+        let username = raw.trim();
+        if username.is_empty() {
+            tracing::warn!("ignoring empty TOCK_ADMIN_USERNAME");
+        } else {
+            let admin_exists = db.list_users()?.iter().any(|u| u.role == "admin");
+            if admin_exists {
+                tracing::info!(
+                    "TOCK_ADMIN_USERNAME set but an admin already exists; skipping bootstrap"
+                );
+            } else {
+                let token = db.create_invite(Some(username), "admin")?;
+                tracing::info!(
+                    username,
+                    setup_token = %token,
+                    "admin bootstrap: register this username with the setup token to become admin"
+                );
+            }
+        }
+    }
+
     Ok(AppState {
         db: Arc::new(db),
         mode,
@@ -117,6 +144,8 @@ pub fn build_router(state: AppState) -> Router {
     let mut app = Router::new()
         .route("/health", get(routes::health))
         .route("/metrics", get(metrics::metrics))
+        // Public instance metadata for first-run gating (web console).
+        .route("/v1/server/info", get(routes::server_info))
         .route(
             "/v1/vaults/{vault_id}/devices",
             post(routes::register_device),
