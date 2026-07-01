@@ -182,15 +182,51 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
 
     // Sync and device commands need the whole `OpenVault`, not just the
     // connection, so handle them before the connection borrow below.
+    // Undo/redo need a mutable connection (they run in a transaction), so
+    // they are also handled here before the shared immutable borrow.
     match command {
         Commands::Sync(args) => return commands::sync_cmd::run_sync(&vault, args),
         Commands::Device(args) => return commands::sync_cmd::run_device(&vault, &args.cmd),
+        Commands::Undo => return run_undo(vault.connection_mut()),
+        Commands::Redo => return run_redo(vault.connection_mut()),
         _ => {}
     }
 
     let conn = vault.connection();
     let active_context = load_active_context(conn)?;
 
+    // Snapshot the domain state before any mutating command so it can be
+    // reverted by `tock undo`. Read-only commands return `None` here.
+    let undo_label = undoable_label(command);
+    let undo_before = match &undo_label {
+        Some(_) => Some(tock_storage::undo::snapshot(conn)?),
+        None => None,
+    };
+
+    let result = dispatch_command(conn, command, cli, &cfg, &urgency, active_context.as_ref());
+
+    // Record the change set on the undo stack when a mutating command
+    // succeeded and actually changed something.
+    if let (Some(label), Some(before)) = (undo_label, undo_before)
+        && result.is_ok()
+    {
+        let after = tock_storage::undo::snapshot(conn)?;
+        let _ = tock_storage::undo::record(conn, &label, before, after)?;
+    }
+    result
+}
+
+/// Dispatch a command that operates on an open connection. Undo/redo,
+/// sync/device, and the pre-vault commands are handled by the caller.
+fn dispatch_command(
+    conn: &Connection,
+    command: &Commands,
+    cli: &Cli,
+    cfg: &config::Config,
+    urgency: &tock_core::domain::urgency::UrgencyConfig,
+    active_context: Option<&ActiveContext>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    #![allow(clippy::too_many_lines)]
     match command {
         Commands::Add { .. }
         | Commands::Modify { .. }
@@ -201,28 +237,24 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         | Commands::Undepend { .. }
         | Commands::List { .. }
         | Commands::Show { .. }
-        | Commands::Urgency { .. } => run_task_cmd(
-            conn,
-            command,
-            &cli.format,
-            active_context.as_ref(),
-            &urgency,
-        ),
+        | Commands::Urgency { .. } => {
+            run_task_cmd(conn, command, &cli.format, active_context, urgency)
+        }
         Commands::Project(args) => run_project_cmd(conn, &args.command),
         Commands::Area(args) => run_area_cmd(conn, &args.command),
         Commands::Tag(args) => run_tag_cmd(conn, &args.command),
-        Commands::Report(args) => run_report_cmd(conn, &args.command, active_context.as_ref()),
+        Commands::Report(args) => run_report_cmd(conn, &args.command, active_context),
         Commands::Context(args) => run_context_cmd(conn, &args.command),
         Commands::Time(args) => run_time_cmd(conn, &args.command),
-        Commands::Focus(args) => run_focus_cmd(conn, &args.command, &cfg),
+        Commands::Focus(args) => run_focus_cmd(conn, &args.command, cfg),
         Commands::Habit(args) => run_habit_cmd(conn, &args.command),
-        Commands::Uda(args) => run_uda_cmd(conn, &args.command, &cfg),
+        Commands::Uda(args) => run_uda_cmd(conn, &args.command, cfg),
         Commands::Tui => {
-            tui::run(conn, &cfg, &urgency)?;
+            tui::run(conn, cfg, urgency)?;
             Ok(())
         }
         Commands::View { name, json } => {
-            run_view_cmd(conn, name, *json, &cli.format, active_context.as_ref())
+            run_view_cmd(conn, name, *json, &cli.format, active_context)
         }
         Commands::Views => {
             let today_str = today_string();
@@ -264,7 +296,62 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         Commands::Sync(_) | Commands::Device(_) => {
             unreachable!("sync/device handled before connection borrow")
         }
+        Commands::Undo | Commands::Redo => {
+            unreachable!("undo/redo handled before connection borrow")
+        }
     }
+}
+
+/// Human label for a mutating command, used both to decide whether the
+/// command is undoable and for the `Undid: <label>` feedback line.
+/// Returns `None` for read-only or pre-vault commands.
+fn undoable_label(command: &Commands) -> Option<String> {
+    let label = match command {
+        Commands::Add { .. } => "add".to_owned(),
+        Commands::Modify { sid, .. } => format!("modify #{sid}"),
+        Commands::Done { sids } => format!("done {}", join_sids(sids)),
+        Commands::Cancel { sids } => format!("cancel {}", join_sids(sids)),
+        Commands::Delete { sids } => format!("delete {}", join_sids(sids)),
+        Commands::Depend { sid, on } => format!("depend #{sid} on #{on}"),
+        Commands::Undepend { sid, from } => format!("undepend #{sid} from #{from}"),
+        Commands::Project(_) => "project".to_owned(),
+        Commands::Area(_) => "area".to_owned(),
+        Commands::Tag(_) => "tag".to_owned(),
+        Commands::Report(_) => "report".to_owned(),
+        Commands::Context(_) => "context".to_owned(),
+        Commands::Time(_) => "time".to_owned(),
+        Commands::Focus(_) => "focus".to_owned(),
+        Commands::Habit(_) => "habit".to_owned(),
+        Commands::Uda(_) => "uda".to_owned(),
+        Commands::Caldav(_) => "caldav".to_owned(),
+        _ => return None,
+    };
+    Some(label)
+}
+
+fn join_sids(sids: &[u32]) -> String {
+    sids.iter()
+        .map(|s| format!("#{s}"))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Revert the most recent mutating command.
+fn run_undo(conn: &mut Connection) -> Result<(), Box<dyn std::error::Error>> {
+    match tock_storage::undo::undo(conn)? {
+        Some(outcome) => println!("{}", tr!("undo-done", action = outcome.label.as_str())),
+        None => println!("{}", tr!("undo-empty")),
+    }
+    Ok(())
+}
+
+/// Re-apply the most recently undone command.
+fn run_redo(conn: &mut Connection) -> Result<(), Box<dyn std::error::Error>> {
+    match tock_storage::undo::redo(conn)? {
+        Some(outcome) => println!("{}", tr!("redo-done", action = outcome.label.as_str())),
+        None => println!("{}", tr!("redo-empty")),
+    }
+    Ok(())
 }
 
 /// Handle `tock onboard` subcommands. Invite opens the existing vault;
@@ -3419,7 +3506,8 @@ impl tock_parse::filter::Filterable for TaskFilterable<'_> {
 #[cfg(test)]
 #[allow(clippy::expect_used)]
 mod cli_tests {
-    use super::Cli;
+    use super::{Cli, undoable_label};
+    use crate::commands::Commands;
     use clap::CommandFactory as _;
 
     /// Validate the full clap command tree, including the new `sync`,
@@ -3443,5 +3531,50 @@ mod cli_tests {
             .collect();
         assert!(names.contains(&"conflicts"), "sync conflicts present");
         assert!(names.contains(&"resolve"), "sync resolve present");
+    }
+
+    /// `undo` and `redo` must be registered as top-level subcommands.
+    #[test]
+    fn undo_redo_subcommands_present() {
+        let cmd = Cli::command();
+        let names: Vec<&str> = cmd.get_subcommands().map(clap::Command::get_name).collect();
+        assert!(names.contains(&"undo"), "undo subcommand present");
+        assert!(names.contains(&"redo"), "redo subcommand present");
+    }
+
+    /// Mutating commands are undoable (with a descriptive label); read-only
+    /// and pre-vault commands are not.
+    #[test]
+    fn undoable_label_classifies_commands() {
+        assert_eq!(
+            undoable_label(&Commands::Done { sids: vec![42] }).as_deref(),
+            Some("done #42")
+        );
+        assert_eq!(
+            undoable_label(&Commands::Modify {
+                sid: 7,
+                args: vec![],
+            })
+            .as_deref(),
+            Some("modify #7")
+        );
+        assert_eq!(
+            undoable_label(&Commands::Add {
+                recur: None,
+                words: vec!["x".to_owned()],
+            })
+            .as_deref(),
+            Some("add")
+        );
+        // Read-only and undo/redo themselves are not undoable.
+        assert!(
+            undoable_label(&Commands::List {
+                filter: vec![],
+                json: false,
+            })
+            .is_none()
+        );
+        assert!(undoable_label(&Commands::Undo).is_none());
+        assert!(undoable_label(&Commands::Redo).is_none());
     }
 }

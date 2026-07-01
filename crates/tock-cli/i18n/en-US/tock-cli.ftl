@@ -247,6 +247,12 @@ task-deleted = Deleted task #{ $sid }
 task-not-found = task #{ $sid } not found
 task-add-cancelled-by-hook = Add cancelled by hook
 task-created = Created task #{ $sid } — { $title }
+
+# Undo / redo
+undo-done = Undid: { $action }
+redo-done = Redid: { $action }
+undo-empty = Nothing to undo
+redo-empty = Nothing to redo
 task-urgency-header = Urgency for task #{ $sid } — { $title }
 # Technical labels for urgency breakdown table.
 task-urgency-weight-label = weight
