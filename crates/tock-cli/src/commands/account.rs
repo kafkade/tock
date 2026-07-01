@@ -405,16 +405,27 @@ fn render_qr(data: &str) -> String {
 }
 
 fn write_kit_pdf(path: &Path, text: &str) -> CmdResult {
-    use printpdf::{Mm, PdfDocument};
-    let (doc, page, layer) = PdfDocument::new("tock Emergency Kit", Mm(210.0), Mm(297.0), "L");
-    let font = doc.add_builtin_font(printpdf::BuiltinFont::Courier)?;
-    let current = doc.get_page(page).get_layer(layer);
+    use printpdf::{
+        BuiltinFont, Mm, Op, PdfDocument, PdfFontHandle, PdfPage, PdfSaveOptions, Point, Pt,
+    };
+    let font = PdfFontHandle::Builtin(BuiltinFont::Courier);
+    let mut ops = vec![Op::StartTextSection, Op::SetFont { font, size: Pt(11.0) }];
     let mut y = 280.0;
     for line in text.lines() {
-        current.use_text(line, 11.0, Mm(15.0), Mm(y), &font);
+        ops.push(Op::SetTextCursor {
+            pos: Point::new(Mm(15.0), Mm(y)),
+        });
+        ops.push(Op::ShowText {
+            items: vec![line.into()],
+        });
         y -= 6.0;
     }
-    doc.save(&mut std::io::BufWriter::new(std::fs::File::create(path)?))?;
+    ops.push(Op::EndTextSection);
+    let page = PdfPage::new(Mm(210.0), Mm(297.0), ops);
+    let mut doc = PdfDocument::new("tock Emergency Kit");
+    doc.with_pages(vec![page]);
+    let bytes = doc.save(&PdfSaveOptions::default(), &mut Vec::new());
+    std::fs::write(path, bytes)?;
     Ok(())
 }
 
