@@ -44,6 +44,20 @@ ignore = [
     # tock never parses untrusted font/PDF input. No slim maintained printpdf
     # tree avoids it today (0.9 still depends on ttf-parser).
     "RUSTSEC-2026-0192",
+    # The following four crates are unmaintained (no known vulnerabilities) and
+    # are all transitive, build-and-generate-only dependencies of `printpdf`
+    # (via the azul/allsorts layout tree), pulled in solely to *write* the
+    # Emergency Kit PDF. tock never parses untrusted input through them, and no
+    # slim maintained printpdf tree avoids them today.
+    #
+    # bincode 1.x via hyphenation -> azul-layout -> printpdf.
+    "RUSTSEC-2025-0141",
+    # fxhash via selectors -> kuchiki -> printpdf.
+    "RUSTSEC-2025-0057",
+    # kuchiki (HTML parsing for SVG assets) via printpdf.
+    "RUSTSEC-2023-0019",
+    # proc-macro-error via ouroboros_macro -> allsorts -> printpdf (build-time).
+    "RUSTSEC-2024-0370",
 ]
 
 [licenses]

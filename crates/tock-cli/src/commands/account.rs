@@ -409,7 +409,13 @@ fn write_kit_pdf(path: &Path, text: &str) -> CmdResult {
         BuiltinFont, Mm, Op, PdfDocument, PdfFontHandle, PdfPage, PdfSaveOptions, Point, Pt,
     };
     let font = PdfFontHandle::Builtin(BuiltinFont::Courier);
-    let mut ops = vec![Op::StartTextSection, Op::SetFont { font, size: Pt(11.0) }];
+    let mut ops = vec![
+        Op::StartTextSection,
+        Op::SetFont {
+            font,
+            size: Pt(11.0),
+        },
+    ];
     let mut y = 280.0;
     for line in text.lines() {
         ops.push(Op::SetTextCursor {
