@@ -174,8 +174,13 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // Handle imports that need &mut Connection (for transactions) early.
-    if let Commands::Import { format, file, map } = command
-        && run_transactional_import(&mut vault, format, file, map.as_deref())?
+    if let Commands::Import {
+        format,
+        file,
+        map,
+        include_trash,
+    } = command
+        && run_transactional_import(&mut vault, format, file, map.as_deref(), *include_trash)?
     {
         return Ok(());
     }
@@ -437,11 +442,19 @@ fn run_transactional_import(
     format: &str,
     file: &std::path::Path,
     map: Option<&std::path::Path>,
+    include_trash: bool,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     if format.eq_ignore_ascii_case("taskwarrior") {
         let contents = std::fs::read_to_string(file)?;
         let conn_mut = vault.connection_mut();
         let report = tock_import::taskwarrior::import_taskwarrior(conn_mut, &contents)?;
+        print!("{report}");
+        return Ok(true);
+    }
+    if format.eq_ignore_ascii_case("things3") {
+        let contents = std::fs::read_to_string(file)?;
+        let conn_mut = vault.connection_mut();
+        let report = tock_import::things3::import_things3(conn_mut, &contents, include_trash)?;
         print!("{report}");
         return Ok(true);
     }
