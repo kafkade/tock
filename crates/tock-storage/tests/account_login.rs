@@ -23,6 +23,7 @@ fn new_device_recovers_vault_from_header() {
             title: "from device A".to_string(),
             ..Default::default()
         },
+        &tock_core::domain::urgency::UrgencyConfig::default(),
     )
     .expect("add task");
 

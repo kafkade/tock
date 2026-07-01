@@ -26,7 +26,7 @@ const SELECT_TASK_SQL: &str = "SELECT id, sid, title, notes, status, area_id, pr
 /// # Errors
 /// Returns [`crate::Error::Sqlite`] on database failures and
 /// [`crate::Error::Core`] if stored UUID or timestamp data is invalid.
-pub fn insert(conn: &Connection, input: &NewTask) -> Result<Task, Error> {
+pub fn insert(conn: &Connection, input: &NewTask, urgency: &UrgencyConfig) -> Result<Task, Error> {
     let id = Uuid::now_v7();
     let sid = sid_repo::next_sid(conn, SidKind::Task)?;
     let created_at = OffsetDateTime::now_utc();
@@ -71,7 +71,7 @@ pub fn insert(conn: &Connection, input: &NewTask) -> Result<Task, Error> {
     for tag_name in &input.tags {
         tag_repo::tag_entity(conn, id, ENTITY_KIND, tag_name)?;
     }
-    let _ = recalculate_urgency(conn, sid)?;
+    let _ = recalculate_urgency(conn, sid, urgency)?;
 
     get_by_id(conn, id)?.ok_or(Error::NotFound)
 }
@@ -82,7 +82,12 @@ pub fn insert(conn: &Connection, input: &NewTask) -> Result<Task, Error> {
 /// Returns [`crate::Error::NotFound`] if either SID is missing,
 /// [`crate::Error::InvalidState`] if the dependency would be circular or too deep,
 /// and [`crate::Error::Sqlite`] on database failures.
-pub fn add_dependency(conn: &Connection, task_sid: u32, depends_on_sid: u32) -> Result<(), Error> {
+pub fn add_dependency(
+    conn: &Connection,
+    task_sid: u32,
+    depends_on_sid: u32,
+    urgency: &UrgencyConfig,
+) -> Result<(), Error> {
     let task_uuid = task_id_for_sid(conn, task_sid)?;
     let dependency_uuid = task_id_for_sid(conn, depends_on_sid)?;
     ensure_no_circular_dependency(conn, task_uuid, dependency_uuid)?;
@@ -91,7 +96,7 @@ pub fn add_dependency(conn: &Connection, task_sid: u32, depends_on_sid: u32) -> 
         "INSERT OR IGNORE INTO task_dependencies (task_id, depends_on_id) VALUES (?1, ?2)",
         params![uuid_to_blob(task_uuid), uuid_to_blob(dependency_uuid)],
     )?;
-    let _ = recalculate_urgency(conn, task_sid)?;
+    let _ = recalculate_urgency(conn, task_sid, urgency)?;
     Ok(())
 }
 
@@ -104,6 +109,7 @@ pub fn remove_dependency(
     conn: &Connection,
     task_sid: u32,
     depends_on_sid: u32,
+    urgency: &UrgencyConfig,
 ) -> Result<(), Error> {
     let task_uuid = task_id_for_sid(conn, task_sid)?;
     let dependency_uuid = task_id_for_sid(conn, depends_on_sid)?;
@@ -112,7 +118,7 @@ pub fn remove_dependency(
         "DELETE FROM task_dependencies WHERE task_id = ?1 AND depends_on_id = ?2",
         params![uuid_to_blob(task_uuid), uuid_to_blob(dependency_uuid)],
     )?;
-    let _ = recalculate_urgency(conn, task_sid)?;
+    let _ = recalculate_urgency(conn, task_sid, urgency)?;
     Ok(())
 }
 
@@ -225,7 +231,12 @@ pub fn list(conn: &Connection, include_deleted: bool) -> Result<Vec<Task>, Error
 /// Returns [`crate::Error::Sqlite`] on write failures,
 /// [`crate::Error::NotFound`] if the task does not exist, and
 /// [`crate::Error::Core`] if stored UUID or timestamp data is invalid.
-pub fn update(conn: &Connection, sid: u32, patch: &TaskPatch) -> Result<Task, Error> {
+pub fn update(
+    conn: &Connection,
+    sid: u32,
+    patch: &TaskPatch,
+    urgency: &UrgencyConfig,
+) -> Result<Task, Error> {
     let existing = get_by_sid(conn, sid)?.ok_or(Error::NotFound)?;
     let now = OffsetDateTime::now_utc();
     let now_text = format_timestamp(now)?;
@@ -309,14 +320,14 @@ pub fn update(conn: &Connection, sid: u32, patch: &TaskPatch) -> Result<Task, Er
         tag_repo::untag_entity(conn, existing.id, ENTITY_KIND, tag_name)?;
     }
     for dependency_sid in &patch.add_deps {
-        add_dependency(conn, sid, *dependency_sid)?;
+        add_dependency(conn, sid, *dependency_sid, urgency)?;
     }
     for dependency_sid in &patch.remove_deps {
-        remove_dependency(conn, sid, *dependency_sid)?;
+        remove_dependency(conn, sid, *dependency_sid, urgency)?;
     }
-    let _ = recalculate_urgency(conn, sid)?;
+    let _ = recalculate_urgency(conn, sid, urgency)?;
     if patch.status.is_some() {
-        recalculate_dependents_urgency(conn, existing.id)?;
+        recalculate_dependents_urgency(conn, existing.id, urgency)?;
     }
 
     get_by_sid(conn, sid)?.ok_or(Error::NotFound)
@@ -329,7 +340,12 @@ pub fn update(conn: &Connection, sid: u32, patch: &TaskPatch) -> Result<Task, Er
 /// [`crate::Error::NotFound`] if the task does not exist,
 /// [`crate::Error::InvalidState`] if the recurrence metadata is invalid,
 /// and [`crate::Error::Core`] if stored UUID or timestamp data is invalid.
-pub fn set_status(conn: &Connection, sid: u32, status: TaskStatus) -> Result<Task, Error> {
+pub fn set_status(
+    conn: &Connection,
+    sid: u32,
+    status: TaskStatus,
+    urgency: &UrgencyConfig,
+) -> Result<Task, Error> {
     let existing = get_by_sid(conn, sid)?.ok_or(Error::NotFound)?;
     let now = OffsetDateTime::now_utc();
     let now_text = format_timestamp(now)?;
@@ -351,11 +367,11 @@ pub fn set_status(conn: &Connection, sid: u32, status: TaskStatus) -> Result<Tas
             i64::from(sid),
         ],
     )?;
-    let _ = recalculate_urgency(conn, sid)?;
-    recalculate_dependents_urgency(conn, existing.id)?;
+    let _ = recalculate_urgency(conn, sid, urgency)?;
+    recalculate_dependents_urgency(conn, existing.id, urgency)?;
 
     if status == TaskStatus::Done && existing.status != TaskStatus::Done {
-        let _ = spawn_next_recurrence(conn, &existing, now)?;
+        let _ = spawn_next_recurrence(conn, &existing, now, urgency)?;
     }
 
     get_by_sid(conn, sid)?.ok_or(Error::NotFound)
@@ -366,7 +382,11 @@ pub fn set_status(conn: &Connection, sid: u32, status: TaskStatus) -> Result<Tas
 /// # Errors
 /// Returns [`crate::Error::NotFound`] if the task does not exist and
 /// [`crate::Error::Sqlite`] for read or write failures.
-pub fn recalculate_urgency(conn: &Connection, sid: u32) -> Result<f64, Error> {
+pub fn recalculate_urgency(
+    conn: &Connection,
+    sid: u32,
+    urgency: &UrgencyConfig,
+) -> Result<f64, Error> {
     let task = get_by_sid(conn, sid)?.ok_or(Error::NotFound)?;
     let now = OffsetDateTime::now_utc();
     let today = urgency_today(now);
@@ -380,7 +400,7 @@ pub fn recalculate_urgency(conn: &Connection, sid: u32) -> Result<f64, Error> {
         created_at_days_ago: task_age_days(task.created_at, now),
         today: &today,
     };
-    let score = calculate(&input, &UrgencyConfig::default());
+    let score = calculate(&input, urgency);
     conn.execute(
         "UPDATE tasks SET urgency_cache = ?1 WHERE sid = ?2",
         params![score, i64::from(sid)],
@@ -571,10 +591,14 @@ fn ensure_no_circular_dependency(
     Ok(())
 }
 
-fn recalculate_dependents_urgency(conn: &Connection, task_id: Uuid) -> Result<(), Error> {
+fn recalculate_dependents_urgency(
+    conn: &Connection,
+    task_id: Uuid,
+    urgency: &UrgencyConfig,
+) -> Result<(), Error> {
     for dependent_id in get_dependents(conn, task_id)? {
         if let Some(sid) = task_sid_for_id(conn, dependent_id)? {
-            let _ = recalculate_urgency(conn, sid)?;
+            let _ = recalculate_urgency(conn, sid, urgency)?;
         }
     }
     Ok(())
@@ -584,6 +608,7 @@ fn spawn_next_recurrence(
     conn: &Connection,
     existing: &Task,
     completed_at: OffsetDateTime,
+    urgency: &UrgencyConfig,
 ) -> Result<Option<Task>, Error> {
     let Some(recurrence_json) = existing.recurrence.as_deref() else {
         return Ok(None);
@@ -616,6 +641,7 @@ fn spawn_next_recurrence(
             udas: existing.udas.clone(),
             tags: existing.tags.clone(),
         },
+        urgency,
     )?;
     println!(
         "  (created recurring task #{} due {})",
@@ -636,6 +662,7 @@ mod tests {
     };
     use crate::Error;
     use crate::migrations;
+    use tock_core::domain::urgency::UrgencyConfig;
 
     fn test_conn() -> Connection {
         let mut conn = Connection::open_in_memory().expect("open in-memory db");
@@ -658,7 +685,8 @@ mod tests {
     #[test]
     fn inserts_and_reads_udas() {
         let conn = test_conn();
-        let task = insert(&conn, &sample_new_task()).expect("insert task");
+        let task =
+            insert(&conn, &sample_new_task(), &UrgencyConfig::default()).expect("insert task");
 
         assert_eq!(task.udas.get_str("effort").as_deref(), Some("3"));
         let fetched = get_by_sid(&conn, task.sid)
@@ -670,7 +698,8 @@ mod tests {
     #[test]
     fn update_merges_and_removes_udas() {
         let conn = test_conn();
-        let task = insert(&conn, &sample_new_task()).expect("insert task");
+        let task =
+            insert(&conn, &sample_new_task(), &UrgencyConfig::default()).expect("insert task");
 
         let mut patch = TaskPatch::default();
         patch
@@ -680,13 +709,15 @@ mod tests {
             .set_udas
             .insert(String::from("effort"), serde_json::json!(5));
         patch.remove_udas.push(String::from("missing"));
-        let updated = update(&conn, task.sid, &patch).expect("update task");
+        let updated =
+            update(&conn, task.sid, &patch, &UrgencyConfig::default()).expect("update task");
         assert_eq!(updated.udas.get_str("effort").as_deref(), Some("5"));
         assert_eq!(updated.udas.get_str("owner").as_deref(), Some("sam"));
 
         let mut remove_patch = TaskPatch::default();
         remove_patch.remove_udas.push(String::from("owner"));
-        let updated = update(&conn, task.sid, &remove_patch).expect("remove uda");
+        let updated =
+            update(&conn, task.sid, &remove_patch, &UrgencyConfig::default()).expect("remove uda");
         assert_eq!(updated.udas.get_str("effort").as_deref(), Some("5"));
         assert_eq!(updated.udas.get_str("owner"), None);
     }
@@ -696,7 +727,7 @@ mod tests {
         let conn = test_conn();
         let mut new_task = sample_new_task();
         new_task.priority = Some(Priority::Low);
-        let task = insert(&conn, &new_task).expect("insert task");
+        let task = insert(&conn, &new_task, &UrgencyConfig::default()).expect("insert task");
         let baseline_urgency = task.urgency;
 
         let mut patch = TaskPatch {
@@ -704,7 +735,8 @@ mod tests {
             ..TaskPatch::default()
         };
         patch.add_tags.push(String::from("next"));
-        let updated = update(&conn, task.sid, &patch).expect("update task urgency");
+        let updated = update(&conn, task.sid, &patch, &UrgencyConfig::default())
+            .expect("update task urgency");
 
         assert!(baseline_urgency > 0.0);
         assert!(updated.urgency > baseline_urgency);
@@ -713,20 +745,40 @@ mod tests {
     #[test]
     fn manages_dependencies_and_blocked_state() {
         let conn = test_conn();
-        let dependency = insert(&conn, &sample_new_task()).expect("insert dependency");
-        let dependent = insert(&conn, &sample_new_task()).expect("insert dependent");
+        let dependency = insert(&conn, &sample_new_task(), &UrgencyConfig::default())
+            .expect("insert dependency");
+        let dependent =
+            insert(&conn, &sample_new_task(), &UrgencyConfig::default()).expect("insert dependent");
 
-        add_dependency(&conn, dependent.sid, dependency.sid).expect("add dependency");
+        add_dependency(
+            &conn,
+            dependent.sid,
+            dependency.sid,
+            &UrgencyConfig::default(),
+        )
+        .expect("add dependency");
         let blocked = get_by_sid(&conn, dependent.sid)
             .expect("fetch dependent")
             .expect("dependent exists");
         assert_eq!(blocked.depends_on, vec![dependency.id]);
         assert!(is_blocked(&conn, dependent.id).expect("check blocked"));
 
-        set_status(&conn, dependency.sid, TaskStatus::Done).expect("complete dependency");
+        set_status(
+            &conn,
+            dependency.sid,
+            TaskStatus::Done,
+            &UrgencyConfig::default(),
+        )
+        .expect("complete dependency");
         assert!(!is_blocked(&conn, dependent.id).expect("check unblocked"));
 
-        remove_dependency(&conn, dependent.sid, dependency.sid).expect("remove dependency");
+        remove_dependency(
+            &conn,
+            dependent.sid,
+            dependency.sid,
+            &UrgencyConfig::default(),
+        )
+        .expect("remove dependency");
         let unblocked = get_by_sid(&conn, dependent.sid)
             .expect("fetch dependent")
             .expect("dependent exists");
@@ -736,14 +788,20 @@ mod tests {
     #[test]
     fn rejects_circular_dependencies() {
         let conn = test_conn();
-        let task_a = insert(&conn, &sample_new_task()).expect("insert task a");
-        let task_b = insert(&conn, &sample_new_task()).expect("insert task b");
-        let task_c = insert(&conn, &sample_new_task()).expect("insert task c");
+        let task_a =
+            insert(&conn, &sample_new_task(), &UrgencyConfig::default()).expect("insert task a");
+        let task_b =
+            insert(&conn, &sample_new_task(), &UrgencyConfig::default()).expect("insert task b");
+        let task_c =
+            insert(&conn, &sample_new_task(), &UrgencyConfig::default()).expect("insert task c");
 
-        add_dependency(&conn, task_a.sid, task_b.sid).expect("add first dependency");
-        add_dependency(&conn, task_b.sid, task_c.sid).expect("add second dependency");
+        add_dependency(&conn, task_a.sid, task_b.sid, &UrgencyConfig::default())
+            .expect("add first dependency");
+        add_dependency(&conn, task_b.sid, task_c.sid, &UrgencyConfig::default())
+            .expect("add second dependency");
 
-        let error = add_dependency(&conn, task_c.sid, task_a.sid).expect_err("reject cycle");
+        let error = add_dependency(&conn, task_c.sid, task_a.sid, &UrgencyConfig::default())
+            .expect_err("reject cycle");
         assert!(matches!(error, Error::InvalidState("circular dependency")));
     }
 
@@ -755,9 +813,16 @@ mod tests {
         recurring.deadline = Some(String::from("2026-01-10"));
         recurring.recurrence = Some(r#"{"pattern":"daily","mode":"periodic"}"#.to_string());
         recurring.tags.push(String::from("ritual"));
-        let original = insert(&conn, &recurring).expect("insert recurring task");
+        let original =
+            insert(&conn, &recurring, &UrgencyConfig::default()).expect("insert recurring task");
 
-        let completed = set_status(&conn, original.sid, TaskStatus::Done).expect("complete task");
+        let completed = set_status(
+            &conn,
+            original.sid,
+            TaskStatus::Done,
+            &UrgencyConfig::default(),
+        )
+        .expect("complete task");
         assert_eq!(completed.status, TaskStatus::Done);
 
         let tasks = super::list(&conn, false).expect("list tasks");

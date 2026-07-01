@@ -383,9 +383,13 @@ impl Workspace {
     pub fn add_task(&self, input: TockNewTask) -> Result<TockTask, TockError> {
         let core_input = input.to_core()?;
         with_vault!(self, |conn| {
-            tock_storage::repo::task_repo::insert(conn, &core_input)
-                .map(Into::into)
-                .map_err(Into::into)
+            tock_storage::repo::task_repo::insert(
+                conn,
+                &core_input,
+                &tock_core::domain::urgency::UrgencyConfig::default(),
+            )
+            .map(Into::into)
+            .map_err(Into::into)
         })
     }
 
@@ -411,27 +415,42 @@ impl Workspace {
     pub fn modify_task(&self, sid: u32, patch: TockTaskPatch) -> Result<TockTask, TockError> {
         let core_patch = patch.to_core()?;
         with_vault!(self, |conn| {
-            tock_storage::repo::task_repo::update(conn, sid, &core_patch)
-                .map(Into::into)
-                .map_err(Into::into)
+            tock_storage::repo::task_repo::update(
+                conn,
+                sid,
+                &core_patch,
+                &tock_core::domain::urgency::UrgencyConfig::default(),
+            )
+            .map(Into::into)
+            .map_err(Into::into)
         })
     }
 
     /// Mark a task as done.
     pub fn complete_task(&self, sid: u32) -> Result<TockTask, TockError> {
         with_vault!(self, |conn| {
-            tock_storage::repo::task_repo::set_status(conn, sid, TaskStatus::Done)
-                .map(Into::into)
-                .map_err(Into::into)
+            tock_storage::repo::task_repo::set_status(
+                conn,
+                sid,
+                TaskStatus::Done,
+                &tock_core::domain::urgency::UrgencyConfig::default(),
+            )
+            .map(Into::into)
+            .map_err(Into::into)
         })
     }
 
     /// Mark a task as cancelled.
     pub fn cancel_task(&self, sid: u32) -> Result<TockTask, TockError> {
         with_vault!(self, |conn| {
-            tock_storage::repo::task_repo::set_status(conn, sid, TaskStatus::Cancelled)
-                .map(Into::into)
-                .map_err(Into::into)
+            tock_storage::repo::task_repo::set_status(
+                conn,
+                sid,
+                TaskStatus::Cancelled,
+                &tock_core::domain::urgency::UrgencyConfig::default(),
+            )
+            .map(Into::into)
+            .map_err(Into::into)
         })
     }
 

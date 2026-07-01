@@ -3,6 +3,7 @@
 pub mod account;
 pub mod add;
 pub mod caldav;
+pub mod config;
 pub mod context;
 pub mod done;
 pub mod focus;
@@ -124,6 +125,8 @@ pub enum Commands {
     Hooks(hooks_cmd::HooksArgs),
     /// User-defined attribute management.
     Uda(uda::UdaArgs),
+    /// Inspect and scaffold the user configuration file.
+    Config(config::ConfigArgs),
     /// List available views.
     Views,
     /// Launch the interactive terminal user interface.

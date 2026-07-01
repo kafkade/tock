@@ -238,7 +238,11 @@ fn import_within_transaction(
             &mut report,
         )?;
 
-        let inserted = tock_storage::repo::task_repo::insert(conn, &new_task)?;
+        let inserted = tock_storage::repo::task_repo::insert(
+            conn,
+            &new_task,
+            &tock_core::domain::urgency::UrgencyConfig::default(),
+        )?;
 
         if !tw_uuid.is_empty() {
             uuid_to_sid.insert(tw_uuid.clone(), inserted.sid);
@@ -457,7 +461,12 @@ fn link_dependencies(
                 continue;
             };
 
-            match tock_storage::repo::task_repo::add_dependency(conn, task_sid, dep_sid) {
+            match tock_storage::repo::task_repo::add_dependency(
+                conn,
+                task_sid,
+                dep_sid,
+                &tock_core::domain::urgency::UrgencyConfig::default(),
+            ) {
                 Ok(()) => report.dependencies_linked += 1,
                 Err(tock_storage::Error::InvalidState(reason)) => {
                     report.warnings.push(format!(

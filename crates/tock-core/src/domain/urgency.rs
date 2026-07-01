@@ -3,6 +3,8 @@
 //! All coefficients are configurable. The engine is pure computation —
 //! it takes a task's fields and a config, returns a score.
 
+use std::collections::BTreeMap;
+
 /// Configurable urgency coefficients.
 #[derive(Clone, Debug)]
 pub struct UrgencyConfig {
@@ -24,6 +26,10 @@ pub struct UrgencyConfig {
     pub blocked_weight: f64,
     /// Weight for the waiting penalty before a future start date.
     pub waiting_weight: f64,
+    /// Additive per-tag urgency bumps, keyed by tag name. A task carrying a
+    /// listed tag contributes `weight * 1.0` on top of the general tag factor.
+    /// Mirrors the `[urgency.tags]` config table (§7.4).
+    pub tag_overrides: BTreeMap<String, f64>,
 }
 
 impl Default for UrgencyConfig {
@@ -38,6 +44,7 @@ impl Default for UrgencyConfig {
             next_weight: 0.7,
             blocked_weight: -5.0,
             waiting_weight: -2.0,
+            tag_overrides: BTreeMap::new(),
         }
     }
 }
@@ -122,6 +129,12 @@ pub fn explain(input: &UrgencyInput<'_>, config: &UrgencyConfig) -> Vec<(String,
         config.tag_weight,
         general_tag_factor(input.tags.len()),
     ));
+
+    for (tag, weight) in &config.tag_overrides {
+        if has_tag(input.tags, tag) {
+            components.push(component(&format!("tag:{tag}"), *weight, 1.0));
+        }
+    }
 
     components
 }

@@ -12,6 +12,7 @@
 use std::path::Path;
 
 use tock_core::domain::task::{NewTask, Priority, TaskPatch};
+use tock_core::domain::urgency::UrgencyConfig;
 use tock_core::vault::VaultKey;
 use tock_storage::repo::task_repo;
 use tock_storage::sync;
@@ -74,6 +75,7 @@ fn clean_one_way_propagation() {
             title: "buy milk".into(),
             ..NewTask::default()
         },
+        &UrgencyConfig::default(),
     )
     .expect("insert");
 
@@ -97,6 +99,7 @@ fn clean_offline_merge_disjoint_fields() {
             title: "draft report".into(),
             ..NewTask::default()
         },
+        &UrgencyConfig::default(),
     )
     .expect("insert");
     ship(&a, &b);
@@ -119,6 +122,7 @@ fn clean_offline_merge_disjoint_fields() {
             notes: Some(Some("first pass".into())),
             ..Default::default()
         },
+        &UrgencyConfig::default(),
     )
     .expect("update a");
     task_repo::update(
@@ -128,6 +132,7 @@ fn clean_offline_merge_disjoint_fields() {
             priority: Some(Some(Priority::High)),
             ..Default::default()
         },
+        &UrgencyConfig::default(),
     )
     .expect("update b");
 
@@ -151,6 +156,7 @@ fn wire_frames_are_ciphertext_only() {
             title: "SECRETTITLE".into(),
             ..NewTask::default()
         },
+        &UrgencyConfig::default(),
     )
     .expect("insert");
 
@@ -175,6 +181,7 @@ fn concurrent_same_field_edits_surface_a_conflict() {
             title: "plan trip".into(),
             ..NewTask::default()
         },
+        &UrgencyConfig::default(),
     )
     .expect("insert");
     ship(&a, &b);
@@ -197,6 +204,7 @@ fn concurrent_same_field_edits_surface_a_conflict() {
             title: Some("plan trip to Lisbon".into()),
             ..Default::default()
         },
+        &UrgencyConfig::default(),
     )
     .expect("update a");
     task_repo::update(
@@ -206,6 +214,7 @@ fn concurrent_same_field_edits_surface_a_conflict() {
             title: Some("plan trip to Tokyo".into()),
             ..Default::default()
         },
+        &UrgencyConfig::default(),
     )
     .expect("update b");
 

@@ -449,7 +449,11 @@ fn import_rows(
             row_idx + 2,
         ) {
             Ok(Some(new_task)) => {
-                tock_storage::repo::task_repo::insert(conn, &new_task)?;
+                tock_storage::repo::task_repo::insert(
+                    conn,
+                    &new_task,
+                    &tock_core::domain::urgency::UrgencyConfig::default(),
+                )?;
                 report.tasks_imported += 1;
             }
             Ok(None) => {
