@@ -1659,8 +1659,8 @@ tock
 ├── done, complete <filter>                # Mark complete (logs time if timer running)
 ├── cancel <filter>                        # Mark cancelled (kept in logbook)
 ├── delete, rm <filter>                    # Soft delete (purgeable)
-├── undo                                   # Reverse last mutation (event-sourced)
-├── redo
+├── undo                                   # Reverse last mutating command (snapshot journal)
+├── redo                                   # Re-apply the last undone command
 ├── list, ls [view] [filter]               # Views: today, evening, upcoming,
 │                                          #        anytime, someday, inbox, logbook,
 │                                          #        all, next
@@ -1821,6 +1821,30 @@ tock
 ├── version
 └── help [command]
 ```
+
+#### Undo / redo semantics
+
+`tock undo` reverses the last mutating command and `tock redo` re-applies it.
+Because the domain repositories write directly to SQLite and only synthesize
+sync events at sync time (there is no live event stream to replay), undo/redo is
+implemented as a **row-level snapshot journal** rather than by replaying events:
+
+- Before a mutating command runs, the tracked domain tables are snapshotted;
+  after it completes, they are snapshotted again and the two are diffed into a
+  change set (inserts / updates / deletes) persisted in the local `undo_log`
+  table (`crates/tock-storage/src/undo.rs`).
+- `undo` applies a change set's inverse inside a transaction; `redo` re-applies
+  it forward. Cascade effects (recurrence spawn, urgency recalculation, `done`
+  auto-stopping a linked focus session or timer) are captured in the same change
+  set and therefore reverted together.
+- The stack is **persisted** (each CLI invocation is a separate process),
+  **linear** (recording a new action clears the redo stack), **bounded** (oldest
+  entries pruned), and **device-local** — `undo_log` is deliberately excluded
+  from the sync registry, so undo history never leaves the device.
+- Undoable operations cover task, tag, dependency, project, area, heading,
+  time-block, focus, habit, UDA, saved-report, context, and CalDAV mutations.
+  `import`, read-only commands, and account/sync/device operations are not
+  undoable.
 
 #### Default filter language
 

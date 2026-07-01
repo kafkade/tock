@@ -60,6 +60,10 @@ pub enum Commands {
         #[arg(required = true, num_args = 1..)]
         sids: Vec<u32>,
     },
+    /// Undo the last mutating command.
+    Undo,
+    /// Redo the last undone command.
+    Redo,
     /// Add a dependency: task <sid> depends on <dep-sid>.
     Depend {
         /// Task SID.
