@@ -17,6 +17,7 @@ pub mod credentials;
 pub mod error;
 pub mod kdf_params;
 pub mod login;
+pub mod rotate;
 pub mod signup;
 
 pub use credentials::{AccountCredentials, CredentialStore};
@@ -26,6 +27,7 @@ pub use login::{
     FinishRequest, FinishResponse, LoginPending, LoginStart, SessionMaterial, StartRequest,
     StartResponse,
 };
+pub use rotate::{RotatePasswordMaterial, SrpVerifierUpdate};
 pub use signup::{
     EmergencyKit, RegisterRequest, RegisterResponse, SRP_GROUP, SetupCode, SignupMaterial,
 };

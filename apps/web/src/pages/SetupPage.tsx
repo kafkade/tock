@@ -1,7 +1,15 @@
 import { useState } from "react";
 import QRCode from "qrcode";
-import { signupFirstAdmin, type AdminAuth, type ServerInfo } from "../lib/admin";
+import {
+  signupFirstAdmin,
+  updateSettings,
+  type AdminAuth,
+  type ServerInfo,
+} from "../lib/admin";
 import type { SignupBundle } from "../lib/account";
+
+const DEFAULT_ADDRESS =
+  typeof window !== "undefined" ? window.location.origin : "";
 
 /**
  * First-run setup wizard. Shown when the instance reports `setup_required`.
@@ -26,6 +34,26 @@ export function SetupPage({
   const [auth, setAuth] = useState<AdminAuth | null>(null);
   const [qr, setQR] = useState<string>("");
   const [saved, setSaved] = useState(false);
+  const [policy, setPolicy] = useState("invite-only");
+  const [address, setAddress] = useState(DEFAULT_ADDRESS);
+  const [finishing, setFinishing] = useState(false);
+
+  async function finish() {
+    if (!auth) return;
+    setFinishing(true);
+    setError(null);
+    try {
+      await updateSettings(base, auth, {
+        registration_policy: policy,
+        public_address: address.trim(),
+      });
+      onReady(auth);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setFinishing(false);
+    }
+  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -67,9 +95,33 @@ export function SetupPage({
             I have saved my Emergency Kit
           </label>
         </p>
-        <button disabled={!saved} onClick={() => onReady(auth)}>
-          Continue to the admin console
+
+        <h3>Instance settings</h3>
+        <p style={{ opacity: 0.75 }}>
+          Choose who can register and the public address clients should use to
+          reach this server. You can change both later in the console.
+        </p>
+        <label>
+          Registration policy
+          <select value={policy} onChange={(e) => setPolicy(e.target.value)}>
+            <option value="invite-only">Invite only</option>
+            <option value="open">Open</option>
+            <option value="disabled">Disabled</option>
+          </select>
+        </label>
+        <label>
+          Public server address
+          <input
+            value={address}
+            onChange={(e) => setAddress(e.target.value)}
+            placeholder="https://tock.example.com"
+          />
+        </label>
+
+        <button disabled={!saved || finishing} onClick={() => void finish()}>
+          {finishing ? "Saving…" : "Continue to the admin console"}
         </button>
+        {error && <p role="alert">{error}</p>}
       </section>
     );
   }

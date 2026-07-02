@@ -7,7 +7,7 @@
 //! channel binding) are hex; the password is never stored or returned.
 
 use serde::Serialize;
-use tock_account::{LoginPending, LoginStart, SetupCode, SignupMaterial};
+use tock_account::{LoginPending, LoginStart, RotatePasswordMaterial, SetupCode, SignupMaterial};
 use wasm_bindgen::prelude::*;
 
 /// Map an account error to a JS error.
@@ -67,6 +67,63 @@ pub fn parse_setup_code(code: &str) -> Result<JsValue, JsValue> {
         secret_key: c.secret_key,
     })
     .map_err(js_err)
+}
+
+/// Re-encode a `TOCK1:` Setup Code from its parts.
+///
+/// Used by the self-service console to re-display the add-device code (and its
+/// QR) for a signed-in user without a server round-trip — the code is a pure
+/// function of these fields.
+#[must_use]
+#[wasm_bindgen]
+pub fn build_setup_code(server_url: &str, email: &str, secret_key: &str) -> String {
+    SetupCode {
+        server_url: server_url.to_string(),
+        email: email.to_string(),
+        secret_key: secret_key.to_string(),
+    }
+    .encode()
+}
+
+/// Result of a password rotation: the re-wrapped vault header (base64) plus the
+/// server-side SRP verifier update (JSON to POST).
+#[derive(Serialize)]
+struct RotationResult {
+    /// Base64 of the re-wrapped `VaultHeader::to_bytes`, to upload verbatim.
+    new_header_b64: String,
+    /// JSON body for the server's SRP verifier-update endpoint.
+    verifier_update_json: String,
+    /// Whether a wrapped Vault Key was actually re-wrapped (vs. verifier-only).
+    rewrapped_vk: bool,
+}
+
+/// Rotate the account password: re-wrap the Vault Key under the new password and
+/// mint a fresh SRP verifier. The Secret Key is unchanged, so the Emergency Kit
+/// and Setup Code stay valid.
+///
+/// `header_b64` is the current header from `GET /v1/account/header`. All crypto
+/// runs here in WASM; the browser only uploads the results.
+///
+/// # Errors
+/// Returns a JS error string for a malformed Secret Key or header, a wrong old
+/// password (when a Vault Key is wrapped), or a crypto failure.
+#[wasm_bindgen]
+pub fn rotate_password(
+    old_password: &str,
+    new_password: &str,
+    secret_key: &str,
+    header_b64: &str,
+) -> Result<JsValue, JsValue> {
+    let (_aid, sk) = tock_account_secret_key(secret_key)?;
+    let (new_header_b64, update, rewrapped_vk) =
+        RotatePasswordMaterial::derive_from_header_b64(old_password, new_password, &sk, header_b64)
+            .map_err(js_err)?;
+    let result = RotationResult {
+        new_header_b64,
+        verifier_update_json: serde_json::to_string(&update).map_err(js_err)?,
+        rewrapped_vk,
+    };
+    serde_wasm_bindgen::to_value(&result).map_err(js_err)
 }
 
 /// SRP login handle bridged to JS. Three round-trips: `start_json` → POST

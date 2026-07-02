@@ -4,13 +4,28 @@ import {
   createInvite,
   setUserEnabled,
   deleteUser,
-  getRegistrationPolicy,
+  getSettings,
+  updateSettings,
   setRegistrationPolicy,
+  getStats,
   type AdminAuth,
   type AdminUser,
+  type InstanceStats,
 } from "../lib/admin";
 
 const POLICIES = ["open", "invite-only", "disabled"] as const;
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  const units = ["KiB", "MiB", "GiB", "TiB"];
+  let v = n / 1024;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i += 1;
+  }
+  return `${v.toFixed(1)} ${units[i]}`;
+}
 
 /**
  * Admin console: manage accounts (list, invite, enable/disable, delete) and the
@@ -29,6 +44,10 @@ export function AdminPage({
 }) {
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [policy, setPolicy] = useState<string>("");
+  const [address, setAddress] = useState<string>("");
+  const [addressDraft, setAddressDraft] = useState<string>("");
+  const [stats, setStats] = useState<InstanceStats | null>(null);
+  const [health, setHealth] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [inviteUsername, setInviteUsername] = useState("");
@@ -38,14 +57,24 @@ export function AdminPage({
   async function refresh() {
     setError(null);
     try {
-      const [u, p] = await Promise.all([
+      const [u, s, st] = await Promise.all([
         listUsers(base, auth),
-        getRegistrationPolicy(base, auth),
+        getSettings(base, auth),
+        getStats(base, auth),
       ]);
       setUsers(u);
-      setPolicy(p);
+      setPolicy(s.registration_policy);
+      setAddress(s.public_address ?? "");
+      setAddressDraft(s.public_address ?? "");
+      setStats(st);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+    }
+    try {
+      const res = await fetch(`${base.replace(/\/+$/, "")}/health`);
+      setHealth(res.ok ? "ok" : `error (${res.status})`);
+    } catch {
+      setHealth("unreachable");
     }
   }
 
@@ -59,6 +88,23 @@ export function AdminPage({
     setError(null);
     try {
       setPolicy(await setRegistrationPolicy(base, auth, next));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveAddress(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      const s = await updateSettings(base, auth, {
+        public_address: addressDraft.trim(),
+      });
+      setAddress(s.public_address ?? "");
+      setAddressDraft(s.public_address ?? "");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -139,6 +185,60 @@ export function AdminPage({
           </label>
         ))}
       </div>
+
+      <h3>Public server address</h3>
+      <p style={{ opacity: 0.75 }}>
+        The base URL clients should use to reach this instance. Shown to users
+        setting up new devices; leave blank to unset.
+      </p>
+      <form onSubmit={saveAddress}>
+        <label>
+          Address
+          <input
+            value={addressDraft}
+            onChange={(e) => setAddressDraft(e.target.value)}
+            placeholder="https://tock.example.com"
+          />
+        </label>
+        <button type="submit" disabled={busy || addressDraft.trim() === address}>
+          Save
+        </button>
+      </form>
+
+      <h3>Usage &amp; health</h3>
+      <p>
+        Server health:{" "}
+        <strong>{health ?? "checking…"}</strong>
+      </p>
+      {stats && (
+        <table>
+          <tbody>
+            <tr>
+              <td>Accounts</td>
+              <td>
+                {stats.accounts_total} ({stats.accounts_active} active,{" "}
+                {stats.accounts_disabled} disabled, {stats.accounts_admin} admin)
+              </td>
+            </tr>
+            <tr>
+              <td>Vaults</td>
+              <td>{stats.vaults}</td>
+            </tr>
+            <tr>
+              <td>Devices</td>
+              <td>{stats.devices}</td>
+            </tr>
+            <tr>
+              <td>Events</td>
+              <td>{stats.events}</td>
+            </tr>
+            <tr>
+              <td>Encrypted storage</td>
+              <td>{formatBytes(stats.storage_bytes)}</td>
+            </tr>
+          </tbody>
+        </table>
+      )}
 
       <h3>Invite a user</h3>
       <form onSubmit={mintInvite}>

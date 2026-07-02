@@ -534,7 +534,27 @@ impl ServerDb {
         Ok(header)
     }
 
-    /// Get the maximum lamport value for a vault.
+    /// Replace the stored vault header for the account's vault after a
+    /// password rotation re-wraps the Vault Key (issue #131). Scoped to the
+    /// owning account; returns `false` if the account has no stored header yet
+    /// (e.g. a browser-only account that never uploaded one).
+    pub fn update_vault_header_for_account(
+        &self,
+        account_id: &str,
+        header: &[u8],
+    ) -> Result<bool, Error> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))?;
+        let updated = conn.execute(
+            "UPDATE vault_headers
+                SET header = ?2, updated_at = ?3
+              WHERE vault_id IN (SELECT id FROM vaults WHERE account_id = ?1)",
+            params![account_id, header, rfc3339_now()],
+        )?;
+        Ok(updated > 0)
+    }
     pub fn max_lamport(&self, vault_id: &[u8; 16]) -> Result<i64, Error> {
         let conn = self
             .conn
@@ -1036,6 +1056,198 @@ impl ServerDb {
         let deleted = conn.execute("DELETE FROM sessions WHERE expires_at <= ?1", params![now])?;
         Ok(deleted)
     }
+
+    // ── Self-service: password rotation, sessions, devices (issue #131) ───
+
+    /// Rotate an account's stored SRP verifier material after a client-side
+    /// password change. Only accounts that already have SRP credentials are
+    /// updated (hosted billing rows have none). Returns `false` if no such
+    /// eligible account exists. The server never sees the password, Secret Key,
+    /// or URK — only the freshly derived, non-secret verifier.
+    pub fn update_srp_credentials(
+        &self,
+        account_id: &str,
+        srp_salt: &[u8],
+        srp_verifier: &[u8],
+        srp_group: &str,
+        kdf_params: &str,
+    ) -> Result<bool, Error> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))?;
+        let updated = conn.execute(
+            "UPDATE accounts
+                SET srp_salt = ?2, srp_verifier = ?3, srp_group = ?4, kdf_params = ?5
+              WHERE id = ?1 AND srp_verifier IS NOT NULL",
+            params![account_id, srp_salt, srp_verifier, srp_group, kdf_params],
+        )?;
+        Ok(updated > 0)
+    }
+
+    /// List an account's live (unexpired) sessions, newest first. The
+    /// `token_hash` identifies each row so the caller can flag the current
+    /// session and target a specific one for revocation.
+    pub fn list_sessions(&self, account_id: &str, now: i64) -> Result<Vec<SessionInfo>, Error> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))?;
+        let mut stmt = conn.prepare(
+            "SELECT token_hash, created_at, expires_at
+               FROM sessions
+              WHERE account_id = ?1 AND expires_at > ?2
+              ORDER BY created_at DESC",
+        )?;
+        let rows = stmt.query_map(params![account_id, now], |r| {
+            Ok(SessionInfo {
+                token_hash: r.get(0)?,
+                created_at: r.get(1)?,
+                expires_at: r.get(2)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    /// Revoke a single session by its `token_hash`, scoped to the owning
+    /// account so a caller can only end their own sessions. Returns `false` if
+    /// no matching session exists.
+    pub fn delete_session(&self, account_id: &str, token_hash: &str) -> Result<bool, Error> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))?;
+        let deleted = conn.execute(
+            "DELETE FROM sessions WHERE account_id = ?1 AND token_hash = ?2",
+            params![account_id, token_hash],
+        )?;
+        Ok(deleted > 0)
+    }
+
+    /// Revoke every session for an account except `keep_token_hash` (typically
+    /// the caller's current session). Returns the number of sessions ended.
+    pub fn delete_sessions_except(
+        &self,
+        account_id: &str,
+        keep_token_hash: &str,
+    ) -> Result<usize, Error> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))?;
+        let deleted = conn.execute(
+            "DELETE FROM sessions WHERE account_id = ?1 AND token_hash <> ?2",
+            params![account_id, keep_token_hash],
+        )?;
+        Ok(deleted)
+    }
+
+    /// List the devices registered across all of an account's vaults.
+    pub fn list_devices_for_account(&self, account_id: &str) -> Result<Vec<DeviceInfo>, Error> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))?;
+        let mut stmt = conn.prepare(
+            "SELECT d.device_id, d.label, d.registered_at, d.revoked
+               FROM server_devices d
+               JOIN vaults v ON v.id = d.vault_id
+              WHERE v.account_id = ?1
+              ORDER BY d.registered_at DESC",
+        )?;
+        let rows = stmt.query_map(params![account_id], |r| {
+            Ok(DeviceInfo {
+                device_id: r.get::<_, Vec<u8>>(0)?,
+                label: r.get(1)?,
+                registered_at: r.get(2)?,
+                revoked: r.get::<_, i64>(3)? != 0,
+            })
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    /// Mark a device revoked, scoped to the owning account. Returns `false` if
+    /// the device is not found among the account's vaults.
+    pub fn revoke_device_for_account(
+        &self,
+        account_id: &str,
+        device_id: &[u8; 16],
+    ) -> Result<bool, Error> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))?;
+        let updated = conn.execute(
+            "UPDATE server_devices SET revoked = 1
+              WHERE device_id = ?2
+                AND vault_id IN (SELECT id FROM vaults WHERE account_id = ?1)",
+            params![account_id, device_id.to_vec()],
+        )?;
+        Ok(updated > 0)
+    }
+
+    // ── Instance settings + stats (issue #131) ───────────────────────────
+
+    /// The configured public server address, if the admin has set one.
+    pub fn public_address(&self) -> Result<Option<String>, Error> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))?;
+        conn.query_row(
+            "SELECT value FROM server_settings WHERE key = 'public_address'",
+            [],
+            |r| r.get::<_, String>(0),
+        )
+        .optional()
+        .map(|v| v.filter(|s| !s.is_empty()))
+        .map_err(Into::into)
+    }
+
+    /// Persist (or clear, when empty) the public server address.
+    pub fn set_public_address(&self, address: &str) -> Result<(), Error> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))?;
+        conn.execute(
+            "INSERT INTO server_settings (key, value) VALUES ('public_address', ?1)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![address],
+        )?;
+        Ok(())
+    }
+
+    /// Aggregate, non-secret instance statistics for the admin usage/health
+    /// panel. All values are counts / byte totals over opaque data.
+    pub fn instance_stats(&self) -> Result<InstanceStats, Error> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))?;
+        let scalar = |sql: &str| -> Result<i64, Error> {
+            conn.query_row(sql, [], |r| r.get::<_, i64>(0))
+                .map_err(Into::into)
+        };
+        Ok(InstanceStats {
+            accounts_total: scalar("SELECT COUNT(*) FROM accounts")?,
+            accounts_admin: scalar("SELECT COUNT(*) FROM accounts WHERE role = 'admin'")?,
+            accounts_active: scalar("SELECT COUNT(*) FROM accounts WHERE status = 'active'")?,
+            accounts_disabled: scalar("SELECT COUNT(*) FROM accounts WHERE status = 'disabled'")?,
+            vaults: scalar("SELECT COUNT(*) FROM vaults")?,
+            devices: scalar("SELECT COUNT(*) FROM server_devices WHERE revoked = 0")?,
+            events: scalar("SELECT COUNT(*) FROM server_events")?,
+            storage_bytes: scalar("SELECT COALESCE(SUM(LENGTH(payload)), 0) FROM server_events")?,
+        })
+    }
 }
 
 /// Format the current instant as an RFC 3339 timestamp.
@@ -1116,6 +1328,52 @@ pub struct SessionRecord {
     pub channel_binding: Vec<u8>,
     /// Account role (`admin` or `user`) at session-lookup time.
     pub role: String,
+}
+
+/// A live authenticated-sync session listed for its owning account (issue
+/// #131 self-service). Non-secret: `token_hash` is already the SHA-256 of the
+/// bearer token.
+pub struct SessionInfo {
+    /// SHA-256 hash of the session bearer token (its stable identifier).
+    pub token_hash: String,
+    /// RFC 3339 creation timestamp.
+    pub created_at: String,
+    /// Absolute expiry (Unix seconds).
+    pub expires_at: i64,
+}
+
+/// A device registered under one of an account's vaults (issue #131
+/// self-service). Non-secret metadata only.
+pub struct DeviceInfo {
+    /// Raw 16-byte device id.
+    pub device_id: Vec<u8>,
+    /// Optional human label supplied at registration.
+    pub label: Option<String>,
+    /// RFC 3339 registration timestamp.
+    pub registered_at: String,
+    /// Whether the device has been revoked.
+    pub revoked: bool,
+}
+
+/// Aggregate instance statistics for the admin usage/health panel (issue
+/// #131). Counts and byte totals over opaque, encrypted data.
+pub struct InstanceStats {
+    /// Total accounts.
+    pub accounts_total: i64,
+    /// Accounts with the `admin` role.
+    pub accounts_admin: i64,
+    /// Active accounts.
+    pub accounts_active: i64,
+    /// Disabled accounts.
+    pub accounts_disabled: i64,
+    /// Total vaults.
+    pub vaults: i64,
+    /// Non-revoked registered devices.
+    pub devices: i64,
+    /// Total stored events.
+    pub events: i64,
+    /// Total bytes of stored (encrypted) event payloads.
+    pub storage_bytes: i64,
 }
 
 /// An event stored on the server.

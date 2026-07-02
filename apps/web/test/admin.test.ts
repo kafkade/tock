@@ -19,6 +19,9 @@ import {
   listUsers,
   createInvite,
   setRegistrationPolicy,
+  getSettings,
+  updateSettings,
+  getStats,
 } from "../src/lib/admin";
 
 const AUTH = { bearerToken: "adm_token" };
@@ -126,5 +129,61 @@ describe("admin client", () => {
     const [url, init] = f.mock.calls[0];
     expect(url).toBe("/v1/admin/settings");
     expect(init.method).toBe("PUT");
+  });
+
+  it("getSettings reads policy + public address", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse({
+          registration_policy: "invite-only",
+          public_address: "https://tock.example.com",
+        }),
+      ),
+    );
+    const s = await getSettings("", AUTH);
+    expect(s.registration_policy).toBe("invite-only");
+    expect(s.public_address).toBe("https://tock.example.com");
+  });
+
+  it("updateSettings PATCHes only the provided public address", async () => {
+    const f = vi.fn().mockResolvedValue(
+      jsonResponse({
+        registration_policy: "invite-only",
+        public_address: "https://new.example.com",
+      }),
+    );
+    vi.stubGlobal("fetch", f);
+    const s = await updateSettings("", AUTH, {
+      public_address: "https://new.example.com",
+    });
+    expect(s.public_address).toBe("https://new.example.com");
+    const [url, init] = f.mock.calls[0];
+    expect(url).toBe("/v1/admin/settings");
+    expect(init.method).toBe("PUT");
+    expect(JSON.parse(init.body)).toEqual({
+      public_address: "https://new.example.com",
+    });
+  });
+
+  it("getStats reads instance counters", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse({
+          accounts_total: 5,
+          accounts_admin: 1,
+          accounts_active: 4,
+          accounts_disabled: 1,
+          vaults: 3,
+          devices: 7,
+          events: 42,
+          storage_bytes: 4096,
+        }),
+      ),
+    );
+    const st = await getStats("", AUTH);
+    expect(st.accounts_total).toBe(5);
+    expect(st.storage_bytes).toBe(4096);
   });
 });
