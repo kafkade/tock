@@ -170,6 +170,7 @@ impl From<Task> for TockTask {
             parent_id: optional_uuid_str(t.parent_id),
             start_date: t.start_date,
             deadline: t.deadline,
+            scheduled_for: t.scheduled_for,
             recurrence: t.recurrence,
             priority: t.priority.map(Into::into),
             evening: t.evening,
@@ -349,6 +350,7 @@ impl TockNewTask {
             parent_id: None,
             start_date: self.start_date.clone(),
             deadline: self.deadline.clone(),
+            scheduled_for: self.scheduled_for.clone(),
             recurrence: self.recurrence.clone(),
             priority: self.priority.map(Into::into),
             evening: self.evening,
@@ -402,6 +404,12 @@ impl TockTaskPatch {
             self.deadline.clone().map(Some)
         };
 
+        let scheduled_for = if self.clear_scheduled {
+            Some(None)
+        } else {
+            self.scheduled_for.clone().map(Some)
+        };
+
         let priority = if self.clear_priority {
             Some(None)
         } else {
@@ -420,6 +428,7 @@ impl TockTaskPatch {
             heading_id,
             start_date,
             deadline,
+            scheduled_for,
             priority,
             evening: self.evening,
             set_udas,

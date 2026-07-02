@@ -1,7 +1,7 @@
 //! Natural language date parsing helpers.
 
 use core::cmp::min;
-use time::{Date, Duration, Month, Weekday};
+use time::{Date, Duration, Month, Time, Weekday};
 
 /// Parse a natural-language date expression relative to `now`.
 #[must_use]
@@ -30,6 +30,116 @@ pub fn parse_date(input: &str, now: Date) -> Option<Date> {
     }
 
     parse_iso_date(normalized)
+}
+
+/// Parse a natural-language date-and-optional-time expression relative to `now`.
+///
+/// Accepts a date phrase understood by [`parse_date`] optionally followed by a
+/// time-of-day, in any of these shapes:
+/// - `2026-06-01` (date only)
+/// - `2026-06-01T14:00` (ISO date+time)
+/// - `2026-06-01 14:00`, `tomorrow 9am`, `next friday 15:30` (date phrase + time)
+///
+/// Returns `(date, Some(time))` when a time component is present, or
+/// `(date, None)` for an all-day date. Returns `None` if the date cannot be
+/// resolved.
+#[must_use]
+pub fn parse_datetime(input: &str, now: Date) -> Option<(Date, Option<Time>)> {
+    let normalized = input.trim();
+    if normalized.is_empty() {
+        return None;
+    }
+
+    // ISO `T` separator: `<date>T<time>`.
+    if let Some((date_part, time_part)) = normalized.split_once(['T', 't'])
+        && let (Some(date), Some(time)) = (
+            parse_date(date_part.trim(), now),
+            parse_time(time_part.trim()),
+        )
+    {
+        return Some((date, Some(time)));
+    }
+
+    // Trailing whitespace-separated time token: `<date phrase> <time>`.
+    if let Some((phrase, last)) = normalized.rsplit_once(char::is_whitespace)
+        && let Some(time) = parse_time(last.trim())
+        && let Some(date) = parse_date(phrase.trim(), now)
+    {
+        return Some((date, Some(time)));
+    }
+
+    // No time component — treat the whole input as an all-day date.
+    parse_date(normalized, now).map(|date| (date, None))
+}
+
+/// Format a resolved schedule slot into its stored string representation:
+/// `YYYY-MM-DD` for an all-day slot or `YYYY-MM-DDTHH:MM` for a timed slot.
+#[must_use]
+pub fn format_scheduled(date: Date, time: Option<Time>) -> String {
+    let day = format!(
+        "{:04}-{:02}-{:02}",
+        date.year(),
+        u8::from(date.month()),
+        date.day()
+    );
+    match time {
+        Some(time) => format!("{day}T{:02}:{:02}", time.hour(), time.minute()),
+        None => day,
+    }
+}
+
+/// Parse a time-of-day token such as `14:00`, `9:30`, `9am`, `12pm`, or `9`.
+fn parse_time(input: &str) -> Option<Time> {
+    let trimmed = input.trim().to_ascii_lowercase();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let meridiem = if trimmed.ends_with("am") {
+        Some(false)
+    } else if trimmed.ends_with("pm") {
+        Some(true)
+    } else {
+        None
+    };
+    let body = trimmed
+        .strip_suffix("am")
+        .or_else(|| trimmed.strip_suffix("pm"))
+        .unwrap_or(trimmed.as_str())
+        .trim();
+
+    let (hour_str, minute_str) = match body.split_once(':') {
+        Some((h, m)) => (h, m),
+        None => (body, "0"),
+    };
+
+    let mut hour: u8 = hour_str.parse().ok()?;
+    let minute: u8 = minute_str.parse().ok()?;
+    if minute > 59 {
+        return None;
+    }
+
+    match meridiem {
+        Some(is_pm) => {
+            // 12-hour clock: 12am -> 00, 12pm -> 12, otherwise add 12 for PM.
+            if hour == 0 || hour > 12 {
+                return None;
+            }
+            if hour == 12 {
+                hour = 0;
+            }
+            if is_pm {
+                hour += 12;
+            }
+        }
+        None => {
+            if hour > 23 {
+                return None;
+            }
+        }
+    }
+
+    Time::from_hms(hour, minute, 0).ok()
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -189,8 +299,8 @@ fn parse_iso_date(input: &str) -> Option<Date> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_date;
-    use time::macros::date;
+    use super::{format_scheduled, parse_date, parse_datetime};
+    use time::macros::{date, time};
 
     #[test]
     fn parses_today() {
@@ -310,5 +420,89 @@ mod tests {
     fn matches_case_insensitively() {
         let now = date!(2026 - 06 - 17);
         assert_eq!(parse_date("IN 1 DAY", now), Some(date!(2026 - 06 - 18)));
+    }
+
+    #[test]
+    fn parse_datetime_date_only() {
+        let now = date!(2026 - 06 - 17);
+        assert_eq!(
+            parse_datetime("2026-06-20", now),
+            Some((date!(2026 - 06 - 20), None))
+        );
+    }
+
+    #[test]
+    fn parse_datetime_iso_t_separator() {
+        let now = date!(2026 - 06 - 17);
+        assert_eq!(
+            parse_datetime("2026-06-20T14:30", now),
+            Some((date!(2026 - 06 - 20), Some(time!(14:30))))
+        );
+    }
+
+    #[test]
+    fn parse_datetime_space_separated_time() {
+        let now = date!(2026 - 06 - 17);
+        assert_eq!(
+            parse_datetime("2026-06-20 09:15", now),
+            Some((date!(2026 - 06 - 20), Some(time!(9:15))))
+        );
+    }
+
+    #[test]
+    fn parse_datetime_natural_phrase_with_time() {
+        let now = date!(2026 - 06 - 17);
+        assert_eq!(
+            parse_datetime("tomorrow 9am", now),
+            Some((date!(2026 - 06 - 18), Some(time!(9:00))))
+        );
+    }
+
+    #[test]
+    fn parse_datetime_weekday_phrase_with_pm_time() {
+        let now = date!(2026 - 06 - 17);
+        assert_eq!(
+            parse_datetime("friday 3:30pm", now),
+            Some((date!(2026 - 06 - 19), Some(time!(15:30))))
+        );
+    }
+
+    #[test]
+    fn parse_datetime_noon_and_midnight_meridiem() {
+        let now = date!(2026 - 06 - 17);
+        assert_eq!(
+            parse_datetime("2026-06-20 12pm", now),
+            Some((date!(2026 - 06 - 20), Some(time!(12:00))))
+        );
+        assert_eq!(
+            parse_datetime("2026-06-20 12am", now),
+            Some((date!(2026 - 06 - 20), Some(time!(0:00))))
+        );
+    }
+
+    #[test]
+    fn parse_datetime_rejects_time_only() {
+        let now = date!(2026 - 06 - 17);
+        assert_eq!(parse_datetime("9am", now), None);
+    }
+
+    #[test]
+    fn parse_datetime_rejects_invalid_time() {
+        let now = date!(2026 - 06 - 17);
+        // 25:00 is not a valid time; with no valid trailing time the whole
+        // string fails to parse as a date either.
+        assert_eq!(parse_datetime("2026-06-20 25:00", now), None);
+    }
+
+    #[test]
+    fn format_scheduled_roundtrips() {
+        assert_eq!(
+            format_scheduled(date!(2026 - 06 - 20), None),
+            "2026-06-20".to_string()
+        );
+        assert_eq!(
+            format_scheduled(date!(2026 - 06 - 20), Some(time!(14:05))),
+            "2026-06-20T14:05".to_string()
+        );
     }
 }

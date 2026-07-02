@@ -122,6 +122,9 @@ pub struct Task {
     pub start_date: Option<String>,
     /// Hard deadline.
     pub deadline: Option<String>,
+    /// Planned calendar slot to work on the task (all-day `YYYY-MM-DD` or
+    /// timed `YYYY-MM-DDTHH:MM`). Distinct from `deadline`.
+    pub scheduled_for: Option<String>,
     /// Stored recurrence specification as JSON.
     pub recurrence: Option<String>,
     /// Priority level.
@@ -171,6 +174,8 @@ pub struct NewTask {
     pub start_date: Option<String>,
     /// Deadline.
     pub deadline: Option<String>,
+    /// Planned calendar slot (all-day `YYYY-MM-DD` or timed `YYYY-MM-DDTHH:MM`).
+    pub scheduled_for: Option<String>,
     /// Stored recurrence specification as JSON.
     pub recurrence: Option<String>,
     /// Priority.
@@ -202,6 +207,8 @@ pub struct TaskPatch {
     pub start_date: Option<Option<String>>,
     /// New deadline.
     pub deadline: Option<Option<String>>,
+    /// New scheduled slot (`Some(None)` clears it).
+    pub scheduled_for: Option<Option<String>>,
     /// New priority.
     pub priority: Option<Option<Priority>>,
     /// New evening flag.

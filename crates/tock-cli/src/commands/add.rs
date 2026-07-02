@@ -1,30 +1,34 @@
 //! `tock add` — create a new task.
 
 use tock_core::domain::recurrence::{RecurrenceMode, RecurrencePattern, RecurrenceSpec};
-use tock_core::domain::tag::{parse_deadline, parse_priority, parse_sigils};
+use tock_core::domain::tag::{parse_deadline, parse_priority, parse_scheduled, parse_sigils};
 use tock_core::domain::task::{NewTask, Priority};
 
 /// Parse the input words into a `NewTask`.
 ///
-/// Supports sigil extraction (`#tag`, `!H/M/L`, `due:...`) and
-/// natural-language date parsing for the deadline.
+/// Supports sigil extraction (`#tag`, `!H/M/L`, `due:...`, `sched:...`) and
+/// natural-language date parsing for the deadline and scheduled slot.
 #[must_use]
 pub fn parse_add_input(words: &[String]) -> NewTask {
     let raw = words.join(" ");
     let (text, tags, _remove) = parse_sigils(&raw);
     let (text, prio_char) = parse_priority(&text);
+    let (text, scheduled_raw) = parse_scheduled(&text);
     let (title, deadline_raw) = parse_deadline(&text);
 
     let priority = prio_char.and_then(|c| Priority::from_str_opt(&String::from(c)));
 
     // Try NL date parsing on the deadline value.
     let deadline = deadline_raw.and_then(|d| resolve_deadline(&d).or(Some(d)));
+    // Resolve the scheduled slot (date or date+time).
+    let scheduled_for = scheduled_raw.and_then(|s| resolve_scheduled(&s).or(Some(s)));
 
     NewTask {
         title,
         tags,
         priority,
         deadline,
+        scheduled_for,
         ..NewTask::default()
     }
 }
@@ -65,6 +69,16 @@ fn resolve_deadline(input: &str) -> Option<String> {
         u8::from(d.month()),
         d.day()
     ))
+}
+
+/// Resolve a scheduled-slot string through the NL date-and-time parser.
+/// Returns the stored form (`YYYY-MM-DD` or `YYYY-MM-DDTHH:MM`), or `None`
+/// if the input cannot be understood.
+#[must_use]
+pub fn resolve_scheduled(input: &str) -> Option<String> {
+    let today = time::OffsetDateTime::now_utc().date();
+    let (date, time) = tock_parse::date::parse_datetime(input, today)?;
+    Some(tock_parse::date::format_scheduled(date, time))
 }
 
 fn parse_interval_pattern(raw: &str) -> Result<RecurrencePattern, String> {
@@ -123,6 +137,30 @@ mod tests {
         assert_eq!(t.tags, vec!["errands"]);
         assert_eq!(t.priority, Some(Priority::High));
         assert_eq!(t.deadline, Some("2026-06-01".to_string()));
+    }
+
+    #[test]
+    fn parse_task_with_scheduled_sigil() {
+        let words: Vec<String> = "Write report sched:2026-06-01T14:30"
+            .split_whitespace()
+            .map(String::from)
+            .collect();
+        let t = parse_add_input(&words);
+        assert_eq!(t.title, "Write report");
+        assert_eq!(t.scheduled_for, Some("2026-06-01T14:30".to_string()));
+    }
+
+    #[test]
+    fn resolve_scheduled_all_day_and_timed() {
+        assert_eq!(
+            resolve_scheduled("2026-06-01"),
+            Some("2026-06-01".to_string())
+        );
+        assert_eq!(
+            resolve_scheduled("2026-06-01 9am"),
+            Some("2026-06-01T09:00".to_string())
+        );
+        assert_eq!(resolve_scheduled("not-a-date"), None);
     }
 
     #[test]

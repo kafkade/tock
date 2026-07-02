@@ -53,6 +53,16 @@ export-unsupported-format = unsupported format: { $format } (supported: json, md
 
 views-unknown = unknown view '{ $name }'. Available: { $available }
 
+## Agenda
+
+agenda-header = Agenda — { $date } ({ $weekday })
+agenda-empty = Nothing scheduled and no time blocks for { $date }
+agenda-scheduled-heading = Scheduled tasks:
+agenda-blocks-heading = Time blocks:
+agenda-all-day = all-day
+agenda-overlap = overlaps time block '{ $block }'
+agenda-unparseable = could not understand day '{ $input }'
+
 ## Projects / Areas / Tags
 
 project-created = Created project #{ $sid } — { $name }
@@ -255,6 +265,9 @@ task-deleted = Deleted task #{ $sid }
 task-not-found = task #{ $sid } not found
 task-add-cancelled-by-hook = Add cancelled by hook
 task-created = Created task #{ $sid } — { $title }
+task-scheduled = Scheduled task #{ $sid } for { $slot } — { $title }
+task-unscheduled = Cleared schedule for task #{ $sid } — { $title }
+schedule-unparseable = could not understand schedule slot '{ $input }'
 
 # Checklist items
 checklist-added = Added checklist item to task #{ $sid } — { $title }
@@ -386,6 +399,15 @@ help-cli-depend-arg-on = Dependency SID
 help-cli-undepend-about = Remove a dependency
 help-cli-undepend-arg-sid = Task SID
 help-cli-undepend-arg-from = Dependency SID
+
+# help-cli-schedule
+help-cli-schedule-about = Schedule a task for a calendar slot (day or day+time you plan to work on it)
+help-cli-schedule-arg-sid = Task SID
+help-cli-schedule-arg-when = When to schedule it (e.g. tomorrow, friday 9am, 2026-06-01T14:30)
+
+# help-cli-unschedule
+help-cli-unschedule-about = Clear a task's scheduled slot
+help-cli-unschedule-arg-sid = Task SID
 
 # help-cli-list
 help-cli-list-about = List tasks
@@ -670,6 +692,10 @@ help-cli-uda-rm-arg-key = Key to remove
 
 # help-cli-views
 help-cli-views-about = List available views
+
+# help-cli-agenda
+help-cli-agenda-about = Show the day's agenda: scheduled tasks interleaved with time blocks
+help-cli-agenda-arg-when = Day to show (natural-language date). Defaults to today
 
 # help-cli-tui
 help-cli-tui-about = Launch the interactive terminal user interface

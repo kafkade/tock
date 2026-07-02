@@ -23,6 +23,8 @@ struct TaskExport {
     priority: Option<String>,
     deadline: Option<String>,
     start_date: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scheduled_for: Option<String>,
     tags: Vec<String>,
     udas: std::collections::BTreeMap<String, serde_json::Value>,
     notes: Option<String>,
@@ -68,6 +70,7 @@ pub fn export_tasks(conn: &Connection) -> Result<String, tock_storage::Error> {
                 .map(|priority| priority.as_char().to_string()),
             deadline: task.deadline.clone(),
             start_date: task.start_date.clone(),
+            scheduled_for: task.scheduled_for.clone(),
             tags: task.tags.clone(),
             udas: task.udas.0.clone(),
             notes: task.notes.clone(),

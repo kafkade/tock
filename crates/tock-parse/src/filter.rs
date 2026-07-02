@@ -20,6 +20,10 @@ pub trait Filterable {
     /// Return the start date as an ISO date string.
     fn start_date(&self) -> Option<&str>;
 
+    /// Return the scheduled slot as a stored string (`YYYY-MM-DD` or
+    /// `YYYY-MM-DDTHH:MM`), if the task is scheduled.
+    fn scheduled_for(&self) -> Option<&str>;
+
     /// Return whether the entity is scheduled for the evening.
     fn is_evening(&self) -> bool;
 
@@ -49,6 +53,13 @@ pub enum Filter {
     Project(String),
     /// Match entities that have a deadline.
     HasDeadline,
+    /// Match entities that have a scheduled slot.
+    HasScheduled,
+    /// Match entities scheduled on a specific day (date component equals).
+    ScheduledOn {
+        /// Target day in ISO date format.
+        date: String,
+    },
     /// Match entities with a deadline before `today`.
     Overdue {
         /// The current day in ISO date format.
@@ -107,12 +118,19 @@ pub fn matches(filter: &Filter, entity: &impl Filterable) -> bool {
             .project_name()
             .is_some_and(|entity_project| entity_project.eq_ignore_ascii_case(project)),
         Filter::HasDeadline => entity.deadline().is_some(),
+        Filter::HasScheduled => entity.scheduled_for().is_some(),
+        Filter::ScheduledOn { date } => entity
+            .scheduled_for()
+            .is_some_and(|scheduled| date_component(scheduled) == date.as_str()),
         Filter::Overdue { today } => entity.deadline().is_some_and(|deadline| deadline < today),
         Filter::Today { today } => {
             entity.deadline().is_some_and(|deadline| deadline <= today)
                 || entity
                     .start_date()
                     .is_some_and(|start_date| start_date <= today)
+                || entity
+                    .scheduled_for()
+                    .is_some_and(|scheduled| date_component(scheduled) <= today.as_str())
         }
         Filter::Evening => entity.is_evening(),
         Filter::Deleted => entity.is_deleted(),
@@ -192,6 +210,16 @@ fn parse_atom(input: &str, today: &str) -> Filter {
         };
     }
 
+    if input.eq_ignore_ascii_case("+SCHEDULED") {
+        return Filter::HasScheduled;
+    }
+
+    if let Some(date) = strip_prefix_case_insensitive(input, "scheduled:") {
+        return Filter::ScheduledOn {
+            date: date.to_owned(),
+        };
+    }
+
     if input.eq_ignore_ascii_case("+EVENING") || input.eq_ignore_ascii_case("evening:true") {
         return Filter::Evening;
     }
@@ -266,6 +294,12 @@ const fn permissive_filter() -> Filter {
     Filter::And(Vec::new())
 }
 
+/// Extract the `YYYY-MM-DD` date component from a stored schedule value that may
+/// carry a trailing `THH:MM` time portion.
+fn date_component(scheduled: &str) -> &str {
+    scheduled.split(['T', 't']).next().unwrap_or(scheduled)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Filter, Filterable, matches, parse_filter};
@@ -279,6 +313,7 @@ mod tests {
         project_name: Option<String>,
         deadline: Option<String>,
         start_date: Option<String>,
+        scheduled_for: Option<String>,
         is_evening: bool,
         is_deleted: bool,
         is_blocked: bool,
@@ -309,6 +344,10 @@ mod tests {
 
         fn start_date(&self) -> Option<&str> {
             self.start_date.as_deref()
+        }
+
+        fn scheduled_for(&self) -> Option<&str> {
+            self.scheduled_for.as_deref()
         }
 
         fn is_evening(&self) -> bool {
@@ -399,6 +438,51 @@ mod tests {
         };
 
         assert!(matches(&parse_filter(&["+OVERDUE"], "2026-06-17"), &entity));
+    }
+
+    #[test]
+    fn has_scheduled_filter_matches() {
+        let scheduled = TestEntity {
+            scheduled_for: Some(String::from("2026-06-20")),
+            ..TestEntity::default()
+        };
+        let unscheduled = TestEntity::default();
+
+        assert!(matches(
+            &parse_filter(&["+SCHEDULED"], "2026-06-17"),
+            &scheduled
+        ));
+        assert!(!matches(
+            &parse_filter(&["+SCHEDULED"], "2026-06-17"),
+            &unscheduled
+        ));
+    }
+
+    #[test]
+    fn scheduled_on_matches_date_component_of_timed_slot() {
+        let entity = TestEntity {
+            scheduled_for: Some(String::from("2026-06-20T14:30")),
+            ..TestEntity::default()
+        };
+
+        assert!(matches(
+            &parse_filter(&["scheduled:2026-06-20"], "2026-06-17"),
+            &entity
+        ));
+        assert!(!matches(
+            &parse_filter(&["scheduled:2026-06-21"], "2026-06-17"),
+            &entity
+        ));
+    }
+
+    #[test]
+    fn today_filter_matches_scheduled_for_today() {
+        let entity = TestEntity {
+            scheduled_for: Some(String::from("2026-06-17T09:00")),
+            ..TestEntity::default()
+        };
+
+        assert!(matches(&parse_filter(&["+TODAY"], "2026-06-17"), &entity));
     }
 
     #[test]

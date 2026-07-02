@@ -240,6 +240,8 @@ fn dispatch_command(
         | Commands::Delete { .. }
         | Commands::Depend { .. }
         | Commands::Undepend { .. }
+        | Commands::Schedule { .. }
+        | Commands::Unschedule { .. }
         | Commands::Annotate { .. }
         | Commands::Denotate { .. }
         | Commands::List { .. }
@@ -271,6 +273,7 @@ fn dispatch_command(
             }
             Ok(())
         }
+        Commands::Agenda { when } => run_agenda_cmd(conn, when),
         Commands::Caldav(args) => run_caldav_cmd(conn, args),
         Commands::Export {
             format,
@@ -322,6 +325,8 @@ fn undoable_label(command: &Commands) -> Option<String> {
         Commands::Delete { sids } => format!("delete {}", join_sids(sids)),
         Commands::Depend { sid, on } => format!("depend #{sid} on #{on}"),
         Commands::Undepend { sid, from } => format!("undepend #{sid} from #{from}"),
+        Commands::Schedule { sid, .. } => format!("schedule #{sid}"),
+        Commands::Unschedule { sid } => format!("unschedule #{sid}"),
         Commands::Checklist(_) => "checklist".to_owned(),
         Commands::Annotate { sid, .. } => format!("annotate #{sid}"),
         Commands::Denotate { sid, index } => format!("denotate #{sid} [{index}]"),
@@ -898,6 +903,8 @@ fn run_task_cmd(
                 )
             );
         }
+        Commands::Schedule { sid, when } => run_schedule_cmd(conn, *sid, when, urgency)?,
+        Commands::Unschedule { sid } => run_unschedule_cmd(conn, *sid, urgency)?,
         Commands::Annotate { sid, words } => {
             if let Some(task) = tock_storage::repo::task_repo::get_by_sid(conn, *sid)? {
                 let body = words.join(" ");
@@ -1000,6 +1007,211 @@ fn run_add_cmd(
         )
     );
     Ok(())
+}
+
+fn run_schedule_cmd(
+    conn: &Connection,
+    sid: u32,
+    when: &[String],
+    urgency: &tock_core::domain::urgency::UrgencyConfig,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let raw = when.join(" ");
+    let raw = raw.trim();
+    let Some(scheduled) = commands::add::resolve_scheduled(raw) else {
+        eprintln!("{}", tr!("schedule-unparseable", input = raw));
+        return Ok(());
+    };
+    let patch = tock_core::domain::task::TaskPatch {
+        scheduled_for: Some(Some(scheduled.clone())),
+        ..tock_core::domain::task::TaskPatch::default()
+    };
+    match tock_storage::repo::task_repo::update(conn, sid, &patch, urgency) {
+        Ok(task) => println!(
+            "{}",
+            tr!(
+                "task-scheduled",
+                sid = i64::from(task.sid),
+                title = task.title.as_str(),
+                slot = scheduled.as_str()
+            )
+        ),
+        Err(tock_storage::Error::NotFound) => {
+            eprintln!("{}", tr!("task-not-found", sid = i64::from(sid)));
+        }
+        Err(other) => return Err(Box::new(other)),
+    }
+    Ok(())
+}
+
+fn run_unschedule_cmd(
+    conn: &Connection,
+    sid: u32,
+    urgency: &tock_core::domain::urgency::UrgencyConfig,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let patch = tock_core::domain::task::TaskPatch {
+        scheduled_for: Some(None),
+        ..tock_core::domain::task::TaskPatch::default()
+    };
+    match tock_storage::repo::task_repo::update(conn, sid, &patch, urgency) {
+        Ok(task) => println!(
+            "{}",
+            tr!(
+                "task-unscheduled",
+                sid = i64::from(task.sid),
+                title = task.title.as_str()
+            )
+        ),
+        Err(tock_storage::Error::NotFound) => {
+            eprintln!("{}", tr!("task-not-found", sid = i64::from(sid)));
+        }
+        Err(other) => return Err(Box::new(other)),
+    }
+    Ok(())
+}
+
+/// A scheduled task placed on the agenda, with its resolved time-of-day (if any).
+struct AgendaTask {
+    time: Option<time::Time>,
+    task: Task,
+    overlap: Option<String>,
+}
+
+fn run_agenda_cmd(conn: &Connection, when: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    let today = time::OffsetDateTime::now_utc().date();
+    let phrase = when.join(" ");
+    let phrase = phrase.trim();
+    let target = if phrase.is_empty() {
+        today
+    } else {
+        let Some(date) = tock_parse::date::parse_date(phrase, today) else {
+            eprintln!("{}", tr!("agenda-unparseable", input = phrase));
+            return Ok(());
+        };
+        date
+    };
+    let target_str = format!(
+        "{:04}-{:02}-{:02}",
+        target.year(),
+        u8::from(target.month()),
+        target.day()
+    );
+
+    // Time blocks that start on the target day, ordered chronologically.
+    let mut blocks: Vec<tock_core::domain::time_block::TimeBlock> =
+        tock_storage::repo::time_block_repo::list(conn, true)?
+            .into_iter()
+            .filter(|block| date_of(block.start_ts) == target_str)
+            .collect();
+    blocks.sort_by_key(|block| block.start_ts);
+
+    // Scheduled tasks for the target day.
+    let mut agenda_tasks: Vec<AgendaTask> = tock_storage::repo::task_repo::list(conn, false)?
+        .into_iter()
+        .filter(|task| !task.status.is_closed())
+        .filter_map(|task| {
+            let scheduled = task.scheduled_for.as_deref()?;
+            let (date, time) = tock_parse::date::parse_datetime(scheduled, today)?;
+            let date_str = format!(
+                "{:04}-{:02}-{:02}",
+                date.year(),
+                u8::from(date.month()),
+                date.day()
+            );
+            if date_str != target_str {
+                return None;
+            }
+            let overlap = time.and_then(|slot| overlapping_block(target, slot, &blocks));
+            Some(AgendaTask {
+                time,
+                task,
+                overlap,
+            })
+        })
+        .collect();
+    // Timed tasks first (chronological), then all-day tasks.
+    agenda_tasks.sort_by(|left, right| match (left.time, right.time) {
+        (Some(a), Some(b)) => a.cmp(&b),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => left.task.sid.cmp(&right.task.sid),
+    });
+
+    println!(
+        "── {} ──",
+        tr!(
+            "agenda-header",
+            date = target_str.as_str(),
+            weekday = target.weekday().to_string()
+        )
+    );
+
+    if agenda_tasks.is_empty() && blocks.is_empty() {
+        println!("  {}", tr!("agenda-empty", date = target_str.as_str()));
+        return Ok(());
+    }
+
+    if !agenda_tasks.is_empty() {
+        println!("  {}", tr!("agenda-scheduled-heading"));
+        for entry in &agenda_tasks {
+            let slot = entry.time.map_or_else(
+                || tr!("agenda-all-day"),
+                |time| format!("{:02}:{:02}", time.hour(), time.minute()),
+            );
+            let overlap = entry
+                .overlap
+                .as_ref()
+                .map(|block| format!("  ⚠ {}", tr!("agenda-overlap", block = block.as_str())))
+                .unwrap_or_default();
+            println!(
+                "    {slot:<7} #{} {}{overlap}",
+                entry.task.sid, entry.task.title
+            );
+        }
+    }
+
+    if !blocks.is_empty() {
+        println!("  {}", tr!("agenda-blocks-heading"));
+        for block in &blocks {
+            let start = clock_of(block.start_ts);
+            let end = block.end_ts.map_or_else(|| String::from("…"), clock_of);
+            println!("    {start}–{end}  {}", block.title);
+        }
+    }
+
+    Ok(())
+}
+
+/// The `YYYY-MM-DD` date component of a timestamp.
+fn date_of(ts: time::OffsetDateTime) -> String {
+    format!(
+        "{:04}-{:02}-{:02}",
+        ts.year(),
+        u8::from(ts.month()),
+        ts.day()
+    )
+}
+
+/// The `HH:MM` clock component of a timestamp.
+fn clock_of(ts: time::OffsetDateTime) -> String {
+    format!("{:02}:{:02}", ts.hour(), ts.minute())
+}
+
+/// Return the title of the first time block whose interval contains the given
+/// scheduled slot on `day`, if any.
+fn overlapping_block(
+    day: time::Date,
+    slot: time::Time,
+    blocks: &[tock_core::domain::time_block::TimeBlock],
+) -> Option<String> {
+    let moment = time::PrimitiveDateTime::new(day, slot).assume_utc();
+    blocks
+        .iter()
+        .find(|block| {
+            let starts = block.start_ts <= moment;
+            let before_end = block.end_ts.is_none_or(|end| moment < end);
+            starts && before_end
+        })
+        .map(|block| block.title.clone())
 }
 
 fn run_urgency_cmd(
@@ -3343,6 +3555,7 @@ fn print_task_show(
                     "priority": task.priority.map(|priority| priority.as_char().to_string()),
                     "deadline": task.deadline.as_deref(),
                     "start_date": task.start_date.as_deref(),
+                    "scheduled_for": task.scheduled_for.as_deref(),
                     "recurrence": task.recurrence.as_deref(),
                     "parent_id": task.parent_id.map(|id| id.to_string()),
                     "depends_on": task.depends_on.iter().map(Uuid::to_string).collect::<Vec<_>>(),
@@ -3463,6 +3676,7 @@ fn new_task_to_hook_json(task: &NewTask) -> String {
         "parent_id": task.parent_id.map(|id| id.to_string()),
         "start_date": &task.start_date,
         "deadline": &task.deadline,
+        "scheduled_for": &task.scheduled_for,
         "recurrence": &task.recurrence,
         "priority": task.priority.map(|priority| priority.as_char().to_string()),
         "evening": task.evening,
@@ -3507,6 +3721,7 @@ fn new_task_from_hook_json(original: &NewTask, hook_json: &str) -> Result<NewTas
     apply_optional_uuid_field(object, "parent_id", &mut task.parent_id)?;
     apply_optional_string_field(object, "start_date", &mut task.start_date)?;
     apply_optional_string_field(object, "deadline", &mut task.deadline)?;
+    apply_optional_string_field(object, "scheduled_for", &mut task.scheduled_for)?;
     apply_optional_string_field(object, "recurrence", &mut task.recurrence)?;
     if let Some(priority) = object.get("priority") {
         task.priority = match priority {
@@ -3686,6 +3901,10 @@ impl tock_parse::filter::Filterable for TaskFilterable<'_> {
 
     fn start_date(&self) -> Option<&str> {
         self.task.start_date.as_deref()
+    }
+
+    fn scheduled_for(&self) -> Option<&str> {
+        self.task.scheduled_for.as_deref()
     }
 
     fn is_evening(&self) -> bool {

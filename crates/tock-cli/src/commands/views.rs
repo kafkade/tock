@@ -92,6 +92,24 @@ pub fn someday() -> View {
     }
 }
 
+/// Build the Scheduled view filter: open tasks (any non-closed status) that
+/// have a planned calendar slot (`scheduled_for` set), regardless of when.
+/// Mirrors the set of tasks shown by `tock agenda`.
+#[must_use]
+pub fn scheduled() -> View {
+    View {
+        name: "scheduled",
+        description: "Tasks with a planned calendar slot",
+        filter: Filter::And(vec![
+            Filter::Not(Box::new(Filter::Or(vec![
+                Filter::Status("done".to_string()),
+                Filter::Status("cancelled".to_string()),
+            ]))),
+            Filter::HasScheduled,
+        ]),
+    }
+}
+
 /// Build the Logbook view filter: completed or cancelled tasks.
 #[must_use]
 pub fn logbook() -> View {
@@ -113,6 +131,7 @@ pub fn all_views(today_str: &str) -> Vec<View> {
         today(today_str),
         upcoming(today_str),
         anytime(),
+        scheduled(),
         someday(),
         logbook(),
     ]
