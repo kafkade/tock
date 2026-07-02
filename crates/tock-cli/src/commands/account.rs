@@ -378,9 +378,22 @@ fn save_credentials(
 }
 
 fn account_config_path() -> Result<PathBuf, Box<dyn std::error::Error>> {
-    let dir = dirs::config_dir().ok_or("no config dir")?.join("tock");
+    Ok(account_config_dir()?.join("account.toml"))
+}
+
+/// The `…/tock` directory holding the account config and credential file.
+///
+/// Honors `XDG_CONFIG_HOME` on every platform for parity with the main config
+/// resolver (`config::resolve_path`) — `dirs::config_dir()` alone ignores XDG
+/// on Windows/macOS and can be `None` in restricted environments. Falls back
+/// to the platform config dir when XDG is unset.
+fn account_config_dir() -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let base = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .map_or_else(|| dirs::config_dir().ok_or("no config dir"), Ok)?;
+    let dir = base.join("tock");
     std::fs::create_dir_all(&dir)?;
-    Ok(dir.join("account.toml"))
+    Ok(dir)
 }
 
 fn write_account_config(server: &str, email: &str) -> CmdResult {
