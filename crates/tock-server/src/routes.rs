@@ -40,15 +40,20 @@ pub struct ServerInfo {
     pub mode: String,
     /// Server crate version.
     pub version: String,
+    /// Public base URL clients should use to reach this instance, if the admin
+    /// has configured one (issue #131). Read-only and non-secret.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub public_address: Option<String>,
 }
 
 /// `GET /v1/server/info` — public instance metadata for first-run gating.
 pub async fn server_info(State(state): State<AppState>) -> Result<Json<ServerInfo>, Error> {
     let db = state.db.clone();
-    let (count, policy) = tokio::task::spawn_blocking(move || {
+    let (count, policy, public_address) = tokio::task::spawn_blocking(move || {
         let count = db.account_count()?;
         let policy = db.registration_policy()?;
-        Ok::<_, Error>((count, policy))
+        let public_address = db.public_address()?;
+        Ok::<_, Error>((count, policy, public_address))
     })
     .await
     .map_err(|e| Error::Internal(e.to_string()))??;
@@ -58,6 +63,7 @@ pub async fn server_info(State(state): State<AppState>) -> Result<Json<ServerInf
         registration_policy: policy.as_str().to_string(),
         mode: state.mode.to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
+        public_address,
     }))
 }
 

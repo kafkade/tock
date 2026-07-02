@@ -426,6 +426,23 @@ pub fn verify_channel_binding(auth: &SyncAuth, headers: &HeaderMap) -> Result<()
     }
 }
 
+/// The SHA-256 hash of the presented session bearer token — the stable
+/// identifier used to flag or revoke the caller's *own* session (issue #131
+/// self-service). Returns an error if no valid bearer token is present.
+///
+/// # Errors
+/// [`Error::Unauthorized`] when the `Authorization` header is missing or
+/// malformed.
+pub fn presented_token_hash(headers: &HeaderMap) -> Result<String, Error> {
+    bearer_token_hash(headers)
+}
+
+/// Current Unix time in whole seconds (re-exported for self-service handlers).
+#[must_use]
+pub fn unix_now() -> i64 {
+    now_unix()
+}
+
 /// Authorize an admin request via an SRP session token, returning the admin
 /// account id when the session's account is an active admin. Used by the admin
 /// guard alongside the interim admin API token.

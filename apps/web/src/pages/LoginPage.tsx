@@ -7,7 +7,12 @@ const DEFAULT_SERVER =
 export function LoginPage({
   onLoggedIn,
 }: {
-  onLoggedIn: (server: string, email: string, session: Session) => void;
+  onLoggedIn: (
+    server: string,
+    email: string,
+    session: Session,
+    secretKey: string,
+  ) => void;
 }) {
   const [server, setServer] = useState(DEFAULT_SERVER);
   const [email, setEmail] = useState("");
@@ -33,8 +38,9 @@ export function LoginPage({
     setBusy(true);
     setError(null);
     try {
-      const session = await login(server, email, password, secretKey.trim());
-      onLoggedIn(server, email, session);
+      const key = secretKey.trim();
+      const session = await login(server, email, password, key);
+      onLoggedIn(server, email, session, key);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {

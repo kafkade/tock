@@ -24,7 +24,8 @@ instance. That's the whole loop.
 - [4. Connect the CLI](#4-connect-the-cli)
 - [5. Connect the iOS / macOS apps](#5-connect-the-ios--macos-apps)
 - [6. Managing users](#6-managing-users)
-- [7. Operations](#7-operations)
+- [7. Self-service (your account)](#7-self-service-your-account)
+- [8. Operations](#8-operations)
 - [How your data stays private](#how-your-data-stays-private)
 
 ## Requirements
@@ -86,7 +87,10 @@ yet, the console shows the **first-run wizard**:
    in a password manager. It is shown **once**, and *nobody, including the
    server, can recover it for you*. You need your password **and** Secret Key
    to sign in on a new device.
-3. Tick "I have saved my Emergency Kit" and continue into the admin console.
+3. Choose the **registration policy** and **public server address** (the base
+   URL clients should use to reach this instance — pre-filled with the current
+   origin; both are editable later in the console).
+4. Tick "I have saved my Emergency Kit" and continue into the admin console.
 
 ### Headless / CLI bootstrap (alternative)
 
@@ -169,10 +173,15 @@ Sign in to the console as the admin (`https://tock.example.com`). The
 **Admin console** lets you:
 
 - **Set the registration policy** — `open`, `invite-only`, or `disabled`.
+- **Set the public server address** — the base URL shown to users adding a new
+  device; editable at any time.
 - **Invite users** — admins can't set passwords (zero-knowledge), so "adding a
   user" mints an **invite token** the user redeems when they register with
   their own client-computed credentials.
 - **Enable / disable / delete** accounts.
+- **See usage & health** — an at-a-glance panel with account counts (by role and
+  status), vault / device / event totals, encrypted storage size, and a live
+  `/health` check.
 
 The same operations are available offline from the host:
 
@@ -181,7 +190,32 @@ docker compose exec tock-server tock-server admin list-users
 docker compose exec tock-server tock-server admin reset-registration --policy invite-only
 ```
 
-## 7. Operations
+## 7. Self-service (your account)
+
+Any signed-in (non-admin) user has a **Your account** portal, reachable from the
+task view, that keeps account management in the browser — no CLI required. It is
+strictly self-scoped: you can only ever see or change your own resources.
+
+- **Change your password** — rotation happens **entirely in your browser**. Your
+  new password re-derives your Unlock Root Key, re-wraps your Vault Key, and
+  mints a fresh SRP verifier in WASM; only the non-secret verifier material and
+  the re-wrapped (still encrypted) vault header are uploaded. Your **Secret Key
+  and Emergency Kit are unchanged** — you only need the new password on each
+  device. After rotating, other devices must sign in again with the new
+  password; use "sign out all other sessions" to force that.
+- **Add another device** — re-display your **Setup Code** (with QR + print) on
+  demand. It is derived locally from the server address, your email, and your
+  Secret Key, so it never touches the server.
+- **Manage devices** — list your registered devices and revoke any that should
+  no longer sync.
+- **Manage sessions** — list your live sessions (the current one is flagged),
+  revoke an individual session, or end every other session at once.
+
+Rotation and Setup-Code regeneration need your **Secret Key**, which the browser
+holds **only in memory** for the current session (never on disk). If you reload
+the page, sign in again to use them.
+
+## 8. Operations
 
 ### Backup & restore
 
@@ -220,8 +254,11 @@ The SQLite schema migrates automatically on start. Back up the volume first.
 - `GET /health` — liveness probe (used by the container healthcheck).
 - `GET /metrics` — JSON counters for scraping/monitoring.
 - `GET /v1/server/info` — public instance metadata (`setup_required`,
-  registration policy, mode, version); this is what the console uses to decide
-  whether to show the first-run wizard.
+  registration policy, mode, version, and the configured public address); this
+  is what the console uses to decide whether to show the first-run wizard.
+- `GET /v1/admin/stats` — admin-only aggregate usage counters (accounts by
+  role/status, vaults, devices, events, encrypted storage bytes); this backs the
+  console's usage & health panel.
 
 ```sh
 curl -f https://tock.example.com/health

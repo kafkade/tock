@@ -61,6 +61,11 @@ pub struct SignupMaterial {
     pub emergency_kit: EmergencyKit,
     /// Setup Code for fast add-device.
     pub setup_code: SetupCode,
+    /// The freshly minted vault header (non-secret: KDF salts/params + an empty
+    /// VK wrap for a brand-new browser account). Uploaded at registration so a
+    /// new device can log in (issue #129) and the password can later be rotated
+    /// (issue #131).
+    pub header: VaultHeader,
 }
 
 impl SignupMaterial {
@@ -113,6 +118,8 @@ impl SignupMaterial {
             srp_verifier: base64_encode(&verifier),
             srp_group: SRP_GROUP.to_string(),
             kdf_params: kdf_params.to_json(),
+            vault_id: Some(crate::codec::hex_encode(header.vault_id.as_bytes())),
+            header: Some(base64_encode(&header.to_bytes())),
         };
         let secret_key_string = secret_key.to_emergency_kit(&account_id);
         Ok(Self {
@@ -127,6 +134,7 @@ impl SignupMaterial {
                 email: username.to_string(),
                 secret_key: secret_key_string,
             },
+            header: header.clone(),
         })
     }
 }
@@ -144,6 +152,14 @@ pub struct RegisterRequest {
     pub srp_group: String,
     /// Opaque KDF parameters; echoed back at `srp/start`.
     pub kdf_params: serde_json::Value,
+    /// Hex vault id the header is stored under (issue #129/#131). Optional so
+    /// pre-existing clients that don't upload a header still register.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vault_id: Option<String>,
+    /// Base64 non-secret vault header to store at registration, enabling
+    /// new-device login and password rotation. Optional (see `vault_id`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub header: Option<String>,
 }
 
 /// Response body for a successful registration.

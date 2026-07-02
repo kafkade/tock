@@ -42,4 +42,8 @@ serde_json = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.2", features = ["js"] }
+# The AEAD/SRP crypto stack pulls getrandom 0.4 (via crypto-common); its
+# wasm32-unknown-unknown backend must be opted in explicitly with `wasm_js`.
+# Not referenced in code — declared solely to enable the browser RNG backend.
+getrandom_v04 = { package = "getrandom", version = "0.4", features = ["wasm_js"] }
 uuid = { workspace = true, features = ["js"] }

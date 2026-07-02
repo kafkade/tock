@@ -12,6 +12,25 @@ export interface ServerInfo {
   registration_policy: string;
   mode: string;
   version: string;
+  public_address?: string;
+}
+
+/** Instance settings from `GET/PUT /v1/admin/settings`. */
+export interface InstanceSettings {
+  registration_policy: string;
+  public_address?: string;
+}
+
+/** Aggregate instance counters from `GET /v1/admin/stats`. */
+export interface InstanceStats {
+  accounts_total: number;
+  accounts_admin: number;
+  accounts_active: number;
+  accounts_disabled: number;
+  vaults: number;
+  devices: number;
+  events: number;
+  storage_bytes: number;
 }
 
 /** A user row from the admin API. */
@@ -171,17 +190,40 @@ export async function deleteUser(
   if (!res.ok) return asError(res, "delete user");
 }
 
+/** Read the current instance settings (policy + public address). */
+export async function getSettings(
+  base: string,
+  auth: AdminAuth,
+): Promise<InstanceSettings> {
+  const res = await fetch(`${trimBase(base)}/v1/admin/settings`, {
+    headers: authHeaders(auth),
+  });
+  if (!res.ok) return asError(res, "get settings");
+  return (await res.json()) as InstanceSettings;
+}
+
+/** Patch instance settings; only the provided fields change. Returns the
+ * full, current settings. */
+export async function updateSettings(
+  base: string,
+  auth: AdminAuth,
+  patch: { registration_policy?: string; public_address?: string },
+): Promise<InstanceSettings> {
+  const res = await fetch(`${trimBase(base)}/v1/admin/settings`, {
+    method: "PUT",
+    headers: { ...authHeaders(auth), "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) return asError(res, "update settings");
+  return (await res.json()) as InstanceSettings;
+}
+
 /** Read the current registration policy. */
 export async function getRegistrationPolicy(
   base: string,
   auth: AdminAuth,
 ): Promise<string> {
-  const res = await fetch(`${trimBase(base)}/v1/admin/settings`, {
-    headers: authHeaders(auth),
-  });
-  if (!res.ok) return asError(res, "get settings");
-  const body = (await res.json()) as { registration_policy: string };
-  return body.registration_policy;
+  return (await getSettings(base, auth)).registration_policy;
 }
 
 /** Update the registration policy (`open`, `invite-only`, `disabled`). */
@@ -190,12 +232,20 @@ export async function setRegistrationPolicy(
   auth: AdminAuth,
   policy: string,
 ): Promise<string> {
-  const res = await fetch(`${trimBase(base)}/v1/admin/settings`, {
-    method: "PUT",
-    headers: { ...authHeaders(auth), "Content-Type": "application/json" },
-    body: JSON.stringify({ registration_policy: policy }),
+  const settings = await updateSettings(base, auth, {
+    registration_policy: policy,
   });
-  if (!res.ok) return asError(res, "set settings");
-  const body = (await res.json()) as { registration_policy: string };
-  return body.registration_policy;
+  return settings.registration_policy;
+}
+
+/** Fetch aggregate instance usage/health counters. */
+export async function getStats(
+  base: string,
+  auth: AdminAuth,
+): Promise<InstanceStats> {
+  const res = await fetch(`${trimBase(base)}/v1/admin/stats`, {
+    headers: authHeaders(auth),
+  });
+  if (!res.ok) return asError(res, "get stats");
+  return (await res.json()) as InstanceStats;
 }

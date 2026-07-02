@@ -215,49 +215,126 @@ pub async fn delete_user(
     }
 }
 
-/// Registration-policy settings payload (GET response / PUT request).
+/// Server settings payload returned by `GET /v1/admin/settings` (and echoed by
+/// `PUT`). Carries the registration policy and the optional public server
+/// address used by clients and the setup wizard (issue #131).
 #[derive(Serialize, Deserialize)]
-pub struct RegistrationSettings {
+pub struct InstanceSettings {
     /// One of `open`, `invite-only`, `disabled`.
     pub registration_policy: String,
+    /// Public base URL clients should use to reach this instance, if set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub public_address: Option<String>,
+}
+
+/// Partial update body for `PUT /v1/admin/settings` — every field is optional so
+/// the setup wizard and console can patch policy and address independently.
+#[derive(Deserialize)]
+pub struct UpdateSettingsRequest {
+    /// New registration policy, when changing it.
+    #[serde(default)]
+    pub registration_policy: Option<String>,
+    /// New public address; an empty string clears it.
+    #[serde(default)]
+    pub public_address: Option<String>,
 }
 
 /// `GET /v1/admin/settings` — read server settings.
 pub async fn get_settings(
     State(state): State<AppState>,
     headers: HeaderMap,
-) -> Result<Json<RegistrationSettings>, Error> {
+) -> Result<Json<InstanceSettings>, Error> {
     require_admin(&state, &headers).await?;
     let db = state.db.clone();
-    let policy = tokio::task::spawn_blocking(move || db.registration_policy())
-        .await
-        .map_err(|e| Error::Internal(e.to_string()))??;
-    Ok(Json(RegistrationSettings {
-        registration_policy: policy.as_str().to_string(),
-    }))
+    let settings = tokio::task::spawn_blocking(move || {
+        let policy = db.registration_policy()?;
+        let address = db.public_address()?;
+        Ok::<_, Error>(InstanceSettings {
+            registration_policy: policy.as_str().to_string(),
+            public_address: address,
+        })
+    })
+    .await
+    .map_err(|e| Error::Internal(e.to_string()))??;
+    Ok(Json(settings))
 }
 
-/// `PUT /v1/admin/settings` — update the registration policy.
+/// `PUT /v1/admin/settings` — update the registration policy and/or public
+/// address. Returns the full, current settings.
 pub async fn put_settings(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(body): Json<RegistrationSettings>,
+    Json(body): Json<UpdateSettingsRequest>,
 ) -> Result<impl IntoResponse, Error> {
     require_admin(&state, &headers).await?;
-    let policy = RegistrationPolicy::from_str_opt(&body.registration_policy).ok_or_else(|| {
-        Error::BadRequest(format!(
-            "unknown registration policy: {}",
-            body.registration_policy
-        ))
-    })?;
+    let policy = match body.registration_policy.as_deref() {
+        None => None,
+        Some(raw) => Some(
+            RegistrationPolicy::from_str_opt(raw)
+                .ok_or_else(|| Error::BadRequest(format!("unknown registration policy: {raw}")))?,
+        ),
+    };
+    let address = body.public_address.map(|a| a.trim().to_string());
     let db = state.db.clone();
-    tokio::task::spawn_blocking(move || db.set_registration_policy(policy))
+    let settings = tokio::task::spawn_blocking(move || {
+        if let Some(policy) = policy {
+            db.set_registration_policy(policy)?;
+        }
+        if let Some(address) = address {
+            db.set_public_address(&address)?;
+        }
+        let policy = db.registration_policy()?;
+        let public_address = db.public_address()?;
+        Ok::<_, Error>(InstanceSettings {
+            registration_policy: policy.as_str().to_string(),
+            public_address,
+        })
+    })
+    .await
+    .map_err(|e| Error::Internal(e.to_string()))??;
+    Ok((StatusCode::OK, Json(settings)))
+}
+
+/// Aggregate instance statistics returned by `GET /v1/admin/stats` (issue
+/// #131). Every value is a non-secret count or byte total over opaque data.
+#[derive(Serialize)]
+pub struct InstanceStatsResponse {
+    /// Total accounts.
+    pub accounts_total: i64,
+    /// Accounts with the `admin` role.
+    pub accounts_admin: i64,
+    /// Active accounts.
+    pub accounts_active: i64,
+    /// Disabled accounts.
+    pub accounts_disabled: i64,
+    /// Total vaults.
+    pub vaults: i64,
+    /// Non-revoked registered devices.
+    pub devices: i64,
+    /// Total stored events.
+    pub events: i64,
+    /// Total bytes of stored (encrypted) event payloads.
+    pub storage_bytes: i64,
+}
+
+/// `GET /v1/admin/stats` — instance usage/health counters for the console.
+pub async fn get_stats(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<InstanceStatsResponse>, Error> {
+    require_admin(&state, &headers).await?;
+    let db = state.db.clone();
+    let counters = tokio::task::spawn_blocking(move || db.instance_stats())
         .await
         .map_err(|e| Error::Internal(e.to_string()))??;
-    Ok((
-        StatusCode::OK,
-        Json(RegistrationSettings {
-            registration_policy: policy.as_str().to_string(),
-        }),
-    ))
+    Ok(Json(InstanceStatsResponse {
+        accounts_total: counters.accounts_total,
+        accounts_admin: counters.accounts_admin,
+        accounts_active: counters.accounts_active,
+        accounts_disabled: counters.accounts_disabled,
+        vaults: counters.vaults,
+        devices: counters.devices,
+        events: counters.events,
+        storage_bytes: counters.storage_bytes,
+    }))
 }

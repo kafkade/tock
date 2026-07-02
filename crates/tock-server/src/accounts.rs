@@ -109,6 +109,14 @@ pub struct RegisterRequest {
     /// Invite token (required under invite-only / disabled policies).
     #[serde(default)]
     pub invite_token: Option<String>,
+    /// Hex vault id the optional `header` is stored under (issue #129/#131).
+    #[serde(default)]
+    pub vault_id: Option<String>,
+    /// Base64 non-secret vault header to store at registration so a new device
+    /// can log in (issue #129) and the password can later be rotated (#131).
+    /// Ignored unless `vault_id` is also present.
+    #[serde(default)]
+    pub header: Option<String>,
 }
 
 /// Response for a successful registration.
@@ -178,10 +186,21 @@ pub async fn register(
     let srp_group = body.srp_group;
     let invite = body.invite_token;
 
+    // Optional vault header uploaded at registration (issue #129/#131). Decoded
+    // up front so a malformed value is a clean 400 before we touch the account.
+    let header_upload = match (body.vault_id.as_deref(), body.header.as_deref()) {
+        (Some(vault_id), Some(header_b64)) if !header_b64.is_empty() => {
+            let vault_bytes = crate::codec::parse_hex_16(vault_id)?;
+            let header = base64_decode(header_b64)?;
+            Some((vault_bytes, header))
+        }
+        _ => None,
+    };
+
     let db = state.db.clone();
     let outcome = tokio::task::spawn_blocking(move || {
         let policy = db.registration_policy()?;
-        db.register_account(
+        let outcome = db.register_account(
             &NewAccount {
                 username: &username,
                 srp_salt: &salt,
@@ -191,7 +210,13 @@ pub async fn register(
                 invite_token: invite.as_deref(),
             },
             policy,
-        )
+        )?;
+        if let Some((vault_bytes, header)) = header_upload {
+            db.ensure_vault(&vault_bytes)?;
+            db.claim_vault_for_account(&vault_bytes, &outcome.account_id)?;
+            db.put_vault_header(&vault_bytes, &header)?;
+        }
+        Ok::<_, Error>(outcome)
     })
     .await
     .map_err(|e| Error::Internal(e.to_string()))??;

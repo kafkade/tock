@@ -47,6 +47,7 @@ mod error;
 mod metrics;
 mod quota;
 mod routes;
+mod selfservice;
 mod state;
 
 use std::collections::HashMap;
@@ -170,6 +171,26 @@ pub fn build_router(state: AppState) -> Router {
         // Account-scoped header fetch: a fresh device knows its account but
         // not its vault id yet (issue #129 new-device login).
         .route("/v1/account/header", get(routes::get_account_vault_header))
+        // Self-service account management (issue #131): password rotation,
+        // session and device listing/revocation. Scoped to the caller.
+        .route(
+            "/v1/account/srp-verifier",
+            put(selfservice::rotate_password),
+        )
+        .route("/v1/account/sessions", get(selfservice::list_sessions))
+        .route(
+            "/v1/account/sessions/revoke-others",
+            post(selfservice::revoke_other_sessions),
+        )
+        .route(
+            "/v1/account/sessions/{token_hash}",
+            delete(selfservice::revoke_session),
+        )
+        .route("/v1/account/devices", get(selfservice::list_devices))
+        .route(
+            "/v1/account/devices/{device_id}",
+            delete(selfservice::revoke_device),
+        )
         // Self-hosted account system (ADR-011 / issue #127) — available in
         // every mode. Registration stores SRP verifiers only.
         .route("/v1/accounts/register", post(accounts::register))
@@ -193,7 +214,8 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/v1/admin/settings",
             get(admin::get_settings).put(admin::put_settings),
-        );
+        )
+        .route("/v1/admin/stats", get(admin::get_stats));
 
     // Hosted-mode-only billing routes.
     if state.mode == ServerMode::Hosted {

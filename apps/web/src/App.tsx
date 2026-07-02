@@ -4,6 +4,7 @@ import { LoginPage } from "./pages/LoginPage";
 import { TasksPage } from "./pages/TasksPage";
 import { SetupPage } from "./pages/SetupPage";
 import { AdminPage } from "./pages/AdminPage";
+import { AccountPage } from "./pages/AccountPage";
 import { MemoryStore, type StoredCredentials } from "./lib/credentials";
 import type { Session } from "./lib/account";
 import {
@@ -13,7 +14,14 @@ import {
   type ServerInfo,
 } from "./lib/admin";
 
-type View = "loading" | "setup" | "login" | "signup" | "tasks" | "admin";
+type View =
+  | "loading"
+  | "setup"
+  | "login"
+  | "signup"
+  | "tasks"
+  | "account"
+  | "admin";
 
 // The console is served same-origin behind the reverse proxy, so the API base
 // is relative (""). fetchServerInfo/admin calls resolve against this origin.
@@ -25,6 +33,10 @@ export function App() {
   const [info, setInfo] = useState<ServerInfo | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [creds, setCreds] = useState<StoredCredentials | null>(null);
+  // The account Secret Key is held only in memory (never persisted) so the
+  // self-service portal can regenerate the Setup Code and rotate the password
+  // without prompting for it again. Cleared on sign-out / reload.
+  const [secretKey, setSecretKey] = useState<string | null>(null);
   const [admin, setAdmin] = useState<{ auth: AdminAuth; base: string } | null>(
     null,
   );
@@ -50,7 +62,12 @@ export function App() {
     setView("admin");
   }
 
-  async function loggedIn(serverURL: string, email: string, session: Session) {
+  async function loggedIn(
+    serverURL: string,
+    email: string,
+    session: Session,
+    key: string,
+  ) {
     const auth: AdminAuth = {
       bearerToken: session.bearer_token,
       channelBinding: session.channel_binding,
@@ -69,12 +86,14 @@ export function App() {
     const c = { serverURL, email, session };
     store.save(c);
     setCreds(c);
+    setSecretKey(key);
     setView("tasks");
   }
 
   function signOut() {
     store.clear();
     setCreds(null);
+    setSecretKey(null);
     setAdmin(null);
     setView(info?.setup_required ? "setup" : "login");
   }
@@ -105,7 +124,24 @@ export function App() {
       )}
 
       {view === "tasks" && creds && (
-        <TasksPage creds={creds} onLogout={signOut} />
+        <>
+          <nav style={{ marginBottom: "1rem" }}>
+            <button onClick={() => setView("account")}>Your account</button>
+          </nav>
+          <TasksPage creds={creds} onLogout={signOut} />
+        </>
+      )}
+
+      {view === "account" && creds && (
+        <AccountPage
+          base={creds.serverURL}
+          serverURL={creds.serverURL}
+          email={creds.email}
+          session={creds.session}
+          secretKey={secretKey}
+          onBack={() => setView("tasks")}
+          onSignOut={signOut}
+        />
       )}
 
       {view === "signup" && <SignupPage onDone={() => setView("login")} />}
