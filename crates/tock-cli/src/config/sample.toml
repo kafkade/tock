@@ -54,6 +54,13 @@ identity_required = false
 [time]
 allow_overlap    = false
 billable_default = false
+# In-terminal idle detection for active timers. While a timer or focus session
+# runs, tock records a heartbeat on each command; when you next stop or inspect
+# the timer and the gap since your last activity is >= idle_threshold, tock
+# offers to keep / discard / split the idle time.
+idle_detection   = true
+idle_threshold   = "5m"          # integer minutes or a duration string
+idle_default     = "prompt"      # prompt | keep | discard | split
 
 # ─── Focus / Pomodoro ───────────────────────────────────────────────────────
 # Durations accept minutes as an integer or a string ("25m", "1h").

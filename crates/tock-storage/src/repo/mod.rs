@@ -7,6 +7,7 @@ use uuid::Uuid;
 
 use crate::Error;
 
+pub mod activity_repo;
 pub mod annotation_repo;
 pub mod area_repo;
 pub mod caldav_link_repo;
