@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-07-02
+
 ### Added
 
 - **Idle detection for active timers** (#155): tock now notices when you walk away while a timer or focus session is running and offers to reclaim the idle time instead of silently over-counting it. Because the timer isn't a background daemon, detection is in-terminal: every command records a lightweight "last activity" heartbeat while tracking is active, and on `tock time stop` (or `tock focus done`) tock measures the gap since your last activity. If it meets the configurable threshold, tock resolves the idle interval one of three ways — **keep** it as worked time (the old behavior), **discard** it by trimming the block back to your last activity, or **split** it off into a separate `(idle)` time block so the active portion stays intact. On an interactive terminal it prompts you to choose; otherwise it applies your configured default (never silently discarding). Three new `[time]` config keys drive it — `idle_detection` (on/off), `idle_threshold` (e.g. `10m`), and `idle_default` (`prompt`/`keep`/`discard`/`split`)

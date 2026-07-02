@@ -141,6 +141,19 @@ Architecture Decision Records live in `docs/adr/`. Read them before making chang
 
 Use conventional commits: `feat:`, `fix:`, `docs:`, `test:`, `refactor:`, `chore:`. For multi-component changes, include the primary component: `feat(crypto): add vault key wrapping`.
 
+## Releasing
+
+Releases follow a **two-phase, PR-based flow** driven by a machine-global, repo-agnostic helper (`rust-release.sh`, aliased to `release` — not tracked in-repo). Agents must respect the Git Policy above: perform the **prepare** file edits, but never commit, tag, or push.
+
+- **Phase 1 — prepare (in a feature branch / release PR).** `release prepare <major|minor|patch>` bumps `[workspace.package] version` and every internal `tock-*` path-dep version in `[workspace.dependencies]`, refreshes `Cargo.lock`, and stamps `CHANGELOG.md` (`[Unreleased] → [x.y.z] - <date>`, plus compare links if the changelog uses them). It does **not** commit, tag, or push — the resulting diff *is* the release PR. An agent may reproduce these edits by hand (equivalent to the script) and leave them uncommitted for review. The phase is idempotent: re-running when already prepared is a no-op.
+- **Phase 2 — tag (on the default branch, after the PR merges).** `release tag [--push]` verifies the version is already stamped, then creates the annotated `vX.Y.Z` tag at the merge commit and (with `--push`) pushes it. **Pushing the tag is the only trigger** for `.github/workflows/release.yml` (multi-target build + WASM gate). This is a human/maintainer step — agents never tag or push.
+
+Conventions:
+
+- During normal work, only accumulate user-facing entries under `## [Unreleased]`; the version bump + changelog stamp happen solely at release time (Phase 1), never per-PR.
+- `workspace.dependencies` path deps carry an explicit `version = "x.y.z"` for cargo-deny; the helper keeps these in lockstep with the workspace version.
+- Before cutting, confirm the git tag matches `Cargo.toml` and that no CI job names changed (see CI / Infrastructure Dependency).
+
 ## Implementation Status
 
 ### What's implemented (v0.1.0 + unreleased)
@@ -241,7 +254,7 @@ Use conventional commits: `feat:`, `fix:`, `docs:`, `test:`, `refactor:`, `chore
 **Infrastructure:**
 
 - .github/workflows/ci.yml (7 jobs), .github/workflows/release.yml (hand-written)
-- scripts/release.ps1 (version bump, CHANGELOG stamp, tag)
+- release helper: machine-global `rust-release.sh` (the `release` shell alias), not tracked in-repo — two-phase `prepare <bump>` (branch: version bump + CHANGELOG stamp) then `tag [--push]` (default branch: cut the `vX.Y.Z` tag)
 - deny.toml (ignores RUSTSEC-2024-0436 for paste crate)
 - dist-workspace.toml (allow-dirty for hand-maintained release.yml)
 
@@ -256,7 +269,7 @@ Use conventional commits: `feat:`, `fix:`, `docs:`, `test:`, `refactor:`, `chore
 
 ### Known gotchas
 
-- `workspace.dependencies` path deps need explicit `version = "X.Y.Z"` for cargo-deny; release.ps1 bumps these
+- `workspace.dependencies` path deps need explicit `version = "X.Y.Z"` for cargo-deny; the release helper bumps these
 - `getrandom` needs `features = ["js"]` on wasm32-unknown-unknown for tock-crypto
 - `paste` crate (transitive via ratatui) has RUSTSEC-2024-0436 (unmaintained) — ignored in deny.toml
 - `time` crate 0.3.47+ requires rustc 1.88+

@@ -164,13 +164,11 @@ tock/
 │   ├── tock-sync/              # event log, sync protocol (foundation)
 │   ├── tock-server/            # Axum sync server — AGPL-3.0-only
 │   └── tock-uniffi/            # UniFFI scaffolding (Apple bindings)
-├── docs/
-│   ├── architecture.md
-│   ├── dogfooding.md           # self-host + multi-device sync guide
-│   ├── adr/                    # 10 Architecture Decision Records
-│   └── distribution/
-└── scripts/
-    └── release.ps1             # automated release script
+└── docs/
+    ├── architecture.md
+    ├── dogfooding.md           # self-host + multi-device sync guide
+    ├── adr/                    # 10 Architecture Decision Records
+    └── distribution/
 ```
 
 ## Licensing
