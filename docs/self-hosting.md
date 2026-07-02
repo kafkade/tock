@@ -249,6 +249,26 @@ docker compose up -d
 
 The SQLite schema migrates automatically on start. Back up the volume first.
 
+#### Vault format (v1 → v2)
+
+The server only ever stores ciphertext, so server upgrades never touch the vault
+format — but **clients** do. tock 1.0 draws the line at vault format **v2**
+(two-secret key derivation; [ADR-011](adr/ADR-011-account-based-self-host-two-secret-auth.md)):
+
+- **v2 → v2 (normal):** any `v2` vault written by a 1.x build opens on every
+  later 1.x build. Argon2id/KDF hardening is applied transparently on unlock via
+  a `kdf_version` re-wrap, and any future structural change ships with an
+  automatic in-place migration — you are never asked to re-initialize or
+  re-enter data to keep an existing vault. See
+  [ADR-013](adr/ADR-013-vault-format-versioning-policy.md).
+- **v1 → v2 (one-time, pre-1.0 only):** legacy password-only `v1` vaults
+  (created by pre-#126 dogfooding builds) are **not** migrated automatically. If
+  a client reports `vault uses the legacy password-only format … re-initialize
+  it`, **export** your data from the old build, re-initialize with a current
+  build (`tock account signup` / `tock init`), then **re-import**. Save the new
+  Emergency Kit and Secret Key. No official release shipped `v1`, so this affects
+  only early dogfooders.
+
 ### Health & metrics
 
 - `GET /health` — liveness probe (used by the container healthcheck).

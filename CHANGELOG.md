@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Vault format 1.0 compatibility policy** (#171): ratified the pre-1.0
+  `v1` (password-only) → `v2` (two-secret / 2SKD) vault-format break as the
+  **final** pre-1.0 break, and committed to a **forward** compatibility
+  guarantee for the `v2` format from 1.0 onward. See
+  [ADR-013](docs/adr/ADR-013-vault-format-versioning-policy.md).
+  - **One-time upgrade note:** legacy `v1` vaults (created by pre-#126 builds)
+    are not migrated automatically and must be re-initialized. If tock reports
+    the legacy-format error, **export** from the old build, re-initialize with
+    a current build (`tock account signup` / `tock init`), then **re-import**.
+    Save the new Emergency Kit and Secret Key. No official release ever shipped
+    `v1`, so this affects only early dogfooders.
+  - **From 1.0 onward:** any `v2` vault written by a 1.x build opens on every
+    later 1.x build (`MIN_COMPAT_VERSION` stays `2`); KDF/parameter hardening
+    happens transparently via a `kdf_version` re-wrap with no data loss; and any
+    future structural format change ships with an automatic in-place migration —
+    you are never asked to re-init or re-enter data to keep an existing vault.
+
 ## [0.5.0] - 2026-07-02
 
 ### Added
