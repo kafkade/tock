@@ -241,7 +241,7 @@ Use conventional commits: `feat:`, `fix:`, `docs:`, `test:`, `refactor:`, `chore
 **Infrastructure:**
 
 - .github/workflows/ci.yml (7 jobs), .github/workflows/release.yml (hand-written)
-- scripts/release.ps1 (version bump, CHANGELOG stamp, tag)
+- release helper: machine-global `rust-release.sh` (the `release` shell alias), not tracked in-repo — two-phase `prepare <bump>` (branch: version bump + CHANGELOG stamp) then `tag [--push]` (default branch: cut the `vX.Y.Z` tag)
 - deny.toml (ignores RUSTSEC-2024-0436 for paste crate)
 - dist-workspace.toml (allow-dirty for hand-maintained release.yml)
 
@@ -256,7 +256,7 @@ Use conventional commits: `feat:`, `fix:`, `docs:`, `test:`, `refactor:`, `chore
 
 ### Known gotchas
 
-- `workspace.dependencies` path deps need explicit `version = "X.Y.Z"` for cargo-deny; release.ps1 bumps these
+- `workspace.dependencies` path deps need explicit `version = "X.Y.Z"` for cargo-deny; the release helper bumps these
 - `getrandom` needs `features = ["js"]` on wasm32-unknown-unknown for tock-crypto
 - `paste` crate (transitive via ratatui) has RUSTSEC-2024-0436 (unmaintained) — ignored in deny.toml
 - `time` crate 0.3.47+ requires rustc 1.88+
