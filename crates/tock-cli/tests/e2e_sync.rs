@@ -1,41 +1,47 @@
-//! End-to-end multi-device sync acceptance test (issue #124).
+//! End-to-end multi-device **account-authenticated** sync acceptance test
+//! (issue #170).
 //!
-//! This is the cross-component test the per-crate unit suites never
-//! covered: it spins up a real `tock-server` in-process on an ephemeral
-//! port and drives **two actual `tock` CLI binaries** through the full
-//! loop — add / modify / done, device pairing via the real interactive
-//! `tock onboard` handshake, and `tock sync` — then asserts:
+//! This is the flagship cross-component gate the per-crate unit suites never
+//! covered: it spins up a real `tock-server` in-process on an ephemeral port
+//! and drives **two actual `tock` CLI binaries** through the full account
+//! loop — `tock account signup` (device A) → `tock account login` (device B,
+//! via the Setup Code from A's Emergency Kit) → `tock add / modify / done`
+//! → `tock sync` — then asserts:
 //!
 //! 1. the two vaults converge on the same task set (CLI ⇄ server ⇄ CLI);
 //! 2. the server store holds **only ciphertext** (no plaintext titles);
 //! 3. concurrent same-field edits surface a conflict for review rather
-//!    than silently clobbering (no last-write-wins) per ADR-003.
+//!    than silently clobbering (no last-write-wins) per ADR-003;
+//! 4. an **unauthenticated** client request is rejected with `401`.
 //!
-//! The CLI is fully scriptable via `TOCK_VAULT` / `TOCK_PASSWORD`, so the
-//! test treats it as a black box and never links the CLI's internals.
-//! `tock-server` is consumed only as a dev-dependency (it never links
-//! into the distributed Apache-2.0 CLI binary; see ADR-006).
+//! Background: the CLI HTTP transport authenticates every sync/onboarding
+//! route with an SRP session (`Authorization: Bearer` +
+//! `X-Tock-Channel-Binding`, see `http_transport.rs`), and `tock account
+//! login/signup` shipped in #129 — so the authenticated **client** round-trip
+//! can finally be proven here, not just server-side
+//! (`tock-server/tests/srp_sync.rs`).
+//!
+//! The CLI is fully scriptable via `TOCK_VAULT` / `TOCK_PASSWORD` /
+//! `TOCK_SECRET_KEY`, and `TOCK_NO_KEYRING=1` routes SRP session credentials
+//! to a per-`XDG_CONFIG_HOME` file so the two devices stay isolated. The test
+//! treats the CLI as a black box and never links its internals.
+//! `tock-server` is consumed only as a dev-dependency (it never links into
+//! the distributed Apache-2.0 CLI binary; see ADR-006).
 
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, ExitStatus, Stdio};
-use std::sync::mpsc::{Receiver, RecvTimeoutError};
+use std::process::Command;
 use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 use tock_server::ServerMode;
 
-/// Generous per-process / per-pairing timeout so a wedged child can never
-/// hang CI indefinitely (the happy path completes in a couple seconds).
-const STEP_TIMEOUT: Duration = Duration::from_secs(90);
-
-/// Path to the freshly built `tock` binary, provided by Cargo.
-const fn tock_bin() -> &'static str {
-    env!("CARGO_BIN_EXE_tock")
-}
+/// One account password shared by every device: in the account model a single
+/// password (with the Secret Key) unlocks the vault and drives SRP, so a second
+/// device must reuse the first device's password.
+const ACCOUNT_PASSWORD: &str = "correct horse battery staple";
 
 // ── In-process server harness ────────────────────────────────────────
 
@@ -115,14 +121,15 @@ fn open_readonly_with_retry(path: &Path) -> rusqlite::Connection {
 
 // ── Driving the `tock` CLI ───────────────────────────────────────────
 
-/// A single device: a vault path + password + an isolated HOME so the
-/// CLI never picks up the developer's real hooks/contexts/config.
+/// A single device: a vault path + password + an isolated HOME/config so the
+/// CLI never picks up the developer's real hooks/contexts/config and each
+/// device gets its own on-disk SRP-session credential file.
 struct Device {
     vault: PathBuf,
     password: String,
     home: tempfile::TempDir,
-    /// The account Secret Key (Emergency-Kit string). Captured from the
-    /// init output on first use, or set from the inviter during pairing.
+    /// The account Secret Key (`A4-…` Emergency-Kit string). Captured from
+    /// signup on device A, or adopted from A when a second device logs in.
     secret_key: std::sync::Mutex<Option<String>>,
 }
 
@@ -130,38 +137,22 @@ impl Device {
     fn new(dir: &Path, name: &str) -> Self {
         Self {
             vault: dir.join(format!("{name}.tockvault")),
-            password: format!("pw-{name}"),
+            password: ACCOUNT_PASSWORD.to_string(),
             home: tempfile::tempdir().expect("home tmp dir"),
             secret_key: std::sync::Mutex::new(None),
         }
     }
 
     /// The captured account Secret Key, if this device has been initialised
-    /// (or paired) yet.
+    /// (or has adopted the account owner's) yet.
     fn secret_key(&self) -> Option<String> {
         self.secret_key.lock().expect("secret-key lock").clone()
     }
 
-    /// Adopt an account Secret Key (e.g. the inviter's, when joining an
-    /// existing account during pairing).
+    /// Adopt an account Secret Key (e.g. the owner's, when a second device
+    /// logs in to the same account).
     fn set_secret_key(&self, key: String) {
         *self.secret_key.lock().expect("secret-key lock") = Some(key);
-    }
-
-    /// Capture the Emergency-Kit string printed by `init` on first use so
-    /// later commands can open the vault (2SKD needs password + Secret Key).
-    fn capture_secret_key(&self, stdout: &str) {
-        let mut guard = self.secret_key.lock().expect("secret-key lock");
-        if guard.is_some() {
-            return;
-        }
-        if let Some(kit) = stdout
-            .lines()
-            .map(str::trim)
-            .find(|line| line.starts_with("A4-"))
-        {
-            *guard = Some(kit.to_string());
-        }
     }
 
     fn command(&self) -> Command {
@@ -172,6 +163,11 @@ impl Device {
             .env("HOME", self.home.path())
             .env("USERPROFILE", self.home.path())
             .env("XDG_CONFIG_HOME", self.home.path().join(".config"))
+            // Route SRP session credentials to a per-config-dir file instead
+            // of the single shared OS keyring slot, so the two devices don't
+            // clobber each other's session (and CI headless boxes have no
+            // secret service).
+            .env("TOCK_NO_KEYRING", "1")
             .env_remove("TOCK_SERVER");
         if let Some(secret_key) = self.secret_key() {
             cmd.env("TOCK_SECRET_KEY", secret_key);
@@ -190,9 +186,19 @@ impl Device {
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr),
         );
-        let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
-        self.capture_secret_key(&stdout);
-        stdout
+        String::from_utf8(output.stdout).expect("utf8 stdout")
+    }
+
+    /// Run `tock <args>` expecting a **failure**, returning stderr for
+    /// inspection. Panics if the command unexpectedly succeeds.
+    fn run_expecting_failure(&self, args: &[&str]) -> String {
+        let output = self.command().args(args).output().expect("spawn tock");
+        assert!(
+            !output.status.success(),
+            "tock {args:?} unexpectedly succeeded\nstdout:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+        );
+        String::from_utf8_lossy(&output.stderr).into_owned()
     }
 
     /// The non-deleted tasks this vault currently sees, as JSON.
@@ -219,6 +225,11 @@ impl Device {
     }
 }
 
+/// Path to the freshly built `tock` binary, provided by Cargo.
+const fn tock_bin() -> &'static str {
+    env!("CARGO_BIN_EXE_tock")
+}
+
 #[derive(Debug, Deserialize)]
 struct TaskRow {
     sid: u32,
@@ -226,166 +237,55 @@ struct TaskRow {
     status: String,
 }
 
-// ── Interactive onboarding orchestration ─────────────────────────────
+// ── Account signup / login orchestration ─────────────────────────────
 
-/// Pair `acceptor` to `inviter`'s vault by driving the real two-sided
-/// `tock onboard invite` / `tock onboard accept` handshake, shuttling the
-/// out-of-band values between the two processes exactly as a human would.
-fn pair(server: &str, inviter: &Device, acceptor: &Device) {
-    // The acceptor joins the inviter's account, so it unlocks with the same
-    // account Secret Key. Adopt it up front: `onboard accept` reads it from
-    // `TOCK_SECRET_KEY` (set by `command()`) to bind the new device's vault
-    // to the same account, and later commands reuse it to open the vault.
-    let inviter_secret_key = inviter
-        .secret_key()
-        .expect("inviter must be initialised before pairing");
-    acceptor.set_secret_key(inviter_secret_key);
-
-    // 1. Start the inviter. It prints its --vault-id / --inviter-pubkey /
-    //    --inviter-fingerprint, then blocks reading the acceptor's values
-    //    from stdin.
-    let mut invite = inviter
-        .command()
-        .args(["onboard", "invite", "--server", server])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn onboard invite");
-
-    let invite_out = spawn_line_reader(invite.stdout.take().expect("invite stdout"));
-    let inviter_vals = collect_values(
-        &invite_out,
-        &["--vault-id", "--inviter-pubkey", "--inviter-fingerprint"],
-        STEP_TIMEOUT,
-    );
-
-    // 2. Start the acceptor with the inviter's values. It prints its own
-    //    public key / fingerprint / device id, then polls for the blob.
-    let mut accept = acceptor
-        .command()
-        .args([
-            "onboard",
-            "accept",
-            "--server",
-            server,
-            "--vault-id",
-            &inviter_vals["--vault-id"],
-            "--inviter-pubkey",
-            &inviter_vals["--inviter-pubkey"],
-            "--inviter-fingerprint",
-            &inviter_vals["--inviter-fingerprint"],
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn onboard accept");
-
-    let accept_out = spawn_line_reader(accept.stdout.take().expect("accept stdout"));
-    let acceptor_vals = collect_values(
-        &accept_out,
-        &[
-            "Acceptor public key",
-            "Acceptor fingerprint",
-            "Acceptor device id",
-        ],
-        STEP_TIMEOUT,
-    );
-
-    // 3. Feed the acceptor's values into the inviter's stdin prompts (in
-    //    the order the inviter reads them).
-    {
-        let mut stdin = invite.stdin.take().expect("invite stdin");
-        writeln!(stdin, "{}", acceptor_vals["Acceptor public key"]).expect("write pubkey");
-        writeln!(stdin, "{}", acceptor_vals["Acceptor fingerprint"]).expect("write fp");
-        writeln!(stdin, "{}", acceptor_vals["Acceptor device id"]).expect("write dev id");
-        // Dropping stdin closes the pipe.
+/// Sign `device` up for a brand-new account against `server`. Returns the
+/// `A4-…` Secret Key and the `TOCK1:` Setup Code printed in the Emergency
+/// Kit, and adopts the Secret Key on the device so subsequent vault-opening
+/// commands can unlock.
+fn signup(server: &str, device: &Device, email: &str) -> Signup {
+    let out = device.run(&["account", "signup", "--server", server, "--email", email]);
+    let secret_key = find_token(&out, "A4-")
+        .unwrap_or_else(|| panic!("no `A4-` Secret Key in signup output:\n{out}"));
+    let setup_code = find_token(&out, "TOCK1:")
+        .unwrap_or_else(|| panic!("no `TOCK1:` Setup Code in signup output:\n{out}"));
+    device.set_secret_key(secret_key.clone());
+    Signup {
+        secret_key,
+        setup_code,
     }
-
-    // 4. Both sides should now complete: the inviter uploads the wrapped
-    //    vault key, the acceptor's poll picks it up and builds its vault.
-    let inv_status = wait_or_kill(&mut invite, STEP_TIMEOUT, "onboard invite");
-    let acc_status = wait_or_kill(&mut accept, STEP_TIMEOUT, "onboard accept");
-    assert!(inv_status.success(), "onboard invite exited {inv_status:?}");
-    assert!(acc_status.success(), "onboard accept exited {acc_status:?}");
 }
 
-/// Read a child's stdout line-by-line into a channel on its own thread,
-/// so the main thread never blocks on a half-written prompt line.
-fn spawn_line_reader(stdout: std::process::ChildStdout) -> Receiver<String> {
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let reader = BufReader::new(stdout);
-        for line in reader.lines() {
-            let Ok(line) = line else { break };
-            if tx.send(line).is_err() {
-                break;
-            }
-        }
-    });
-    rx
+/// The one-time artifacts a signup surfaces for adding another device.
+struct Signup {
+    secret_key: String,
+    setup_code: String,
 }
 
-/// Collect, for each `key`, the last whitespace token of the first line
-/// containing that key. Bounded by `timeout`.
-fn collect_values(
-    rx: &Receiver<String>,
-    keys: &[&str],
-    timeout: Duration,
-) -> HashMap<String, String> {
-    let mut out: HashMap<String, String> = HashMap::new();
-    let deadline = Instant::now() + timeout;
-    while out.len() < keys.len() {
-        let remaining = deadline
-            .checked_duration_since(Instant::now())
-            .unwrap_or_default();
-        match rx.recv_timeout(remaining) {
-            Ok(line) => {
-                for key in keys {
-                    if !out.contains_key(*key)
-                        && line.contains(key)
-                        && let Some(value) = line.split_whitespace().last()
-                    {
-                        out.insert((*key).to_string(), value.to_string());
-                    }
-                }
-            }
-            Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => {
-                panic!("timed out collecting {keys:?}; got {out:?}");
-            }
-        }
-    }
-    out
+/// Log `device` in to an existing account using the owner's `TOCK1:` Setup
+/// Code (which carries server + email + Secret Key). The device adopts the
+/// account Secret Key so it can unlock the materialised vault afterwards.
+fn login_with_setup_code(device: &Device, signup: &Signup) {
+    device.set_secret_key(signup.secret_key.clone());
+    device.run(&["account", "login", "--setup-code", &signup.setup_code]);
 }
 
-/// Poll a child to completion, killing it if it overruns `timeout`.
-fn wait_or_kill(child: &mut Child, timeout: Duration, name: &str) -> ExitStatus {
-    let deadline = Instant::now() + timeout;
-    loop {
-        match child.try_wait().expect("try_wait") {
-            Some(status) => return status,
-            None if Instant::now() >= deadline => {
-                let _ = child.kill();
-                let _ = child.wait();
-                panic!("{name} timed out after {timeout:?}");
-            }
-            None => std::thread::sleep(Duration::from_millis(50)),
-        }
-    }
+/// The first whitespace-delimited token in `output` starting with `prefix`.
+/// Both the `A4-…` Secret Key and the `TOCK1:…` Setup Code are single,
+/// space-free tokens, so this cleanly extracts them from the kit text.
+fn find_token(output: &str, prefix: &str) -> Option<String> {
+    output
+        .split_whitespace()
+        .find(|tok| tok.starts_with(prefix))
+        .map(str::to_string)
 }
 
 // ── Tests ────────────────────────────────────────────────────────────
 
-/// Full happy path: two CLI vaults sync through one server and converge,
-/// and the server only ever stores ciphertext.
-///
-/// Ignored since #130: self-hosted sync now mandates an authenticated SRP
-/// session on every sync/onboarding route, but the `tock` CLI HTTP
-/// transport does not yet perform the client-side SRP login (that lands in
-/// #120). Re-enable once the CLI authenticates; the server-side
-/// authenticated round-trip is covered by `tock-server/tests/srp_sync.rs`.
+/// Full happy path: device A signs up, device B logs in with A's Setup Code,
+/// their two CLI vaults sync through one server and converge — and the server
+/// only ever stores ciphertext.
 #[test]
-#[ignore = "needs CLI client-side SRP login (#120); see tock-server/tests/srp_sync.rs"]
 fn two_device_sync_converges_and_server_stores_only_ciphertext() {
     let server = TestServer::start();
     let dir = tempfile::tempdir().expect("work dir");
@@ -396,20 +296,22 @@ fn two_device_sync_converges_and_server_stores_only_ciphertext() {
     // may ever appear in the server's stored blobs.
     let markers = ["AlphaTaskZZ", "CanaryZZ", "BetaTaskZZ", "BetaEditedZZ"];
 
-    // Device A: create the vault, add two tasks, push to the server.
+    // Device A: create the account + vault, add two tasks, push to the server.
+    let signup = signup(&server.base_url, &a, "alice@example.com");
     a.run(&["add", "AlphaTaskZZ"]);
     a.run(&["add", "CanaryZZ"]);
     a.run(&["sync", "--server", &server.base_url]);
 
-    // Pair device B via the real interactive onboarding handshake; B pulls
-    // the existing history during onboarding.
-    pair(&server.base_url, &a, &b);
+    // Device B: log in with A's Setup Code (fetches the vault header and
+    // materialises the local vault), then sync to pull the existing history.
+    login_with_setup_code(&b, &signup);
+    b.run(&["sync", "--server", &server.base_url]);
 
     let pending = b
         .tasks()
         .into_iter()
         .find(|t| t.title == "CanaryZZ")
-        .expect("B pulled Canary during onboarding")
+        .expect("B pulled Canary on first sync")
         .status;
     assert_eq!(b.title_status().len(), 2, "B should have A's two tasks");
 
@@ -469,12 +371,7 @@ fn two_device_sync_converges_and_server_stores_only_ciphertext() {
 
 /// Concurrent edits to the same field on two devices must surface a
 /// conflict for review — no silent last-write-wins (ADR-003).
-///
-/// Ignored since #130 for the same reason as the convergence test above:
-/// the CLI HTTP transport does not yet authenticate (client-side SRP login
-/// is #120). Server-side authz is covered by `tock-server/tests/srp_sync.rs`.
 #[test]
-#[ignore = "needs CLI client-side SRP login (#120); see tock-server/tests/srp_sync.rs"]
 fn concurrent_same_field_edits_surface_a_conflict() {
     let server = TestServer::start();
     let dir = tempfile::tempdir().expect("work dir");
@@ -482,9 +379,12 @@ fn concurrent_same_field_edits_surface_a_conflict() {
     let b = Device::new(dir.path(), "b");
 
     // Shared starting point: one task known to both devices.
+    let signup = signup(&server.base_url, &a, "alice@example.com");
     a.run(&["add", "GammaZZ"]);
     a.run(&["sync", "--server", &server.base_url]);
-    pair(&server.base_url, &a, &b);
+
+    login_with_setup_code(&b, &signup);
+    b.run(&["sync", "--server", &server.base_url]);
     assert!(b.tasks().iter().any(|t| t.title == "GammaZZ"));
 
     // Both devices edit the SAME field (title) while neither has seen the
@@ -522,6 +422,37 @@ fn concurrent_same_field_edits_surface_a_conflict() {
     assert!(
         after.contains("No unresolved conflicts"),
         "conflict still listed after resolve:\n{after}"
+    );
+}
+
+/// The client path must not reach a self-hosted server unauthenticated: a
+/// `tock sync` from a device that never signed in / logged in is rejected
+/// with a `401`, surfaced as a CLI error (no partial, unauthenticated write).
+#[test]
+fn unauthenticated_sync_is_rejected_with_401() {
+    let server = TestServer::start();
+    let dir = tempfile::tempdir().expect("work dir");
+    let solo = Device::new(dir.path(), "solo");
+
+    // Create a local vault WITHOUT any account signup/login, so no SRP
+    // session credentials are ever stored. `tock add` auto-initialises the
+    // vault and prints the Emergency Kit; capture the Secret Key so the
+    // follow-up `sync` can unlock the vault before it hits the network.
+    let init_out = solo.run(&["add", "LonelyTaskZZ"]);
+    let secret_key = find_token(&init_out, "A4-")
+        .unwrap_or_else(|| panic!("no `A4-` Secret Key in init output:\n{init_out}"));
+    solo.set_secret_key(secret_key);
+
+    let stderr = solo.run_expecting_failure(&["sync", "--server", &server.base_url]);
+    assert!(
+        stderr.contains("401"),
+        "expected an unauthenticated 401 rejection, got stderr:\n{stderr}"
+    );
+
+    // The server must not have persisted any event from the rejected client.
+    assert!(
+        server.stored_blobs().is_empty(),
+        "server stored events from an unauthenticated client"
     );
 }
 

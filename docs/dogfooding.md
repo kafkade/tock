@@ -6,7 +6,9 @@ device over the real onboarding handshake, and verify a round-trip
 (including how conflicts surface). It is the manual companion to the
 automated acceptance test in
 [`crates/tock-cli/tests/e2e_sync.rs`](../crates/tock-cli/tests/e2e_sync.rs),
-which exercises this exact loop in CI.
+which exercises the same end-to-end loop in CI — setting up the second
+device with `tock account signup` / `tock account login` (the account flow
+from #129) rather than the manual onboarding handshake below.
 
 Everything below is **end-to-end encrypted**: the server only ever stores
 opaque ciphertext. Your password and vault key never leave your devices
