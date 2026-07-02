@@ -358,6 +358,10 @@ impl Filterable for TaskFilterableView<'_> {
         self.task.start_date.as_deref()
     }
 
+    fn scheduled_for(&self) -> Option<&str> {
+        self.task.scheduled_for.as_deref()
+    }
+
     fn is_evening(&self) -> bool {
         self.task.evening
     }

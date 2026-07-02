@@ -36,6 +36,8 @@ struct TaskImport {
     #[serde(default)]
     start_date: Option<String>,
     #[serde(default)]
+    scheduled_for: Option<String>,
+    #[serde(default)]
     tags: Vec<String>,
     #[serde(default)]
     udas: BTreeMap<String, serde_json::Value>,
@@ -70,6 +72,7 @@ pub fn import_tasks(conn: &Connection, json: &str) -> Result<usize, tock_storage
             priority: import.priority.as_deref().and_then(Priority::from_str_opt),
             deadline: import.deadline.clone(),
             start_date: import.start_date.clone(),
+            scheduled_for: import.scheduled_for.clone(),
             tags: import.tags.clone(),
             udas: UdaValues(import.udas.clone()),
             evening: import.evening,

@@ -118,6 +118,8 @@ pub struct TockTask {
     pub start_date: Option<String>,
     /// Hard deadline.
     pub deadline: Option<String>,
+    /// Planned calendar slot (`YYYY-MM-DD` or `YYYY-MM-DDTHH:MM`).
+    pub scheduled_for: Option<String>,
     /// Recurrence specification (JSON).
     pub recurrence: Option<String>,
     /// Priority level.
@@ -443,6 +445,8 @@ pub struct TockNewTask {
     pub start_date: Option<String>,
     /// Deadline.
     pub deadline: Option<String>,
+    /// Planned calendar slot (`YYYY-MM-DD` or `YYYY-MM-DDTHH:MM`).
+    pub scheduled_for: Option<String>,
     /// Recurrence specification (JSON).
     pub recurrence: Option<String>,
     /// Priority.
@@ -492,6 +496,10 @@ pub struct TockTaskPatch {
     pub deadline: Option<String>,
     /// Clear deadline.
     pub clear_deadline: bool,
+    /// New scheduled slot (`YYYY-MM-DD` or `YYYY-MM-DDTHH:MM`).
+    pub scheduled_for: Option<String>,
+    /// Clear scheduled slot.
+    pub clear_scheduled: bool,
     /// New priority.
     pub priority: Option<TockPriority>,
     /// Clear priority.

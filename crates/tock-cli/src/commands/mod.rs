@@ -79,6 +79,22 @@ pub enum Commands {
         /// Dependency SID.
         from: u32,
     },
+    /// Schedule a task for a calendar slot (day or day+time you plan to work on it).
+    ///
+    /// Accepts natural-language dates/times, e.g. `tomorrow`, `friday 9am`,
+    /// `2026-06-01`, `2026-06-01T14:30`.
+    Schedule {
+        /// Task SID.
+        sid: u32,
+        /// When to schedule it (natural-language date/time).
+        #[arg(trailing_var_arg = true, num_args = 1..)]
+        when: Vec<String>,
+    },
+    /// Clear a task's scheduled slot.
+    Unschedule {
+        /// Task SID.
+        sid: u32,
+    },
     /// Manage a task's checklist items (sub-task checkboxes).
     #[command(alias = "cl")]
     Checklist(checklist::ChecklistArgs),
@@ -152,6 +168,15 @@ pub enum Commands {
     Config(config::ConfigArgs),
     /// List available views.
     Views,
+    /// Show the day's agenda: scheduled tasks interleaved with time blocks.
+    ///
+    /// Defaults to today. Accepts a natural-language day, e.g. `tomorrow`,
+    /// `friday`, or `2026-06-01`.
+    Agenda {
+        /// Day to show (natural-language date). Defaults to today.
+        #[arg(trailing_var_arg = true, num_args = 0..)]
+        when: Vec<String>,
+    },
     /// Launch the interactive terminal user interface.
     Tui,
     /// Generate shell completion scripts.

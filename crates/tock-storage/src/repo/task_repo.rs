@@ -19,7 +19,7 @@ use tock_core::domain::uda::UdaValues;
 use tock_core::domain::urgency::{UrgencyConfig, UrgencyInput, calculate};
 
 const ENTITY_KIND: &str = "task";
-const SELECT_TASK_SQL: &str = "SELECT id, sid, title, notes, status, area_id, project_id, heading_id, parent_id, start_date, deadline, recurrence, priority, evening, udas, urgency_cache, created_at, modified_at, done_at, cancelled_at, deleted_at FROM tasks";
+const SELECT_TASK_SQL: &str = "SELECT id, sid, title, notes, status, area_id, project_id, heading_id, parent_id, start_date, deadline, scheduled_for, recurrence, priority, evening, udas, urgency_cache, created_at, modified_at, done_at, cancelled_at, deleted_at FROM tasks";
 
 /// Insert a new task row, attach its tags, and return the stored task.
 ///
@@ -42,8 +42,8 @@ pub fn insert(conn: &Connection, input: &NewTask, urgency: &UrgencyConfig) -> Re
          )
          VALUES (
              ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8,
-             ?9, ?10, ?11, NULL, ?12, ?13, ?14, ?15,
-             0.0, ?16, ?17, ?18, ?19, NULL
+             ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16,
+             0.0, ?17, ?18, ?19, ?20, NULL
          )",
         params![
             uuid_to_blob(id),
@@ -57,6 +57,7 @@ pub fn insert(conn: &Connection, input: &NewTask, urgency: &UrgencyConfig) -> Re
             input.parent_id.map(uuid_to_blob),
             input.start_date,
             input.deadline,
+            input.scheduled_for,
             input.recurrence,
             bool_to_int(input.evening),
             input.priority.map(priority_to_storage),
@@ -262,6 +263,10 @@ pub fn update(
         .deadline
         .clone()
         .unwrap_or_else(|| existing.deadline.clone());
+    let scheduled_for = patch
+        .scheduled_for
+        .clone()
+        .unwrap_or_else(|| existing.scheduled_for.clone());
     let priority = patch.priority.unwrap_or(existing.priority);
     let evening = patch.evening.unwrap_or(existing.evening);
     let mut udas = existing.udas.clone();
@@ -288,13 +293,14 @@ pub fn update(
              heading_id = ?6,
              start_date = ?7,
              deadline = ?8,
-             priority = ?9,
-             evening = ?10,
-             udas = ?11,
-             modified_at = ?12,
-             done_at = ?13,
-             cancelled_at = ?14
-         WHERE sid = ?15",
+             scheduled_for = ?9,
+             priority = ?10,
+             evening = ?11,
+             udas = ?12,
+             modified_at = ?13,
+             done_at = ?14,
+             cancelled_at = ?15
+         WHERE sid = ?16",
         params![
             title,
             notes,
@@ -304,6 +310,7 @@ pub fn update(
             heading_id.map(uuid_to_blob),
             start_date,
             deadline,
+            scheduled_for,
             priority.map(priority_to_storage),
             bool_to_int(evening),
             udas_json,
@@ -472,6 +479,7 @@ fn read_task_row(conn: &Connection, row: &Row<'_>) -> Result<Task, Error> {
         )?,
         start_date: row.get("start_date")?,
         deadline: row.get("deadline")?,
+        scheduled_for: row.get("scheduled_for")?,
         recurrence: row.get("recurrence")?,
         priority: priority_raw.as_deref().map(parse_priority).transpose()?,
         evening: parse_bool(evening_raw)?,
@@ -638,6 +646,7 @@ fn spawn_next_recurrence(
             parent_id: Some(template_id),
             start_date: None,
             deadline: Some(next_deadline.clone()),
+            scheduled_for: None,
             recurrence: existing.recurrence.clone(),
             priority: existing.priority,
             evening: existing.evening,
@@ -696,6 +705,46 @@ mod tests {
             .expect("fetch task")
             .expect("task exists");
         assert_eq!(fetched.udas.get_str("effort").as_deref(), Some("3"));
+    }
+
+    #[test]
+    fn inserts_reads_updates_and_clears_scheduled_for() {
+        let conn = test_conn();
+
+        // Insert with a timed schedule slot and confirm it round-trips.
+        let mut new_task = sample_new_task();
+        new_task.scheduled_for = Some(String::from("2026-06-20T14:30"));
+        let task = insert(&conn, &new_task, &UrgencyConfig::default()).expect("insert task");
+        assert_eq!(task.scheduled_for.as_deref(), Some("2026-06-20T14:30"));
+
+        let fetched = get_by_sid(&conn, task.sid)
+            .expect("fetch task")
+            .expect("task exists");
+        assert_eq!(fetched.scheduled_for.as_deref(), Some("2026-06-20T14:30"));
+
+        // Update to an all-day slot.
+        let patch = TaskPatch {
+            scheduled_for: Some(Some(String::from("2026-07-01"))),
+            ..TaskPatch::default()
+        };
+        let updated =
+            update(&conn, task.sid, &patch, &UrgencyConfig::default()).expect("update schedule");
+        assert_eq!(updated.scheduled_for.as_deref(), Some("2026-07-01"));
+
+        // A patch that leaves scheduled_for untouched preserves the value.
+        let noop = TaskPatch::default();
+        let unchanged =
+            update(&conn, task.sid, &noop, &UrgencyConfig::default()).expect("noop update");
+        assert_eq!(unchanged.scheduled_for.as_deref(), Some("2026-07-01"));
+
+        // Clear the schedule slot.
+        let clear = TaskPatch {
+            scheduled_for: Some(None),
+            ..TaskPatch::default()
+        };
+        let cleared =
+            update(&conn, task.sid, &clear, &UrgencyConfig::default()).expect("clear schedule");
+        assert_eq!(cleared.scheduled_for, None);
     }
 
     #[test]

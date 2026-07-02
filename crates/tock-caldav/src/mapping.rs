@@ -412,6 +412,7 @@ mod tests {
             parent_id: None,
             start_date: Some("2026-06-01".into()),
             deadline: Some("2026-06-15".into()),
+            scheduled_for: None,
             recurrence: None,
             priority: Some(Priority::High),
             evening: true,

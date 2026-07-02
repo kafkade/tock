@@ -127,6 +127,9 @@ fn format_task_detail_table(task: &Task) -> String {
     if let Some(ref start_date) = task.start_date {
         lines.push(format!("  Start:    {start_date}"));
     }
+    if let Some(ref scheduled) = task.scheduled_for {
+        lines.push(format!("  Scheduled: {scheduled}"));
+    }
     if !task.tags.is_empty() {
         let tag_str = task
             .tags
@@ -205,6 +208,9 @@ fn format_task_compact(task: &Task) -> String {
     if let Some(deadline) = task.deadline.as_deref() {
         let _ = write!(line, " due:{deadline}");
     }
+    if let Some(scheduled) = task.scheduled_for.as_deref() {
+        let _ = write!(line, " sched:{scheduled}");
+    }
     if !task.tags.is_empty() {
         let tags = task
             .tags
@@ -255,6 +261,7 @@ mod tests {
             parent_id: None,
             start_date: None,
             deadline: Some(String::from("2026-06-01")),
+            scheduled_for: None,
             recurrence: None,
             priority: Some(Priority::High),
             evening: false,

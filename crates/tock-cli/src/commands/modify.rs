@@ -1,7 +1,9 @@
 //! `tock mod` — modify an existing task.
 
-use tock_core::domain::tag::{parse_deadline, parse_priority, parse_sigils};
+use tock_core::domain::tag::{parse_deadline, parse_priority, parse_scheduled, parse_sigils};
 use tock_core::domain::task::{Priority, TaskPatch};
+
+use super::add::resolve_scheduled;
 
 /// Parse modification arguments into a `TaskPatch`.
 #[must_use]
@@ -9,6 +11,7 @@ pub fn parse_modify_args(args: &[String]) -> TaskPatch {
     let raw = args.join(" ");
     let (text, add_tags, remove_tags) = parse_sigils(&raw);
     let (text, prio_char) = parse_priority(&text);
+    let (text, scheduled) = parse_scheduled(&text);
     let (remaining, deadline) = parse_deadline(&text);
 
     let mut patch = TaskPatch {
@@ -22,6 +25,13 @@ pub fn parse_modify_args(args: &[String]) -> TaskPatch {
     }
     if let Some(d) = deadline {
         patch.deadline = Some(Some(d));
+    }
+    if let Some(s) = scheduled {
+        // Resolve through the NL date/time parser, falling back to the raw
+        // token if it can't be understood. Clearing a slot is done via the
+        // dedicated `unschedule` command.
+        let resolved = resolve_scheduled(&s).unwrap_or(s);
+        patch.scheduled_for = Some(Some(resolved));
     }
 
     if let Some(title_val) = extract_field(&remaining, "title") {
@@ -68,5 +78,16 @@ mod tests {
 
         assert_eq!(patch.set_udas["owner"], serde_json::json!("sam"));
         assert_eq!(patch.set_udas["effort"], serde_json::json!("5"));
+    }
+
+    #[test]
+    fn parses_scheduled_sigil() {
+        let args = vec![String::from("sched:2026-06-01T09:00")];
+        let patch = parse_modify_args(&args);
+
+        assert_eq!(
+            patch.scheduled_for,
+            Some(Some("2026-06-01T09:00".to_string()))
+        );
     }
 }

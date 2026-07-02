@@ -561,6 +561,7 @@ mod tests {
             parent_id: None,
             start_date: None,
             deadline: None,
+            scheduled_for: None,
             recurrence: None,
             priority: Some(Priority::Medium),
             evening: false,
