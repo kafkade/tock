@@ -11,6 +11,7 @@ pub mod checklist;
 pub mod focus;
 pub mod habit;
 pub mod heading;
+pub mod idle;
 pub mod project;
 pub mod recurrence;
 pub mod report;

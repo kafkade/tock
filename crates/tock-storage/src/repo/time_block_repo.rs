@@ -95,6 +95,42 @@ pub fn stop(conn: &Connection, sid: u32) -> Result<TimeBlock, Error> {
     get_by_sid(conn, sid)?.ok_or(Error::NotFound)
 }
 
+/// Stop the running time block identified by `sid` at an explicit `end_ts`.
+///
+/// Used by idle resolution to truncate a block back to the moment activity was
+/// last observed.
+///
+/// # Errors
+/// Returns [`crate::Error::NotFound`] if the block does not exist,
+/// [`crate::Error::InvalidState`] if it is already stopped or `end_ts`
+/// precedes the block's start, and [`crate::Error::Core`] if the timestamp
+/// cannot be formatted.
+pub fn stop_at(conn: &Connection, sid: u32, end_ts: OffsetDateTime) -> Result<TimeBlock, Error> {
+    let existing = get_by_sid(conn, sid)?.ok_or(Error::NotFound)?;
+    if !existing.is_running() {
+        return Err(Error::InvalidState("time block is already stopped"));
+    }
+    if end_ts < existing.start_ts {
+        return Err(Error::InvalidState("time block end precedes start"));
+    }
+
+    let end_text = format_timestamp(end_ts)?;
+    let now_text = format_timestamp(OffsetDateTime::now_utc())?;
+    let rows_affected = conn.execute(
+        "UPDATE time_blocks
+         SET end_ts = ?1,
+             modified_at = ?2
+         WHERE sid = ?3 AND end_ts IS NULL",
+        params![end_text, now_text, i64::from(sid)],
+    )?;
+
+    if rows_affected == 0 {
+        return Err(Error::InvalidState("time block is already stopped"));
+    }
+
+    get_by_sid(conn, sid)?.ok_or(Error::NotFound)
+}
+
 /// Fetch the currently running block, if any.
 ///
 /// # Errors
@@ -387,4 +423,77 @@ fn read_time_block_row(row: &Row<'_>) -> Result<TimeBlock, Error> {
 
 fn parse_block_source(raw: &str) -> Result<BlockSource, Error> {
     BlockSource::from_str_opt(raw).ok_or_else(super::invalid_encoding)
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use super::{get_by_sid, insert, stop_at};
+    use crate::Error;
+    use crate::migrations;
+    use rusqlite::Connection;
+    use time::{Duration, OffsetDateTime};
+    use tock_core::domain::time_block::{BlockSource, NewTimeBlock};
+
+    fn conn() -> Connection {
+        let mut conn = Connection::open_in_memory().unwrap();
+        migrations::migrate(&mut conn).unwrap();
+        conn
+    }
+
+    fn new_block() -> NewTimeBlock {
+        NewTimeBlock {
+            title: String::from("writing"),
+            task_id: None,
+            project_id: None,
+            notes: None,
+            source: BlockSource::Timer,
+        }
+    }
+
+    #[test]
+    fn stop_at_truncates_end() {
+        let conn = conn();
+        let block = insert(&conn, &new_block()).unwrap();
+        let end = block.start_ts + Duration::minutes(10);
+        let stopped = stop_at(&conn, block.sid, end).unwrap();
+        assert_eq!(stopped.end_ts, Some(end));
+        assert_eq!(stopped.duration(), Some(Duration::minutes(10)));
+        // Reloading confirms the truncation persisted.
+        assert_eq!(
+            get_by_sid(&conn, block.sid).unwrap().unwrap().end_ts,
+            Some(end)
+        );
+    }
+
+    #[test]
+    fn stop_at_rejects_end_before_start() {
+        let conn = conn();
+        let block = insert(&conn, &new_block()).unwrap();
+        let before = block.start_ts - Duration::minutes(1);
+        assert!(matches!(
+            stop_at(&conn, block.sid, before),
+            Err(Error::InvalidState(_))
+        ));
+    }
+
+    #[test]
+    fn stop_at_rejects_already_stopped() {
+        let conn = conn();
+        let block = insert(&conn, &new_block()).unwrap();
+        let end = block.start_ts + Duration::minutes(5);
+        stop_at(&conn, block.sid, end).unwrap();
+        assert!(matches!(
+            stop_at(&conn, block.sid, end + Duration::minutes(1)),
+            Err(Error::InvalidState(_))
+        ));
+    }
+
+    #[test]
+    fn stop_at_unknown_sid_is_not_found() {
+        let conn = conn();
+        let now = OffsetDateTime::now_utc();
+        assert!(matches!(stop_at(&conn, 999, now), Err(Error::NotFound)));
+    }
 }

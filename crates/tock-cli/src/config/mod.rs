@@ -217,13 +217,48 @@ impl Default for Habits {
 }
 
 /// `[time]`
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Time {
     /// Allow overlapping time blocks.
     pub allow_overlap: bool,
     /// Mark new blocks billable by default.
     pub billable_default: bool,
+    /// Detect idle time on an active timer (in-terminal heartbeat).
+    pub idle_detection: bool,
+    /// Idle threshold in minutes; gaps at or above this are treated as idle.
+    /// Accepts an integer number of minutes or a duration string (`"5m"`).
+    #[serde(with = "duration::minutes")]
+    pub idle_threshold: u32,
+    /// Default idle resolution: `prompt`, `keep`, `discard`, or `split`.
+    pub idle_default: String,
+}
+
+impl Default for Time {
+    fn default() -> Self {
+        Self {
+            allow_overlap: false,
+            billable_default: false,
+            idle_detection: true,
+            idle_threshold: 5,
+            idle_default: String::from("prompt"),
+        }
+    }
+}
+
+impl Time {
+    /// Idle threshold as a [`time::Duration`].
+    #[must_use]
+    pub fn idle_threshold_duration(&self) -> time::Duration {
+        time::Duration::minutes(i64::from(self.idle_threshold))
+    }
+
+    /// The configured default idle resolution, or `None` when the user should
+    /// be prompted (`idle_default = "prompt"` or an unrecognized value).
+    #[must_use]
+    pub fn idle_default_resolution(&self) -> Option<tock_core::domain::idle::IdleResolution> {
+        tock_core::domain::idle::IdleResolution::from_str_opt(&self.idle_default)
+    }
 }
 
 /// `[focus]` — Pomodoro defaults. Durations accept an integer number of
@@ -638,6 +673,39 @@ mod tests {
         assert_eq!(
             config.reports.get("standup").map(|r| r.columns.len()),
             Some(2)
+        );
+    }
+
+    #[test]
+    fn time_idle_defaults_and_overrides() {
+        use tock_core::domain::idle::IdleResolution;
+
+        // Defaults when [time] is absent.
+        let config = parse("").unwrap();
+        assert!(config.time.idle_detection);
+        assert_eq!(config.time.idle_threshold, 5);
+        assert_eq!(
+            config.time.idle_threshold_duration(),
+            time::Duration::minutes(5)
+        );
+        assert_eq!(config.time.idle_default, "prompt");
+        assert_eq!(config.time.idle_default_resolution(), None);
+
+        // Overrides, including a duration-string threshold.
+        let config = parse(
+            r#"
+            [time]
+            idle_detection = false
+            idle_threshold = "10m"
+            idle_default = "discard"
+            "#,
+        )
+        .unwrap();
+        assert!(!config.time.idle_detection);
+        assert_eq!(config.time.idle_threshold, 10);
+        assert_eq!(
+            config.time.idle_default_resolution(),
+            Some(IdleResolution::Discard)
         );
     }
 

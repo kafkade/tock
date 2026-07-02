@@ -122,6 +122,14 @@ time-stopped-duration = Stopped #{ $sid } — { $title } ({ $duration })
 time-no-timer = No timer running
 time-resumed = Resumed #{ $sid } — { $title }
 time-current-running = #{ $sid } — { $title } (running { $duration })
+# Idle detection prompts and outcomes.
+time-idle-detected = You appear to have been idle for { $duration }.
+time-idle-prompt = Keep, discard, or split the idle time? [k/d/s] (default keep):{ " " }
+time-idle-invalid = Please answer k (keep), d (discard), or s (split).
+time-idle-kept = Kept { $duration } of idle time.
+time-idle-discarded = Discarded { $duration } of idle time.
+time-idle-split = Split { $duration } of idle time into a separate block.
+time-idle-block-title = { $title } (idle)
 # Column headers for time blocks table.
 time-blocks-col-sid = SID
 time-blocks-col-title = Title

@@ -200,6 +200,10 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     let conn = vault.connection();
     let active_context = load_active_context(conn)?;
 
+    // In-terminal idle detection: read the heartbeat recorded by the previous
+    // invocation before this command runs, then refresh it afterwards.
+    let prior_activity = tock_storage::repo::activity_repo::get_last_activity(conn)?;
+
     // Snapshot the domain state before any mutating command so it can be
     // reverted by `tock undo`. Read-only commands return `None` here.
     let undo_label = undoable_label(command);
@@ -208,7 +212,15 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         None => None,
     };
 
-    let result = dispatch_command(conn, command, cli, &cfg, &urgency, active_context.as_ref());
+    let result = dispatch_command(
+        conn,
+        command,
+        cli,
+        &cfg,
+        &urgency,
+        active_context.as_ref(),
+        prior_activity,
+    );
 
     // Record the change set on the undo stack when a mutating command
     // succeeded and actually changed something.
@@ -218,6 +230,10 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         let after = tock_storage::undo::snapshot(conn)?;
         let _ = tock_storage::undo::record(conn, &label, before, after)?;
     }
+
+    // Refresh the activity heartbeat for the next invocation's idle check.
+    let _ = tock_storage::repo::activity_repo::touch(conn, time::OffsetDateTime::now_utc());
+
     result
 }
 
@@ -230,6 +246,7 @@ fn dispatch_command(
     cfg: &config::Config,
     urgency: &tock_core::domain::urgency::UrgencyConfig,
     active_context: Option<&ActiveContext>,
+    prior_activity: Option<time::OffsetDateTime>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     #![allow(clippy::too_many_lines)]
     match command {
@@ -254,8 +271,8 @@ fn dispatch_command(
         Commands::Tag(args) => run_tag_cmd(conn, &args.command),
         Commands::Report(args) => run_report_cmd(conn, &args.command, active_context),
         Commands::Context(args) => run_context_cmd(conn, &args.command),
-        Commands::Time(args) => run_time_cmd(conn, &args.command),
-        Commands::Focus(args) => run_focus_cmd(conn, &args.command, cfg),
+        Commands::Time(args) => run_time_cmd(conn, &args.command, &cfg.time, prior_activity),
+        Commands::Focus(args) => run_focus_cmd(conn, &args.command, cfg, prior_activity),
         Commands::Habit(args) => run_habit_cmd(conn, &args.command),
         Commands::Uda(args) => run_uda_cmd(conn, &args.command, cfg),
         Commands::Checklist(args) => run_checklist_cmd(conn, &args.command),
@@ -1905,6 +1922,7 @@ fn run_focus_cmd(
     conn: &Connection,
     cmd: &commands::focus::FocusCommand,
     cfg: &config::Config,
+    prior_activity: Option<time::OffsetDateTime>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     match cmd {
         FocusCommand::Start {
@@ -1922,7 +1940,7 @@ fn run_focus_cmd(
             *long_break,
             &cfg.focus,
         ),
-        FocusCommand::Done => run_focus_done(conn),
+        FocusCommand::Done => run_focus_done(conn, &cfg.time, prior_activity),
         FocusCommand::SkipBreak => run_focus_skip_break(conn),
         FocusCommand::Pause => run_focus_pause(conn),
         FocusCommand::Resume => run_focus_resume(conn),
@@ -1991,14 +2009,18 @@ fn run_focus_start(
     Ok(())
 }
 
-fn run_focus_done(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
+fn run_focus_done(
+    conn: &Connection,
+    time_cfg: &config::Time,
+    prior_activity: Option<time::OffsetDateTime>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let Some(active) = tock_storage::repo::focus_repo::get_active(conn)? else {
         println!("{}", tr!("focus-none-active"));
         return Ok(());
     };
 
     let session = tock_storage::repo::focus_repo::complete_cycle(conn, active.sid)?;
-    log_focus_time_block(conn, &active)?;
+    log_focus_time_block(conn, &active, time_cfg, prior_activity)?;
     if session.state.is_terminal() {
         notify(
             &tr!("focus-notify-complete-title"),
@@ -2228,18 +2250,38 @@ fn run_focus_history(conn: &Connection, task_sid: u32) -> Result<(), Box<dyn std
 fn log_focus_time_block(
     conn: &Connection,
     session: &tock_core::domain::focus::FocusSession,
+    time_cfg: &config::Time,
+    prior_activity: Option<time::OffsetDateTime>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let end_ts = time::OffsetDateTime::now_utc();
     let start_ts = end_ts - time::Duration::minutes(i64::from(session.config.work_minutes));
     let title = focus_time_block_title(conn, session)?;
-    let block = tock_core::domain::time_block::NewTimeBlock {
-        title,
-        task_id: session.task_id,
-        project_id: session.project_id,
-        notes: None,
-        source: tock_core::domain::time_block::BlockSource::Pomodoro,
-    };
-    let _ = tock_storage::repo::time_block_repo::insert_completed(conn, &block, start_ts, end_ts)?;
+
+    // Idle detection: trim (or split out) any idle tail of the work interval so
+    // an unattended Pomodoro doesn't over-count focused time.
+    let decision = resolve_idle_decision(time_cfg, start_ts, prior_activity, end_ts)?;
+    let block_end = decision.as_ref().map_or(end_ts, |d| d.outcome.block_end);
+
+    if block_end > start_ts {
+        let block = tock_core::domain::time_block::NewTimeBlock {
+            title,
+            task_id: session.task_id,
+            project_id: session.project_id,
+            notes: None,
+            source: tock_core::domain::time_block::BlockSource::Pomodoro,
+        };
+        let _ = tock_storage::repo::time_block_repo::insert_completed(
+            conn, &block, start_ts, block_end,
+        )?;
+    }
+
+    if let Some(d) = &decision {
+        if let Some(spill) = d.outcome.spillover {
+            let source_title = focus_time_block_title(conn, session)?;
+            record_idle_block(conn, &source_title, session.task_id, spill)?;
+        }
+        print_idle_outcome(d);
+    }
     Ok(())
 }
 
@@ -2259,10 +2301,12 @@ fn focus_time_block_title(
 fn run_time_cmd(
     conn: &Connection,
     cmd: &commands::time::TimeCommand,
+    time_cfg: &config::Time,
+    prior_activity: Option<time::OffsetDateTime>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     match cmd {
         TimeCommand::Start { words } => run_time_start(conn, words),
-        TimeCommand::Stop => run_time_stop(conn),
+        TimeCommand::Stop => run_time_stop(conn, time_cfg, prior_activity),
         TimeCommand::Resume => run_time_resume(conn),
         TimeCommand::Current => run_time_current(conn),
         TimeCommand::Blocks { period, json } => run_time_blocks(conn, period, *json),
@@ -2323,23 +2367,190 @@ fn run_time_start(conn: &Connection, words: &[String]) -> Result<(), Box<dyn std
     Ok(())
 }
 
-fn run_time_stop(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
-    if let Some(running) = tock_storage::repo::time_block_repo::get_current(conn)? {
-        let block = tock_storage::repo::time_block_repo::stop(conn, running.sid)?;
-        let duration = block.duration().map_or_else(String::new, format_duration);
-        println!(
-            "{}",
-            tr!(
-                "time-stopped-duration",
-                sid = i64::from(block.sid),
-                title = block.title.as_str(),
-                duration = duration.as_str()
-            )
-        );
-    } else {
+fn run_time_stop(
+    conn: &Connection,
+    time_cfg: &config::Time,
+    prior_activity: Option<time::OffsetDateTime>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let Some(running) = tock_storage::repo::time_block_repo::get_current(conn)? else {
         println!("{}", tr!("time-no-timer"));
+        return Ok(());
+    };
+
+    let now = time::OffsetDateTime::now_utc();
+    let decision = resolve_idle_decision(time_cfg, running.start_ts, prior_activity, now)?;
+
+    let block = match &decision {
+        Some(d) if d.resolution != tock_core::domain::idle::IdleResolution::Keep => {
+            let block = tock_storage::repo::time_block_repo::stop_at(
+                conn,
+                running.sid,
+                d.outcome.block_end,
+            )?;
+            if let Some(spill) = d.outcome.spillover {
+                record_idle_block(conn, &running.title, running.task_id, spill)?;
+            }
+            block
+        }
+        _ => tock_storage::repo::time_block_repo::stop(conn, running.sid)?,
+    };
+
+    let duration = block.duration().map_or_else(String::new, format_duration);
+    println!(
+        "{}",
+        tr!(
+            "time-stopped-duration",
+            sid = i64::from(block.sid),
+            title = block.title.as_str(),
+            duration = duration.as_str()
+        )
+    );
+    if let Some(d) = &decision {
+        print_idle_outcome(d);
     }
     Ok(())
+}
+
+/// The result of evaluating idle time against a running/just-closed block.
+struct IdleDecision {
+    /// The detected idle interval.
+    interval: tock_core::domain::idle::IdleInterval,
+    /// The resolution chosen (from config or an interactive prompt).
+    resolution: tock_core::domain::idle::IdleResolution,
+    /// How the block should be adjusted.
+    outcome: tock_core::domain::idle::IdleOutcome,
+}
+
+/// What to do about a detected idle interval before touching storage.
+enum IdleAction {
+    /// Apply a resolution without prompting.
+    Use(tock_core::domain::idle::IdleResolution),
+    /// Ask the user interactively.
+    Prompt,
+}
+
+/// Decide how to act on a detected idle interval: honor the configured default
+/// when set, otherwise prompt on an interactive terminal or fall back to
+/// keeping the time (never silently discard) when non-interactive.
+const fn idle_action(
+    default: Option<tock_core::domain::idle::IdleResolution>,
+    interactive: bool,
+) -> IdleAction {
+    match default {
+        Some(resolution) => IdleAction::Use(resolution),
+        None if interactive => IdleAction::Prompt,
+        None => IdleAction::Use(tock_core::domain::idle::IdleResolution::Keep),
+    }
+}
+
+/// Detect and resolve idle time for a block spanning `[block_start, now]`.
+///
+/// Returns `None` when idle detection is disabled, there is no heartbeat, or the
+/// idle gap is below the configured threshold.
+fn resolve_idle_decision(
+    time_cfg: &config::Time,
+    block_start: time::OffsetDateTime,
+    prior_activity: Option<time::OffsetDateTime>,
+    now: time::OffsetDateTime,
+) -> Result<Option<IdleDecision>, Box<dyn std::error::Error>> {
+    use std::io::IsTerminal;
+    use tock_core::domain::idle;
+
+    if !time_cfg.idle_detection {
+        return Ok(None);
+    }
+    let Some(last) = prior_activity else {
+        return Ok(None);
+    };
+    // Idle can't begin before the block itself started.
+    let effective_last = last.max(block_start);
+    let Some(interval) = idle::detect(effective_last, now, time_cfg.idle_threshold_duration())
+    else {
+        return Ok(None);
+    };
+
+    let interactive = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
+    let resolution = match idle_action(time_cfg.idle_default_resolution(), interactive) {
+        IdleAction::Use(resolution) => resolution,
+        IdleAction::Prompt => prompt_idle_resolution(interval)?,
+    };
+
+    let outcome = idle::resolve(now, interval, resolution);
+    Ok(Some(IdleDecision {
+        interval,
+        resolution,
+        outcome,
+    }))
+}
+
+/// Prompt the user to keep / discard / split a detected idle interval.
+/// An empty line or EOF keeps the time (the safe default).
+fn prompt_idle_resolution(
+    interval: tock_core::domain::idle::IdleInterval,
+) -> Result<tock_core::domain::idle::IdleResolution, Box<dyn std::error::Error>> {
+    use std::io::Write;
+    use tock_core::domain::idle::IdleResolution;
+
+    let duration = format_duration(interval.duration());
+    println!(
+        "{}",
+        tr!("time-idle-detected", duration = duration.as_str())
+    );
+    loop {
+        print!("{}", tr!("time-idle-prompt"));
+        std::io::stdout().flush()?;
+        let mut line = String::new();
+        if std::io::stdin().read_line(&mut line)? == 0 {
+            return Ok(IdleResolution::Keep);
+        }
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            return Ok(IdleResolution::Keep);
+        }
+        if let Some(resolution) = IdleResolution::from_str_opt(trimmed) {
+            return Ok(resolution);
+        }
+        println!("{}", tr!("time-idle-invalid"));
+    }
+}
+
+/// Record a detected idle interval as a separate, manually-sourced block so the
+/// time is preserved but not counted as focused work.
+fn record_idle_block(
+    conn: &Connection,
+    source_title: &str,
+    task_id: Option<Uuid>,
+    interval: tock_core::domain::idle::IdleInterval,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if interval.end <= interval.start {
+        return Ok(());
+    }
+    let block = tock_core::domain::time_block::NewTimeBlock {
+        title: tr!("time-idle-block-title", title = source_title),
+        task_id,
+        project_id: None,
+        notes: None,
+        source: tock_core::domain::time_block::BlockSource::Manual,
+    };
+    tock_storage::repo::time_block_repo::insert_completed(
+        conn,
+        &block,
+        interval.start,
+        interval.end,
+    )?;
+    Ok(())
+}
+
+/// Print a one-line summary of how idle time was resolved.
+fn print_idle_outcome(decision: &IdleDecision) {
+    use tock_core::domain::idle::IdleResolution;
+    let duration = format_duration(decision.interval.duration());
+    let message = match decision.resolution {
+        IdleResolution::Keep => tr!("time-idle-kept", duration = duration.as_str()),
+        IdleResolution::Discard => tr!("time-idle-discarded", duration = duration.as_str()),
+        IdleResolution::Split => tr!("time-idle-split", duration = duration.as_str()),
+    };
+    println!("{message}");
 }
 
 fn run_time_resume(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
@@ -3931,9 +4142,34 @@ impl tock_parse::filter::Filterable for TaskFilterable<'_> {
 #[cfg(test)]
 #[allow(clippy::expect_used)]
 mod cli_tests {
-    use super::{Cli, undoable_label};
+    use super::{Cli, IdleAction, idle_action, undoable_label};
     use crate::commands::Commands;
     use clap::CommandFactory as _;
+    use tock_core::domain::idle::IdleResolution;
+
+    /// A configured default resolution is used verbatim, regardless of TTY.
+    #[test]
+    fn idle_action_uses_configured_default() {
+        assert!(matches!(
+            idle_action(Some(IdleResolution::Discard), false),
+            IdleAction::Use(IdleResolution::Discard)
+        ));
+        assert!(matches!(
+            idle_action(Some(IdleResolution::Split), true),
+            IdleAction::Use(IdleResolution::Split)
+        ));
+    }
+
+    /// With no default, an interactive terminal prompts and a non-interactive
+    /// one falls back to keeping the time (never silently discards).
+    #[test]
+    fn idle_action_prompts_or_keeps_without_default() {
+        assert!(matches!(idle_action(None, true), IdleAction::Prompt));
+        assert!(matches!(
+            idle_action(None, false),
+            IdleAction::Use(IdleResolution::Keep)
+        ));
+    }
 
     /// Validate the full clap command tree, including the new `sync`,
     /// `onboard`, and `device` subcommands and their arguments.
