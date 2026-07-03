@@ -59,4 +59,4 @@ Each sync event payload is encrypted with AES-256-GCM using its unique IK, a ran
 - Rotating VK requires full vault re-encryption (a `tock vault rotate` operation).
 
 **Neutral:**
-- Depends on audited crates: `aes-gcm`, `argon2`, `x25519-dalek`, `hkdf`. Security relies on their correctness and our implementation discipline.
+- Depends on audited crates: `aes-gcm`, `argon2`, `x25519-dalek`, `hkdf`. Security relies on their correctness and our implementation discipline. Note that these *primitives* are independently audited but tock's **composition** of them (this design) is **not yet** — see [ADR-015](ADR-015-pre-1.0-security-audit-status.md) for the pre-1.0 unaudited-status decision and the scope of the intended external review.

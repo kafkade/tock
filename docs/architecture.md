@@ -1291,6 +1291,14 @@ platform keystore on signed-in devices.
 - **Side channels in third-party crypto crates** — we rely on `aes-gcm`, `argon2`, `x25519-dalek` audits and CI advisory checks.
 - **Forward secrecy of historical events** — past events remain decryptable with VK; rotating VK requires full re-encryption (a `tock vault rotate` operation).
 
+**Assurance level (independent review):** the guarantees above are *design
+intent*, not externally verified claims. As of 1.0, tock's own protocol and
+implementation are **unaudited (pre-audit)** — only the underlying RustCrypto
+primitives have had external review, not tock's composition of them. This is a
+deliberate, documented decision ([ADR-015](adr/ADR-015-pre-1.0-security-audit-status.md));
+the scope of the intended external review is published in
+[docs/security/audit-scope.md](security/audit-scope.md).
+
 ### 5.6 SRP-6a authentication
 
 We use SRP-6a (RFC 5054) over a 4096-bit safe-prime group with SHA-256. Per

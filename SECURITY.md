@@ -1,5 +1,39 @@
 # Security Policy
 
+## Audit status: unaudited (pre-audit)
+
+> **tock's own cryptographic protocol and implementation have not yet been
+> independently audited.** As of 1.0, only the underlying
+> [RustCrypto](https://github.com/RustCrypto) *primitives* tock builds on have
+> had external review — tock's **composition** of them (key hierarchy, 2SKD,
+> vault format & AEAD usage, the SRP-6a handshake and channel binding, the sync
+> protocol, and the server's zero-knowledge claims) has **not** been reviewed by
+> an external party.
+
+This is a deliberate, documented decision for 1.0, not an oversight — see
+[ADR-015](docs/adr/ADR-015-pre-1.0-security-audit-status.md). Most real-world
+cryptographic failures are composition and protocol errors rather than broken
+primitives, so "built on audited crates" is **not** the same as "audited
+product." We are being explicit about that distinction so you can make an
+informed choice.
+
+**What this means for your threat model.** tock's marketed guarantees
+(end-to-end encryption, zero-knowledge sync server, two-secret key derivation)
+are designed in good faith and documented in the ADRs and the
+[threat model](docs/architecture.md#55-threat-model), but they have not been
+independently verified. If your use case requires an externally attested
+cryptographic guarantee, treat tock as **pre-audit** and weigh that accordingly.
+
+**Our commitment.** We have scoped an external crypto/security review — the full
+surface list, artifacts, and findings process are published in the
+[audit scoping brief](docs/security/audit-scope.md) — and we intend to commission
+it, track and remediate findings, and publish a summary/attestation. This
+"unaudited (pre-audit)" notice will be **updated when that review lands**, not
+quietly removed beforehand.
+
+If you have the expertise to review any of the surfaces in the scoping brief, we
+welcome it — please coordinate via the private reporting channel below.
+
 ## Supported Versions
 
 | Version | Supported          |
@@ -57,7 +91,8 @@ Security issues in tock may include:
 
 ## Cryptographic Details
 
-tock uses audited [RustCrypto](https://github.com/RustCrypto) crates exclusively:
+tock defines **no custom cryptographic primitives**. It uses audited
+[RustCrypto](https://github.com/RustCrypto) crates exclusively:
 
 - **AES-256-GCM** for symmetric encryption (aes-gcm crate)
 - **Argon2id** for password-based key derivation (argon2 crate)
@@ -65,8 +100,12 @@ tock uses audited [RustCrypto](https://github.com/RustCrypto) crates exclusively
 - **SRP-6a** for zero-knowledge authentication (srp crate)
 - **X25519** for key exchange (x25519-dalek crate)
 
-No custom cryptographic primitives are used. All key types implement `Zeroize`
-and `ZeroizeOnDrop` for memory safety.
+All key types implement `Zeroize` and `ZeroizeOnDrop` for memory safety.
+
+> **Note:** These *primitives* are independently audited; tock's **protocol and
+> its composition of them are not yet** (see
+> [Audit status](#audit-status-unaudited-pre-audit) above). Using audited
+> building blocks does not by itself guarantee the assembly is correct.
 
 ## Encryption at Rest
 
