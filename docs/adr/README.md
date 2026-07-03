@@ -9,7 +9,7 @@ This directory contains Architecture Decision Records for the Tock project. Each
 | [ADR-001](ADR-001-rust-zero-io-core.md) | Rust with zero-I/O core crate | Accepted |
 | [ADR-002](ADR-002-end-to-end-encryption.md) | End-to-end encryption with per-item envelope encryption | Accepted (amended by ADR-011) |
 | [ADR-003](ADR-003-event-sourced-sync.md) | Event-sourced sync with vector clocks | Accepted |
-| [ADR-004](ADR-004-sqlite-app-layer-encryption.md) | SQLite with app-layer encryption | Accepted |
+| [ADR-004](ADR-004-sqlite-app-layer-encryption.md) | SQLite with app-layer encryption | Accepted (amended by ADR-014) |
 | [ADR-005](ADR-005-platform-bindings.md) | Platform bindings via UniFFI and WASM | Accepted |
 | [ADR-006](ADR-006-licensing-dual-license.md) | Licensing — Apache-2.0 core, AGPL-3.0 server | Accepted |
 | [ADR-007](ADR-007-monetization-open-core.md) | Monetization — Open core with paid hosted sync | Accepted |
@@ -19,6 +19,7 @@ This directory contains Architecture Decision Records for the Tock project. Each
 | [ADR-011](ADR-011-account-based-self-host-two-secret-auth.md) | Account-based self-host with two-secret (1Password-style) auth | Accepted (2SKD core landed in #126; format break ratified by ADR-013) |
 | [ADR-012](ADR-012-client-account-onboarding.md) | Client account onboarding — Emergency Kit, Setup Code, shared orchestration | Accepted |
 | [ADR-013](ADR-013-vault-format-versioning-policy.md) | Vault format versioning & 1.0 compatibility policy | Accepted |
+| [ADR-014](ADR-014-at-rest-encryption-app-layer-aead.md) | At-rest encryption — app-layer AEAD for 1.0, SQLCipher deferred | Accepted (amends ADR-004) |
 
 ## Categories
 
@@ -31,9 +32,11 @@ This directory contains Architecture Decision Records for the Tock project. Each
 ### Security & Privacy
 
 - ADR-002: End-to-end encryption design
+- ADR-004: At-rest storage encryption (app-layer AEAD; SQLCipher deferred)
 - ADR-010: Zero-knowledge authentication
 - ADR-011: Account-based self-host with two-secret (1Password-style) auth
 - ADR-013: Vault format versioning & 1.0 compatibility policy
+- ADR-014: At-rest encryption — app-layer AEAD for 1.0, SQLCipher deferred
 
 ### Synchronization
 

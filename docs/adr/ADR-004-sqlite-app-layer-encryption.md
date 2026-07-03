@@ -1,7 +1,19 @@
 # ADR-004: SQLite with app-layer encryption
 
-**Status:** Accepted  
+**Status:** Accepted (amended by [ADR-014](ADR-014-at-rest-encryption-app-layer-aead.md))
 **Date:** 2026-05-20
+
+> **Amended by [ADR-014](ADR-014-at-rest-encryption-app-layer-aead.md).** The
+> *Decision* below specifies **bundled SQLCipher** (page-level AES-256-CBC keyed
+> by VK) for CLI at-rest encryption. The build that ships for 1.0 does **not**
+> use SQLCipher: it stores a **plain SQLite** file whose sensitive payloads are
+> encrypted at the **application layer** with `tock-crypto` (AES-256-GCM AEAD),
+> marked `storage_layout = "sqlite-plain-app-aead-v0"`. ADR-014 ratifies that
+> shipped approach as the 1.0 at-rest decision, records the trade-off versus
+> SQLCipher, and moves SQLCipher to a tracked **post-1.0** enhancement. Read the
+> SQLCipher references in this ADR as the *deferred target*, not shipped 1.0
+> behavior. Everything else here (SQLite engine, no-ORM/typed rows, migrations,
+> UDA storage, indexes, concurrency) stands unchanged.
 
 ## Context
 
@@ -20,7 +32,7 @@ NoSQL stores (e.g., IndexedDB alone) lack expressive query support. Cloud-native
 Tock uses **SQLite with app-layer encryption**:
 
 **Storage layer:**
-- CLI: `rusqlite` with bundled SQLCipher (AES-256-CBC page-level encryption, keyed by VK).
+- CLI: `rusqlite` with bundled SQLCipher (AES-256-CBC page-level encryption, keyed by VK). *(Deferred post-1.0 per [ADR-014](ADR-014-at-rest-encryption-app-layer-aead.md); 1.0 ships plain SQLite with app-layer AEAD.)*
 - WASM: `tock-storage-web` using IndexedDB with the same schema (encrypted blobs).
 
 **Schema strategy:**
@@ -52,12 +64,12 @@ Single-writer, multiple-reader (SQLite default). Vault locked at process level; 
 
 **Positive:**
 - SQLite is mature, well-tested, and available on all platforms.
-- SQLCipher provides transparent page-level encryption (OS-level disk theft protection).
+- SQLCipher provides transparent page-level encryption (OS-level disk theft protection). *(Deferred post-1.0 — see [ADR-014](ADR-014-at-rest-encryption-app-layer-aead.md); 1.0 protects sensitive payloads with app-layer AEAD instead.)*
 - Rich query support (date arithmetic, JSON extraction, FTS5 for future full-text search).
 - Migrations embedded in code ensure version consistency.
 
 **Negative:**
-- SQLCipher adds ~10% overhead vs. unencrypted SQLite (acceptable trade-off).
+- SQLCipher adds ~10% overhead vs. unencrypted SQLite (acceptable trade-off). *(Not incurred in 1.0 — SQLCipher is deferred; see [ADR-014](ADR-014-at-rest-encryption-app-layer-aead.md).)*
 - WASM storage (IndexedDB) requires shimming SQLite semantics (manageable for Tock's query patterns).
 - Virtual columns for UDAs must be declared before indexing (one-time `ALTER TABLE` per UDA).
 

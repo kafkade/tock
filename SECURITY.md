@@ -68,6 +68,46 @@ tock uses audited [RustCrypto](https://github.com/RustCrypto) crates exclusively
 No custom cryptographic primitives are used. All key types implement `Zeroize`
 and `ZeroizeOnDrop` for memory safety.
 
+## Encryption at Rest
+
+tock 1.0 protects data at rest with **application-layer AEAD**, not full-database
+(SQLCipher) encryption. This is the ratified 1.0 decision — see
+[ADR-014](docs/adr/ADR-014-at-rest-encryption-app-layer-aead.md), which amends
+[ADR-004](docs/adr/ADR-004-sqlite-app-layer-encryption.md). The on-disk format is
+marked `storage_layout = "sqlite-plain-app-aead-v0"`.
+
+The local vault is a **plain SQLite** file. Confidential data is encrypted with
+AES-256-GCM under a key derived from the Vault Key (VK) **before** it is written:
+
+- **Event payloads** (task, habit, time-block, and focus contents, notes, etc.)
+  are sealed with per-item keys and domain-separated AAD.
+- **Per-device signing keys** are AEAD-wrapped under a VK-derived key.
+- **VK itself is never stored in the clear** — it is wrapped under the MEK, which
+  is derived from the two-secret Unlock Root Key (password **and** 128-bit Secret
+  Key, Argon2id-hardened; see
+  [ADR-011](docs/adr/ADR-011-account-based-self-host-two-secret-auth.md)).
+
+**What at-rest AEAD protects:** the contents of your tasks, habits, time blocks,
+focus sessions, and notes. A stolen `.db` file yields only ciphertext for these,
+and cannot reveal VK without the password **and** the Secret Key.
+
+**What it does *not* protect (residual at-rest exposure):** because the database
+file is plain SQLite, a stolen file also exposes low-sensitivity **structure and
+metadata** — the schema and `PRAGMA user_version`, table/index layout, per-event
+timestamps and ordering, entity kinds and UUIDs, device IDs, and ciphertext sizes
+(mitigated by size-bucket padding). No plaintext payloads are exposed. For full
+at-rest file opacity today, run tock on top of OS full-disk encryption
+(FileVault, LUKS, or BitLocker).
+
+**SQLCipher (page-level, full-database encryption keyed by VK) is a planned
+post-1.0 enhancement**, tracked as a follow-up. When it lands it will reduce
+at-rest exposure to the fixed vault header, via an automatic in-place migration
+under [ADR-013](docs/adr/ADR-013-vault-format-versioning-policy.md).
+
+Note that tock's protection against a **hostile sync host** does not depend on
+at-rest storage encryption: sync events carry their own AEAD envelope, so the
+server only ever sees opaque ciphertext regardless of the local storage format.
+
 ## Thank You
 
 We appreciate responsible disclosure and will credit reporters (with their
