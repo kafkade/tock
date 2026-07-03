@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **At-rest encryption model ratified for 1.0** (#172): documented that 1.0
+  protects data at rest with **application-layer AEAD** — task, habit, time,
+  and focus payloads plus per-device keys are AES-256-GCM-encrypted under the
+  Vault Key before being written — rather than full-database SQLCipher
+  encryption. The local SQLite file is plain, so a stolen database exposes
+  structural metadata (schema, event timestamps/ordering, entity IDs, device
+  IDs, ciphertext sizes) but **no plaintext payloads**; for full at-rest file
+  opacity today, layer OS full-disk encryption. `SECURITY.md` and the threat
+  model now describe exactly what this does and does not protect, and
+  SQLCipher page-level encryption is captured as a tracked post-1.0
+  enhancement (#182) rather than an unmet commitment. See
+  [ADR-014](docs/adr/ADR-014-at-rest-encryption-app-layer-aead.md), which
+  amends [ADR-004](docs/adr/ADR-004-sqlite-app-layer-encryption.md).
+
 ### Changed
 
 - **Vault format 1.0 compatibility policy** (#171): ratified the pre-1.0

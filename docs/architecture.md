@@ -1085,8 +1085,10 @@ schemars = ["dep:schemars"]          # JSON schema generation
 # tock-storage
 [features]
 default = ["sqlite-bundled"]
-sqlite-bundled = ["rusqlite/bundled-sqlcipher-vendored-openssl"]
-sqlite-system  = ["rusqlite/sqlcipher"]
+sqlite-bundled = []                  # 1.0: plain rusqlite bundle; app-layer AEAD (ADR-014)
+# Deferred post-1.0 (SQLCipher page-level encryption — ADR-014):
+# sqlite-sqlcipher-bundled = ["rusqlite/bundled-sqlcipher-vendored-openssl"]
+# sqlite-sqlcipher-system  = ["rusqlite/sqlcipher"]
 
 # tock-cli
 [features]
@@ -1188,7 +1190,7 @@ Notes:
 
 ### 5.2 Vault format (`.kafvault`)
 
-Binary, little-endian, version-prefixed. Header is fixed at 256 bytes; body is the SQLite database file encrypted at the page level by SQLCipher (the bundled feature) keyed by VK.
+Binary, little-endian, version-prefixed. Header is fixed at 256 bytes; body is the SQLite database file. In the deferred SQLCipher-backed layout the body is encrypted at the page level by SQLCipher (the bundled feature) keyed by VK. **The 1.0 build ships the app-layer-AEAD layout** (`storage_layout = "sqlite-plain-app-aead-v0"`): a plain SQLite body whose sensitive payloads are AEAD-encrypted under VK (see §5.3), with page-level SQLCipher deferred post-1.0 per [ADR-014](adr/ADR-014-at-rest-encryption-app-layer-aead.md).
 
 ```
 Offset  Size  Field                  Notes
@@ -1213,7 +1215,7 @@ Offset  Size  Field                  Notes
 0x00DC   4    flags                  bit 1: padding_enabled (bit 0 has_recovery removed)
 0x00E0  32    _reserved
 0x0100   0    --- end of header (256 B) ---
-0x0100   N    sqlcipher database     SQLite file, page-encrypted with VK
+0x0100   N    sqlcipher database     SQLite file, page-encrypted with VK (deferred; 1.0 body is plain SQLite with app-layer AEAD payloads — ADR-014)
 ```
 
 The Secret Key (in any form) is **never** stored in the header — only `account_id` and
@@ -1227,7 +1229,7 @@ Header itself is integrity-protected: the AES-GCM operation that unwraps VK uses
 
 ### 5.3 Per-item encryption flow
 
-For event-sourced sync, the unit of encryption is the **event payload**, not the row. Local storage uses SQLCipher (VK-keyed) for at-rest protection; events carry their own AEAD envelope so they can transit untrusted servers.
+For event-sourced sync, the unit of encryption is the **event payload**, not the row. In 1.0 local storage is a plain SQLite database with **app-layer AEAD** on sensitive payloads (VK-keyed) for at-rest protection (SQLCipher page-level encryption deferred post-1.0 — [ADR-014](adr/ADR-014-at-rest-encryption-app-layer-aead.md)); events carry their own AEAD envelope so they can transit untrusted servers regardless of the local storage format.
 
 ```
 Encrypt event(entity_kind, entity_id, op, payload_json):
@@ -1274,7 +1276,7 @@ platform keystore on signed-in devices.
 **Protect against:**
 
 - **Server compromise / hostile sync host** — server only sees opaque events; can correlate metadata (event count, timing, sizes within buckets, device IDs) but cannot read content. SRP-6a means the server never sees the password or verifier-from-password.
-- **At-rest disk theft** — vault file encrypted at SQLCipher page level by VK; VK only reachable via the two-secret URK (password **and** 128-bit Secret Key, Argon2id-hardened).
+- **At-rest disk theft** — in 1.0, sensitive payloads (event contents, per-device keys) are app-layer AEAD-encrypted under VK; VK is only reachable via the two-secret URK (password **and** 128-bit Secret Key, Argon2id-hardened). The database file is plain SQLite, so **structural metadata is exposed at rest** (schema, per-event timestamps/ordering, entity kinds/UUIDs, device IDs, ciphertext sizes) — but no plaintext payloads. Deferred SQLCipher (page-level, VK-keyed) will shrink this to header-only exposure ([ADR-014](adr/ADR-014-at-rest-encryption-app-layer-aead.md)). For full at-rest file opacity today, layer OS full-disk encryption (FileVault/LUKS/BitLocker).
 - **Network MITM** — transport is TLS 1.3 (required); additionally, the SRP-6a session key is used to derive an authenticated channel binding so a TLS-stripping MITM still cannot impersonate.
 - **Sync replay / reorder** — events carry monotonic lamport + UUIDv7; storage rejects duplicates; AAD pins payload to `(entity, op, lamport, device)`.
 - **Stolen server database** — holds only the SRP verifier + ciphertext; offline-cracking the verifier additionally requires the 128-bit Secret Key (ADR-011), so it is infeasible regardless of password strength.
@@ -1551,7 +1553,7 @@ Existing device E                    New device N                     Server S
                                         N derives wrap_key (same)
                                         N decrypts → VK
 
-8. N stores header + opens empty SQLCipher DB keyed by VK
+8. N stores header + opens the vault DB keyed by VK (1.0: plain SQLite + app-layer AEAD; SQLCipher deferred — ADR-014)
    (N is already signed in to the account, so it has its own URK/MEK)
 
 9. N pulls latest snapshot + events from S, decrypts with VK, materializes state.
@@ -2882,7 +2884,7 @@ Eight phases. Each ships a usable artifact to keep dogfooding pressure high. Est
 - Workspace `Cargo.toml`, `rust-toolchain.toml` pinned, `cargo deny`, `cargo clippy -D warnings`, `cargo fmt --check` in CI.
 - CI/CD: GitHub Actions for Linux/macOS/Windows, code coverage, release artifacts (cargo-dist), signed binaries for macOS, Homebrew tap, Nix flake.
 - Crypto primitives wrapped (AES-256-GCM, Argon2id, HKDF-SHA256, X25519, Ed25519) behind `tock-crypto` crate with property tests.
-- Vault: SQLite + sqlcipher OR SQLite + app-layer encryption (decision in part 1 §3); migration framework.
+- Vault: SQLite + app-layer encryption shipped for 1.0 (`sqlite-plain-app-aead-v0`); SQLCipher deferred post-1.0 (decision resolved in [ADR-014](adr/ADR-014-at-rest-encryption-app-layer-aead.md)); migration framework.
 - Event log skeleton (append-only, signed, deterministic IDs).
 - `tracing`-based logging with redaction filter for vault data.
 - **Testable**: `tock vault init/unlock/lock/status` works; passes property tests; round-trips encrypted writes.
