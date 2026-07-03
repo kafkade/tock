@@ -73,6 +73,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   end-to-end test against a live `tock-server` (`TOCK_E2E=1`). The WASM bundle
   stays well under the 2 MB gzip budget.
 
+### Documentation
+
+- **1.0 readiness pass** (#177): validated the self-hosting quickstart against
+  the actual stack and fixed doc drift in
+  [`docs/self-hosting.md`](docs/self-hosting.md) — the CLI section now shows that
+  `tock account signup`/`login` take the password via `--password` /
+  `TOCK_PASSWORD` (they do not prompt) and that explicit `login` needs the Secret
+  Key via `--secret-key` / `TOCK_SECRET_KEY`. Updated `README.md` and
+  `SECURITY.md` to 1.0 maturity wording (supported-version line, ADR count),
+  while **keeping** the deliberate "unaudited (pre-audit)" audit stance (#173,
+  [ADR-015](docs/adr/ADR-015-pre-1.0-security-audit-status.md)). Added a clear
+  note in the README and the self-hosting guide that the native
+  iOS/iPadOS/macOS/watchOS apps are **not** part of 1.0 and arrive in a later
+  **1.x** GA, and re-verified the backup/restore + upgrade instructions against
+  `docker-compose.yml`.
+
 ## [0.5.0] - 2026-07-02
 
 ### Added

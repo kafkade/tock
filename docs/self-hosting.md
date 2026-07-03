@@ -31,7 +31,7 @@ instance. That's the whole loop.
 - [2. First-run setup + Emergency Kit](#2-first-run-setup--emergency-kit)
 - [3. Enable HTTPS (TLS)](#3-enable-https-tls)
 - [4. Connect the CLI](#4-connect-the-cli)
-- [5. Connect the iOS / macOS apps](#5-connect-the-ios--macos-apps)
+- [5. Connect the iOS / macOS apps (1.x)](#5-connect-the-ios--macos-apps-1x)
 - [6. Managing users](#6-managing-users)
 - [7. Self-service (your account)](#7-self-service-your-account)
 - [8. Operations](#8-operations)
@@ -140,16 +140,23 @@ drop-in samples. All three terminate TLS and forward to `tock-web`.
 ## 4. Connect the CLI
 
 Install the `tock` CLI (see the [README](../README.md)), then create or link an
-account against **your** instance:
+account against **your** instance. Your password is supplied via `--password` or
+the `TOCK_PASSWORD` env var — it is never stored or transmitted:
 
 ```sh
-# Create an account on your instance (prompts for a password):
+export TOCK_PASSWORD='your-password'   # or pass --password on each command
+
+# Create an account on your instance — prints your Emergency Kit + Secret Key:
 tock account signup --server https://tock.example.com --email you@example.com
 
-# ...or, on another device, sign in with your Secret Key / Setup Code:
-tock account login --server https://tock.example.com --email you@example.com
-# equivalently, paste the Setup Code from the wizard:
+# ...on another device, the simplest sign-in is the Setup Code from the wizard,
+# which bundles the server URL, email, and Secret Key in one string:
 tock account login --setup-code "TOCK1:…"
+
+# ...or sign in explicitly, supplying the Secret Key from your Emergency Kit
+# (via --secret-key or the TOCK_SECRET_KEY env var):
+tock account login --server https://tock.example.com --email you@example.com \
+  --secret-key "A4-…"
 
 tock account status          # shows who you're signed in as, and where
 ```
@@ -163,18 +170,19 @@ tock sync                    # push/pull encrypted events to your instance
 See [`docs/dogfooding.md`](dogfooding.md) for a full two-device round-trip
 walkthrough (including how conflicts surface).
 
-## 5. Connect the iOS / macOS apps
+## 5. Connect the iOS / macOS apps (1.x)
 
-The Apple apps use the same account model over
-[UniFFI](adr/ADR-005-platform-bindings.md). To point an app at your instance,
-enter your server URL (e.g. `https://tock.example.com`) during onboarding, or
-paste the **Setup Code** from the first-run wizard / `tock account` output —
-it bundles the server URL, email, and Secret Key so the app is configured in
-one step.
+> **The native Apple apps (iOS, iPadOS, macOS, watchOS) are not part of the 1.0
+> release — they arrive in a later 1.x GA.** For 1.0, drive your instance from
+> the CLI (above) or the web console. The cross-platform account/auth binding
+> the apps build on ([UniFFI](adr/ADR-005-platform-bindings.md)) already ships in
+> 1.0.
 
-> The SwiftUI onboarding flow is still landing; until then, use the CLI (above)
-> or the web console to drive your instance. The account/auth binding it builds
-> on is already in place.
+When the apps land, they will use the same account model: point an app at your
+instance by entering your server URL (e.g. `https://tock.example.com`) during
+onboarding, or paste the **Setup Code** from the first-run wizard / `tock
+account` output — it bundles the server URL, email, and Secret Key so the app is
+configured in one step.
 
 ## 6. Managing users
 
