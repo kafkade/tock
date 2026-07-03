@@ -4,6 +4,17 @@
 > and focus timer fused into a single end-to-end encrypted, local-first
 > system.
 
+## Security status: unaudited (pre-audit)
+
+tock's cryptography is built on audited
+[RustCrypto](https://github.com/RustCrypto) primitives, but tock's **own**
+protocol and implementation (key hierarchy, 2SKD, vault format, SRP-6a handshake,
+sync protocol, server zero-knowledge claims) have **not yet** been independently
+reviewed. This is a deliberate, documented 1.0 decision — see
+[SECURITY.md](SECURITY.md) and
+[ADR-015](docs/adr/ADR-015-pre-1.0-security-audit-status.md). Weigh this before
+trusting tock with high-sensitivity data.
+
 ## Features
 
 ### Task management

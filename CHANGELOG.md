@@ -11,6 +11,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **Pre-1.0 security audit status documented** (#173): tock 1.0 ships with an
+  explicit **"unaudited (pre-audit)"** disclosure. tock's own cryptographic
+  protocol and implementation (key hierarchy + 2SKD, vault format & AEAD usage,
+  the SRP-6a handshake + channel binding, the sync protocol, and the server's
+  zero-knowledge claims) have **not** yet been independently reviewed — only the
+  underlying RustCrypto primitives have. `SECURITY.md` and `README.md` now carry
+  a prominent audit-status notice, the threat model
+  (`docs/architecture.md` §5.5) records the assurance-level caveat, and an
+  auditor scoping brief is published at
+  [`docs/security/audit-scope.md`](docs/security/audit-scope.md) so an external
+  review can be commissioned as a hand-off. This is a deliberate, documented
+  decision — see
+  [ADR-015](docs/adr/ADR-015-pre-1.0-security-audit-status.md). The notice will
+  be updated (not silently removed) once a genuine review lands and its findings
+  are addressed.
+
 - **At-rest encryption model ratified for 1.0** (#172): documented that 1.0
   protects data at rest with **application-layer AEAD** — task, habit, time,
   and focus payloads plus per-device keys are AES-256-GCM-encrypted under the
