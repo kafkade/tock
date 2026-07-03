@@ -34,3 +34,10 @@ targets = [
 ]
 # Run `cargo dist plan` (not full build) for PR validation.
 pr-run-mode = "plan"
+
+# macOS code signing is handled directly by the hand-written
+# `.github/workflows/release.yml` (the "Sign and notarize macOS binary"
+# step), not by cargo-dist. We deliberately leave cargo-dist's `macos-sign`
+# unset/false here so it doesn't imply cargo-dist owns signing — revisit if
+# the release build ever migrates to cargo-dist. See
+# docs/distribution/README.md.

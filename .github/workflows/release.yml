@@ -64,6 +64,79 @@ jobs:
           fi
         shell: bash
 
+      # ── macOS code signing + notarization ──────────────────────────────────
+      # Signs the CLI binary with the Developer ID Application certificate
+      # (hardened runtime + secure timestamp) and notarizes it via notarytool.
+      # A bare Mach-O binary cannot be stapled, so we submit a zip of the
+      # signed binary; notarization registers the binary's cdhash with Apple,
+      # and Gatekeeper validates it online on first launch — no warning.
+      #
+      # Gated on the signing secrets being present so the workflow degrades
+      # gracefully (loud warning, unsigned artifact) until the Apple Developer
+      # ID cert + secrets are provisioned. See docs/distribution/README.md.
+      - name: Sign and notarize macOS binary
+        if: runner.os == 'macOS'
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_DEVELOPER_ID_APPLICATION_P12: ${{ secrets.APPLE_DEVELOPER_ID_APPLICATION_P12 }}
+          APPLE_DEVELOPER_ID_APPLICATION_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_APPLICATION_PASSWORD }}
+          APPLE_NOTARY_USER: ${{ secrets.APPLE_NOTARY_USER }}
+          APPLE_NOTARY_TEAM_ID: ${{ secrets.APPLE_NOTARY_TEAM_ID }}
+          APPLE_NOTARY_PASSWORD: ${{ secrets.APPLE_NOTARY_PASSWORD }}
+          BIN_PATH: target/${{ matrix.target }}/release/tock
+        run: |
+          set -euo pipefail
+
+          if [ -z "${APPLE_TEAM_ID:-}" ] || [ -z "${APPLE_DEVELOPER_ID_APPLICATION_P12:-}" ]; then
+            echo "::warning title=macOS signing skipped::Apple signing secrets not configured — shipping an UNSIGNED, un-notarized macOS binary. Provision the Developer ID cert + secrets (see docs/distribution/README.md) to enable."
+            exit 0
+          fi
+
+          KEYCHAIN="$RUNNER_TEMP/tock-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -base64 24)"
+          CERT_PATH="$RUNNER_TEMP/developer-id-application.p12"
+          NOTARIZE_ZIP="$RUNNER_TEMP/tock-notarize.zip"
+
+          cleanup() {
+            security delete-keychain "$KEYCHAIN" 2>/dev/null || true
+            rm -f "$CERT_PATH" "$NOTARIZE_ZIP"
+          }
+          trap cleanup EXIT
+
+          echo "── Creating temporary keychain ──"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+
+          echo "── Importing Developer ID Application certificate ──"
+          echo "$APPLE_DEVELOPER_ID_APPLICATION_P12" | base64 --decode > "$CERT_PATH"
+          security import "$CERT_PATH" -k "$KEYCHAIN" \
+            -P "$APPLE_DEVELOPER_ID_APPLICATION_PASSWORD" \
+            -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null
+          # Put the temp keychain first in the search list so codesign finds the identity.
+          security list-keychains -d user -s "$KEYCHAIN" \
+            $(security list-keychains -d user | sed s/\"//g)
+
+          SIGN_IDENTITY="Developer ID Application"
+          echo "── Code signing (hardened runtime + timestamp) ──"
+          codesign --force --options runtime --timestamp \
+            --keychain "$KEYCHAIN" \
+            --sign "$SIGN_IDENTITY" \
+            "$BIN_PATH"
+          codesign --verify --strict --verbose=2 "$BIN_PATH"
+
+          echo "── Notarizing ──"
+          ditto -c -k "$BIN_PATH" "$NOTARIZE_ZIP"
+          xcrun notarytool submit "$NOTARIZE_ZIP" \
+            --apple-id "$APPLE_NOTARY_USER" \
+            --team-id "$APPLE_NOTARY_TEAM_ID" \
+            --password "$APPLE_NOTARY_PASSWORD" \
+            --wait
+          echo "✅ Signed and notarized $BIN_PATH"
+        shell: bash
+
       - name: Package binary (unix)
         if: runner.os != 'Windows'
         run: |

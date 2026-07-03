@@ -41,6 +41,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [ADR-014](docs/adr/ADR-014-at-rest-encryption-app-layer-aead.md), which
   amends [ADR-004](docs/adr/ADR-004-sqlite-app-layer-encryption.md).
 
+### CI
+
+- **macOS code signing + notarization wired into releases** (#174): the
+  `build` job in [`release.yml`](.github/workflows/release.yml) now signs the
+  macOS `tock` CLI binary with the Developer ID Application certificate
+  (hardened runtime + secure timestamp) and notarizes it via `notarytool`, so
+  tagged releases can ship macOS artifacts that install without Gatekeeper
+  friction. The step is **gated on the Apple signing secrets**
+  (`APPLE_TEAM_ID`, `APPLE_DEVELOPER_ID_APPLICATION_P12` + password, and the
+  `APPLE_NOTARY_*` notary creds): until those are provisioned it emits a loud
+  warning and ships an unsigned binary, so the workflow never hard-fails
+  before the certificate exists. No workflow **job** names changed (only a
+  step was added), so branch protection in
+  `kafkade/github-infra:repo_tock.tf` needs no update. See
+  [`docs/distribution/README.md`](docs/distribution/README.md).
+
 ### Changed
 
 - **Vault format 1.0 compatibility policy** (#171): ratified the pre-1.0
