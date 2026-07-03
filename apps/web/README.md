@@ -5,6 +5,31 @@ authenticated sync) runs entirely in the browser via the `tock-wasm`
 (wasm-bindgen) binding over `tock-account`. HTTP lives at this edge per ADR-001;
 the SRP-6a / 2SKD math runs in WASM. See ADR-012.
 
+## Scope (1.0) — self-host admin + onboarding console
+
+For 1.0 the web surface is a **self-host admin + onboarding console**, not a full
+productivity web client. Its responsibilities are:
+
+- **Onboarding** — signup, first-run admin wizard, Emergency Kit + Setup Code,
+  and SRP login, all with the password/Secret Key crypto performed in-browser
+  (WASM); the server only ever receives ciphertext and an SRP verifier.
+- **Account self-service** — password rotation, device/session management, and
+  add-device Setup Codes for the signed-in user.
+- **Admin console** — user management and registration policy for the instance
+  operator (the first registrant is bootstrapped as admin).
+
+**Explicitly out of scope for 1.0 (future work):** a full productivity web
+client — there is **no task / habit / time-tracking / focus UI in the browser**.
+Those live in the CLI and Apple apps. The browser has no local SQLite vault yet,
+so it cannot decrypt vault events; the "tasks" view is only an authenticated
+smoke check. Bringing the WASM core's full CRUD to the browser is a post-1.0
+follow-up (see ADR-012).
+
+The critical self-host path (first-run admin → save Emergency Kit → SRP login →
+authenticated call, with **no secrets transmitted**) is covered by
+`test/smoke.selfhost.test.ts` (real WASM, runs in the `web` CI job) and, opt-in,
+by `test/e2e.selfhost.test.ts` against a live `tock-server` (`TOCK_E2E=1`).
+
 ## Develop
 
 ```sh

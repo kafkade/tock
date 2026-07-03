@@ -14,6 +14,15 @@ instance. That's the whole loop.
 > repository. The web console (`apps/web`) is Apache-2.0 and talks to the
 > server only over HTTP, so it ships as a **separate container** — it is a
 > separate work, not a derivative of the server.
+>
+> **Scope of the web console (1.0).** The browser surface is a self-host
+> **admin + onboarding console**: signup, the first-run admin wizard, Emergency
+> Kit + Setup Code, SRP login, account self-service (password rotation, device /
+> session management), and the admin console (users + registration policy). It
+> is **not** a full productivity web client — there is **no task, habit,
+> time-tracking, or focus UI in the browser** for 1.0; use the CLI or the Apple
+> apps for that. All password / Secret Key crypto runs client-side in WASM, so
+> the server only ever stores ciphertext.
 
 ## Contents
 
