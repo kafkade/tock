@@ -38,7 +38,7 @@ welcome it — please coordinate via the private reporting channel below.
 
 | Version | Supported          |
 |---------|--------------------|
-| 0.x     | :white_check_mark: |
+| 1.x     | :white_check_mark: |
 
 Only the latest release is supported with security updates.
 

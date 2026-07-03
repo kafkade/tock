@@ -15,6 +15,16 @@ reviewed. This is a deliberate, documented 1.0 decision — see
 [ADR-015](docs/adr/ADR-015-pre-1.0-security-audit-status.md). Weigh this before
 trusting tock with high-sensitivity data.
 
+## Platforms
+
+**1.0 ships the `tock` CLI plus the self-hostable server and its web
+onboarding/admin console.** The native Apple apps (iOS, iPadOS, macOS, watchOS)
+are **not** part of 1.0 — they arrive in a later **1.x** GA. The cross-platform
+account/auth binding they build on
+([UniFFI](docs/adr/ADR-005-platform-bindings.md)) already ships in 1.0, so for
+now tasks, habits, time tracking, and focus live in the CLI (and the web console
+for account/admin tasks).
+
 ## Features
 
 ### Task management
@@ -140,7 +150,7 @@ navigate, `Tab` to switch panes, `Enter` to select, `d` to complete,
 - **JSON import/export** — `tock export json`, `tock import json --file backup.json`
 - **Encrypted vault** — password-protected, AES-256-GCM per-event AEAD, Ed25519 signed event log
 - **Multi-device sync** — end-to-end encrypted sync through a self-hostable server; see the [dogfooding guide](docs/dogfooding.md)
-- **Self-hosting** — one-command Docker Compose stack with a web **admin + onboarding console** (first-run wizard, account self-service) and automatic TLS; the browser is not a full productivity client for 1.0 (tasks/habits/time live in the CLI and apps). See the [self-hosting guide](docs/self-hosting.md)
+- **Self-hosting** — one-command Docker Compose stack with a web **admin + onboarding console** (first-run wizard, account self-service) and automatic TLS; the browser is not a full productivity client for 1.0 (tasks/habits/time live in the CLI; the Apple apps arrive in 1.x). See the [self-hosting guide](docs/self-hosting.md)
 
 ## Install
 
@@ -174,11 +184,11 @@ tock/
 │   ├── tock-export/            # JSON exporter
 │   ├── tock-sync/              # event log, sync protocol (foundation)
 │   ├── tock-server/            # Axum sync server — AGPL-3.0-only
-│   └── tock-uniffi/            # UniFFI scaffolding (Apple bindings)
+│   └── tock-uniffi/            # UniFFI bindings (Apple apps ship in 1.x)
 └── docs/
     ├── architecture.md
     ├── dogfooding.md           # self-host + multi-device sync guide
-    ├── adr/                    # 10 Architecture Decision Records
+    ├── adr/                    # 15 Architecture Decision Records
     └── distribution/
 ```
 
