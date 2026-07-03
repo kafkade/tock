@@ -62,3 +62,21 @@ bootstrap, CLI `tock account` + authed transport, UniFFI account API, the
 signup → Emergency Kit / Setup Code → login → authed sync. Web credentials
 default to in-memory (sessionStorage opt-in); the Secret Key is never persisted
 in the browser. SwiftUI signup/sign-in views remain a follow-up.
+
+### Web scope (1.0)
+
+The web surface is ratified as a self-host **admin + onboarding console** —
+onboarding (signup, first-run admin wizard, Emergency Kit / Setup Code, SRP
+login), account self-service (password rotation, device / session management),
+and the admin console (users + registration policy). A **full productivity web
+client (tasks / habits / time / focus in the browser) is explicitly out of
+scope for 1.0**: the browser has no local SQLite vault yet, so it cannot decrypt
+vault events, and the "tasks" view is only an authenticated smoke check.
+Bringing the WASM core's full CRUD to the browser is post-1.0 work.
+
+The critical self-host path — first-run admin → save Emergency Kit → SRP login →
+authenticated call, with all SRP / 2SKD performed in-browser and **no secrets
+(password / Secret Key) transmitted** — is covered by a real-WASM smoke test in
+the `web` CI job (`apps/web/test/smoke.selfhost.test.ts`) and an opt-in true
+end-to-end test against a live `tock-server` (`apps/web/test/e2e.selfhost.test.ts`,
+gated on `TOCK_E2E=1`).

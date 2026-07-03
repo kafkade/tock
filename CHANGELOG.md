@@ -43,6 +43,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     happens transparently via a `kdf_version` re-wrap with no data loss; and any
     future structural format change ships with an automatic in-place migration —
     you are never asked to re-init or re-enter data to keep an existing vault.
+- **Web console scope ratified for 1.0** (#176): documented that the web
+  surface (`apps/web`) is a self-host **admin + onboarding console** —
+  signup, the first-run admin wizard, Emergency Kit + Setup Code, SRP login,
+  account self-service (password rotation, device/session management), and the
+  admin console — and that a **full productivity web client (tasks, habits,
+  time, and focus in the browser) is explicitly out of scope for 1.0** (the
+  browser has no local vault yet, so the tasks view is only an authenticated
+  smoke check). The critical self-host path — first-run admin → save Emergency
+  Kit → SRP login → authenticated call, with all SRP/2SKD performed in-browser
+  and **no password or Secret Key ever transmitted** — is now covered by a
+  real-WASM smoke test that runs in the `web` CI job, plus an opt-in true
+  end-to-end test against a live `tock-server` (`TOCK_E2E=1`). The WASM bundle
+  stays well under the 2 MB gzip budget.
 
 ## [0.5.0] - 2026-07-02
 

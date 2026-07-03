@@ -129,7 +129,7 @@ navigate, `Tab` to switch panes, `Enter` to select, `d` to complete,
 - **JSON import/export** — `tock export json`, `tock import json --file backup.json`
 - **Encrypted vault** — password-protected, AES-256-GCM per-event AEAD, Ed25519 signed event log
 - **Multi-device sync** — end-to-end encrypted sync through a self-hostable server; see the [dogfooding guide](docs/dogfooding.md)
-- **Self-hosting** — one-command Docker Compose stack with a web admin console, first-run wizard, and automatic TLS; see the [self-hosting guide](docs/self-hosting.md)
+- **Self-hosting** — one-command Docker Compose stack with a web **admin + onboarding console** (first-run wizard, account self-service) and automatic TLS; the browser is not a full productivity client for 1.0 (tasks/habits/time live in the CLI and apps). See the [self-hosting guide](docs/self-hosting.md)
 
 ## Install
 
