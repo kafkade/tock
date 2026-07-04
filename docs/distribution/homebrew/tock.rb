@@ -3,10 +3,14 @@
 
 # Homebrew formula template for tock.
 #
-# This file is a *template*. It is not yet wired into a tap; it lives in
-# the main repo so the shape can evolve alongside `release.yml`. Once
-# `kafkade/homebrew-tap` is created, automation (cargo-dist or a release
-# step) will publish a populated copy of this file there on each tag.
+# This file is the canonical *shape* of the formula. The `homebrew` job in
+# `.github/workflows/release.yml` generates a populated copy from the real
+# release artifacts (version + per-target sha256) and pushes it to
+# `kafkade/homebrew-tap` as `Formula/tock.rb` on each tagged release.
+#
+# The URLs below intentionally match the artifact naming produced by
+# `release.yml`: `tock-v#{version}-<target>.tar.gz`. The sha256 values here
+# are placeholders — the release job fills in the real digests.
 #
 # See docs/distribution/README.md for the activation checklist.
 
@@ -18,22 +22,22 @@ class Tock < Formula
 
   on_macos do
     on_arm do
-      url "https://github.com/kafkade/tock/releases/download/v#{version}/tock-aarch64-apple-darwin.tar.gz"
+      url "https://github.com/kafkade/tock/releases/download/v#{version}/tock-v#{version}-aarch64-apple-darwin.tar.gz"
       sha256 "0000000000000000000000000000000000000000000000000000000000000000"
     end
     on_intel do
-      url "https://github.com/kafkade/tock/releases/download/v#{version}/tock-x86_64-apple-darwin.tar.gz"
+      url "https://github.com/kafkade/tock/releases/download/v#{version}/tock-v#{version}-x86_64-apple-darwin.tar.gz"
       sha256 "0000000000000000000000000000000000000000000000000000000000000000"
     end
   end
 
   on_linux do
     on_arm do
-      url "https://github.com/kafkade/tock/releases/download/v#{version}/tock-aarch64-unknown-linux-gnu.tar.gz"
+      url "https://github.com/kafkade/tock/releases/download/v#{version}/tock-v#{version}-aarch64-unknown-linux-gnu.tar.gz"
       sha256 "0000000000000000000000000000000000000000000000000000000000000000"
     end
     on_intel do
-      url "https://github.com/kafkade/tock/releases/download/v#{version}/tock-x86_64-unknown-linux-gnu.tar.gz"
+      url "https://github.com/kafkade/tock/releases/download/v#{version}/tock-v#{version}-x86_64-unknown-linux-gnu.tar.gz"
       sha256 "0000000000000000000000000000000000000000000000000000000000000000"
     end
   end

@@ -41,3 +41,12 @@ pr-run-mode = "plan"
 # unset/false here so it doesn't imply cargo-dist owns signing — revisit if
 # the release build ever migrates to cargo-dist. See
 # docs/distribution/README.md.
+#
+# Homebrew is published the same way: the `homebrew` job in `release.yml`
+# renders `Formula/tock.rb` from the tagged artifacts and pushes it to the
+# `kafkade/homebrew-tap` tap. We deliberately do NOT add cargo-dist's
+# `homebrew` installer / `publish-jobs = ["homebrew"]` here, because
+# cargo-dist does not drive our release (`allow-dirty = ["ci"]` above), so
+# enabling it would be inert and misleading — same rationale as `macos-sign`.
+# Revisit if the release build ever migrates to cargo-dist. See
+# docs/distribution/README.md.

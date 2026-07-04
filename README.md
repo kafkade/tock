@@ -154,9 +154,23 @@ navigate, `Tab` to switch panes, `Enter` to select, `d` to complete,
 
 ## Install
 
+### Homebrew (macOS / Linux)
+
+```sh
+brew install kafkade/tap/tock
+```
+
+This pulls the signed, notarized release binary from the
+[`kafkade/homebrew-tap`](https://github.com/kafkade/homebrew-tap) tap, which is
+published automatically on each tagged release.
+
+### Prebuilt binaries
+
 Download the latest release from
-[GitHub Releases](https://github.com/kafkade/tock/releases), or build
-from source:
+[GitHub Releases](https://github.com/kafkade/tock/releases) (Linux, macOS, and
+Windows; shell + PowerShell installers).
+
+### From source
 
 ```sh
 git clone https://github.com/kafkade/tock.git

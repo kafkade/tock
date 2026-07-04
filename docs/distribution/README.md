@@ -9,9 +9,9 @@ phase: configuration is in place; not all channels are live yet.
 |-----------------|------------------------------------------------------|---------------------------------------------------------------------------|
 | GitHub Releases | [`release.yml`](../../.github/workflows/release.yml) | **Live** — cargo-dist for Linux, macOS, Windows; shell + PS installers.   |
 | `cargo-dist`    | [`dist-workspace.toml`](../../dist-workspace.toml)   | **Active** — drives `release.yml` and validated in CI via `dist plan`.    |
-| Homebrew tap    | [`homebrew/tock.rb`](homebrew/tock.rb)               | **Template only** — needs `kafkade/homebrew-tap` repo.                    |
-| Nix flake       | [`../../flake.nix`](../../flake.nix)                 | **Dev shell live**; package definition deferred.                          |
-| crates.io       | n/a                                                  | **Deferred** — future PR.                                                 |
+| Homebrew tap    | [`homebrew/tock.rb`](homebrew/tock.rb)               | **Wired** — `release.yml` publishes `Formula/tock.rb` per tag; needs the tap repo + `HOMEBREW_TAP_TOKEN` (below). |
+| Nix flake       | [`../../flake.nix`](../../flake.nix)                 | **Dev shell live**; packaging **deferred for 1.0** (decision below).      |
+| crates.io       | [`release.yml`](../../.github/workflows/release.yml) | **Deferred for 1.0** (decision below); manual `workflow_dispatch` path exists. |
 
 ## macOS code signing & notarization
 
@@ -50,10 +50,61 @@ launch — so a downloaded binary installs without a Gatekeeper warning.
 
 ## Homebrew tap
 
-`docs/distribution/homebrew/tock.rb` is a template formula. Bringing the
-tap online requires:
+`brew install kafkade/tap/tock` is **wired end-to-end in-repo**: the `homebrew`
+job in [`release.yml`](../../.github/workflows/release.yml) runs after the
+GitHub Release is created, reads the per-target `.sha256` files from the release
+artifacts, renders a populated `Formula/tock.rb` (the shape mirrors the template
+in [`homebrew/tock.rb`](homebrew/tock.rb)), and pushes it to the tap. It is
+**gated on the `HOMEBREW_TAP_TOKEN` secret**: until that secret exists the job
+emits a loud warning and skips, so releases keep working before the tap is
+provisioned.
 
-1. Creating the `kafkade/homebrew-tap` GitHub repo.
-2. Adding a release-step in `release.yml` (or letting `cargo dist` own it)
-   that pushes the formula to that tap with each tagged release.
-3. Documenting `brew install kafkade/tap/tock` in the root README.
+We publish from the hand-written `release.yml` rather than via cargo-dist's
+`homebrew` installer, because cargo-dist does **not** drive this repo's release
+(`allow-dirty = ["ci"]` in `dist-workspace.toml`) — it only validates config in
+CI. Enabling cargo-dist's Homebrew publishing would be inert here and would
+require regenerating the entire workflow, discarding the bespoke sign/notarize
+logic. This mirrors how macOS signing is handled (see above).
+
+### Remaining maintainer steps to go live
+
+1. Create the `kafkade/homebrew-tap` GitHub repo (public; the `homebrew` job
+   writes `Formula/tock.rb` to its default branch, `main`).
+2. Provision a token with `contents: write` on that repo (a fine-grained PAT or
+   a repo-scoped token) and add it to `kafkade/tock` as the
+   `HOMEBREW_TAP_TOKEN` Actions secret.
+3. Cut a tagged release. The `homebrew` job publishes the formula; afterwards
+   `brew install kafkade/tap/tock` resolves the just-built binaries.
+4. No workflow **job** names in `ci.yml` change, and `release.yml` runs on tag
+   push / `workflow_dispatch` (never on PRs), so it is **not** part of branch
+   protection's `required_status_checks`. No update to
+   `kafkade/github-infra:repo_tock.tf` is needed. Re-verify if that ever
+   changes.
+
+## Nix packaging decision (1.0)
+
+**Deferred for 1.0.** [`flake.nix`](../../flake.nix) ships the **dev shell
+only** (`nix develop`); no `packages.default` derivation is included. Rationale:
+
+- The first-class 1.0 install paths — GitHub Releases and the Homebrew tap —
+  already cover the target audience; a Nix package is not on the critical path.
+- A correct flake package for a workspace of this shape (build inputs,
+  `sqlite`/`openssl` linkage, WASM feature gating) is non-trivial to get right,
+  and a half-baked derivation is worse than none.
+
+A `packages.default` derivation may land post-1.0; the dev shell remains
+supported and in lockstep with `rust-toolchain.toml` in the meantime.
+
+## crates.io decision (1.0)
+
+**Deferred for 1.0.** The workspace has 11 crates (including the AGPL-3.0
+`tock-server`), and a dependency-ordered `cargo publish` is non-trivial and
+unnecessary for a **binary-first CLI release** — users install `tock` via the
+channels above, not by depending on the libraries. The library APIs are also
+still pre-1.0 and expected to churn.
+
+The plumbing already exists for when we opt in: the manual `publish` job in
+[`release.yml`](../../.github/workflows/release.yml)
+(`workflow_dispatch` with `publish_crates: true`) publishes the non-server
+crates in dependency order with dry-run validation and index waits.
+`tock-server` is intentionally excluded (AGPL-3.0).

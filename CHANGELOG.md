@@ -57,6 +57,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `kafkade/github-infra:repo_tock.tf` needs no update. See
   [`docs/distribution/README.md`](docs/distribution/README.md).
 
+- **Homebrew tap publishing wired into releases** (#175): a new `homebrew` job
+  in [`release.yml`](.github/workflows/release.yml) runs after the GitHub
+  Release is created, reads the per-target `.sha256` files from the release
+  artifacts, renders a populated `Formula/tock.rb`, and pushes it to the
+  `kafkade/homebrew-tap` tap so `brew install kafkade/tap/tock` resolves the
+  just-built binaries. The job is **gated on the `HOMEBREW_TAP_TOKEN` secret**:
+  until it (and the tap repo) are provisioned the job emits a loud warning and
+  skips, so releases never hard-fail. Published from the hand-written
+  `release.yml` rather than cargo-dist (which does not drive this repo's
+  release), mirroring how macOS signing is handled. `release.yml` runs on tags
+  only, so no branch-protection / `required_status_checks` change is needed. See
+  [`docs/distribution/README.md`](docs/distribution/README.md).
+
 ### Changed
 
 - **Vault format 1.0 compatibility policy** (#171): ratified the pre-1.0
@@ -104,6 +117,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   iOS/iPadOS/macOS/watchOS apps are **not** part of 1.0 and arrive in a later
   **1.x** GA, and re-verified the backup/restore + upgrade instructions against
   `docker-compose.yml`.
+
+- **Distribution channels for 1.0 documented** (#175): brought the Homebrew tap
+  online in-repo and recorded explicit Nix and crates.io decisions in
+  [`docs/distribution/README.md`](docs/distribution/README.md). `README.md` now
+  documents `brew install kafkade/tap/tock`; the Homebrew section carries the
+  remaining maintainer steps (create `kafkade/homebrew-tap`, add
+  `HOMEBREW_TAP_TOKEN`). **Nix packaging is deferred for 1.0** (the flake ships
+  the dev shell only; note strengthened in [`flake.nix`](flake.nix)) and
+  **crates.io publishing is deferred for 1.0** (binary-first CLI release; the
+  manual `workflow_dispatch` publish path remains available). The template
+  [`homebrew/tock.rb`](docs/distribution/homebrew/tock.rb) URLs were corrected
+  to match the real `tock-vX.Y.Z-<target>` artifact naming.
 
 ## [0.5.0] - 2026-07-02
 

@@ -37,8 +37,10 @@
           '';
         };
 
-        # Package definitions land once tock-cli has real implementation;
-        # see docs/distribution/README.md for the deferred plan.
+        # Nix packaging is DEFERRED for 1.0 (decision recorded in
+        # docs/distribution/README.md): this flake ships the dev shell only.
+        # A `packages.default` derivation may land post-1.0; until then the
+        # first-class install paths are GitHub Releases and the Homebrew tap.
         formatter = pkgs.nixpkgs-fmt;
       });
 }
