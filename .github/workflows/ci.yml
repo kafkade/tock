@@ -291,7 +291,7 @@ jobs:
           gz=$(gzip -c crates/tock-wasm/pkg/tock_wasm_bg.wasm | wc -c)
           echo "gzip size: ${gz} bytes"
           test "${gz}" -lt 2097152
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 20
       - name: Install web dependencies
