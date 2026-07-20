@@ -61,8 +61,8 @@ aes-gcm = "0.11"
 argon2 = "0.5"
 hkdf = "0.13"
 sha2 = "0.11"
-x25519-dalek = { version = "2", default-features = false, features = ["static_secrets", "zeroize"] }
-ed25519-dalek = { version = "2", default-features = false, features = ["rand_core", "zeroize"] }
+x25519-dalek = { version = "3", default-features = false, features = ["static_secrets", "zeroize"] }
+ed25519-dalek = { version = "3", default-features = false, features = ["rand_core", "zeroize"] }
 # SRP-6a (RFC 5054) PAKE for zero-knowledge auth (ADR-010/011). The 0.7 line is
 # constant-time (crypto-bigint), RFC5054-correct, and uses digest 0.11 matching
 # our sha2 0.11. `default-features = false` drops the crate's own getrandom/
@@ -125,7 +125,7 @@ keyring = { version = "3", features = [
     "async-io",
 ] }
 qrcode = "0.14"
-printpdf = "0.10"
+printpdf = "0.11"
 
 # Test-only utilities.
 proptest = "1"
