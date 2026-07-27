@@ -161,16 +161,12 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         _ => {}
     }
 
-    let password = cli.password.as_deref().map_or(b"" as &[u8], str::as_bytes);
-
     let mut vault = if cli.vault.exists() {
-        let secret_key = resolve_secret_key(cli.secret_key.as_deref())?;
-        tock_storage::open(&cli.vault, password, &secret_key)?
+        let secret_key = resolve_secret_key_for_open(cli)?;
+        let password = resolve_open_password(cli)?;
+        tock_storage::open(&cli.vault, &password, &secret_key)?
     } else {
-        tracing::info!("vault does not exist, initializing");
-        let (vault, secret_key) = tock_storage::init(&cli.vault, password)?;
-        print_emergency_kit(&secret_key, vault.header().account_id);
-        vault
+        first_run_init(cli)?
     };
 
     // Handle imports that need &mut Connection (for transactions) early.
@@ -423,6 +419,273 @@ fn print_emergency_kit(secret_key: &tock_crypto::SecretKey, account_id: Uuid) {
     println!("  lose it, the vault cannot be recovered.");
     println!("======================================================================");
     println!();
+}
+
+// ── First-run local onboarding gate (#198) ───────────────────────────
+//
+// The first command that would create a vault runs an onboarding gate that
+// forces a real (non-empty) password and a saved Emergency Kit, keeping the
+// two-secret model (password + Secret Key) intact instead of collapsing to an
+// empty default. It triggers ONLY on first init; existing vaults are untouched.
+// `tock account signup` and `tock onboard` keep their own paths (dispatched
+// before this one), so the gate never fires for them.
+
+/// Coarse password-strength buckets for basic first-run feedback.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PasswordStrength {
+    Weak,
+    Fair,
+    Strong,
+}
+
+impl PasswordStrength {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Weak => "weak",
+            Self::Fair => "fair",
+            Self::Strong => "strong",
+        }
+    }
+}
+
+/// Dependency-free strength heuristic: scores length and character-class
+/// variety (lower / upper / digit / symbol). Length dominates so long
+/// passphrases score well. This only drives feedback — the gate rejects **only**
+/// an empty password, never a weak one.
+fn password_strength(pw: &str) -> PasswordStrength {
+    let len = pw.chars().count();
+    let classes = u32::from(pw.chars().any(char::is_lowercase))
+        + u32::from(pw.chars().any(char::is_uppercase))
+        + u32::from(pw.chars().any(char::is_numeric))
+        + u32::from(
+            pw.chars()
+                .any(|c| !c.is_alphanumeric() && !c.is_whitespace()),
+        );
+    if len >= 16 || (len >= 12 && classes >= 2) {
+        PasswordStrength::Strong
+    } else if len >= 12 || (len >= 8 && classes >= 2) {
+        PasswordStrength::Fair
+    } else {
+        PasswordStrength::Weak
+    }
+}
+
+/// Validate a candidate first-run password. Empty is rejected; anything else is
+/// accepted with its (advisory) strength.
+fn validate_first_run_password(pw: &str) -> Result<PasswordStrength, &'static str> {
+    if pw.is_empty() {
+        Err("password must not be empty")
+    } else {
+        Ok(password_strength(pw))
+    }
+}
+
+/// Whether stdin and stderr are both attached to a terminal, i.e. we may prompt.
+fn stdio_is_interactive() -> bool {
+    use std::io::IsTerminal as _;
+    std::io::stdin().is_terminal() && std::io::stderr().is_terminal()
+}
+
+/// Read a secret with terminal echo disabled. The prompt goes to stderr so
+/// stdout stays clean for machine-readable output (e.g. the Emergency Kit).
+fn read_secret(prompt: &str) -> Result<String, Box<dyn std::error::Error>> {
+    use std::io::Write as _;
+    eprint!("{prompt}");
+    std::io::stderr().flush()?;
+    Ok(rpassword::read_password()?)
+}
+
+/// Prompt (on stderr) for a single line of visible input. Returns `None` on EOF.
+fn prompt_line_stderr(prompt: &str) -> Result<Option<String>, Box<dyn std::error::Error>> {
+    use std::io::Write as _;
+    eprint!("{prompt}");
+    std::io::stderr().flush()?;
+    let mut line = String::new();
+    if std::io::stdin().read_line(&mut line)? == 0 {
+        return Ok(None);
+    }
+    Ok(Some(line.trim().to_string()))
+}
+
+/// Interactively choose a non-empty password, confirming it and echoing basic
+/// strength feedback. Loops until a valid, matching password is entered.
+fn prompt_new_password() -> Result<String, Box<dyn std::error::Error>> {
+    loop {
+        let pw = read_secret("Choose a vault password: ")?;
+        let strength = match validate_first_run_password(&pw) {
+            Ok(strength) => strength,
+            Err(msg) => {
+                eprintln!("  {msg}; try again.");
+                continue;
+            }
+        };
+        let confirm = read_secret("Confirm password: ")?;
+        if confirm != pw {
+            eprintln!("  passwords did not match; try again.");
+            continue;
+        }
+        eprintln!("  password strength: {}", strength.label());
+        if strength == PasswordStrength::Weak {
+            eprintln!(
+                "  tip: a longer passphrase (16+ chars, or 12+ with mixed \
+                 character types) is stronger."
+            );
+        }
+        return Ok(pw);
+    }
+}
+
+/// Require the user to explicitly acknowledge they saved the Emergency Kit.
+fn confirm_saved_kit() -> Result<(), Box<dyn std::error::Error>> {
+    loop {
+        let ans = prompt_line_stderr("Type \"I saved it\" to continue: ")?;
+        match ans.as_deref().map(str::trim).map(str::to_ascii_lowercase) {
+            Some(a) if a == "i saved it" || a == "yes" || a == "y" => return Ok(()),
+            Some(a) if a.is_empty() => {
+                eprintln!("  save the Emergency Kit above, then type: I saved it");
+            }
+            Some(_) => {
+                eprintln!("  save the Emergency Kit above, then type: I saved it");
+            }
+            None => {
+                return Err("onboarding aborted: Emergency Kit not confirmed. Your \
+                            Secret Key is cached in the OS keyring; re-run once you \
+                            have saved the kit."
+                    .into());
+            }
+        }
+    }
+}
+
+/// Cache the freshly generated Secret Key (never the password) so subsequent
+/// commands can open the vault without re-entering the `A4-…` string. Reuses the
+/// account keyring store (honors `TOCK_NO_KEYRING`, file fallback).
+fn cache_local_secret_key(
+    name: &str,
+    secret_key: &tock_crypto::SecretKey,
+    account_id: Uuid,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use commands::account::KeyringStore;
+    use tock_account::{AccountCredentials, CredentialStore as _};
+    let creds = AccountCredentials {
+        server_url: String::new(),
+        username: name.to_string(),
+        account_id: account_id.to_string(),
+        secret_key: secret_key.to_emergency_kit(account_id.as_bytes()),
+        bearer_token: String::new(),
+        channel_binding: String::new(),
+        expires_at: 0,
+    };
+    KeyringStore.save(&creds)
+}
+
+/// Load a previously cached Secret Key (`A4-…`) from the account keyring store.
+fn load_cached_secret_key() -> Option<String> {
+    use commands::account::KeyringStore;
+    use tock_account::CredentialStore as _;
+    match KeyringStore.load() {
+        Ok(Some(creds)) if !creds.secret_key.is_empty() => Some(creds.secret_key),
+        _ => None,
+    }
+}
+
+/// First-run onboarding gate: force a real password, name the local account,
+/// show + confirm the Emergency Kit, cache the Secret Key, and return the open
+/// vault. Degrades cleanly in non-interactive/scripted mode.
+fn first_run_init(cli: &Cli) -> Result<tock_storage::OpenVault, Box<dyn std::error::Error>> {
+    tracing::info!("vault does not exist, running first-run onboarding");
+    let interactive = stdio_is_interactive();
+
+    // (AC #1) Force a non-empty password.
+    let password = match cli.password.as_deref() {
+        Some("") => {
+            return Err("refusing to create a vault with an empty password: pass a \
+                        non-empty --password / TOCK_PASSWORD"
+                .into());
+        }
+        Some(pw) => pw.to_string(),
+        None if interactive => prompt_new_password()?,
+        None => {
+            return Err("refusing to create a vault with an empty password: pass \
+                        --password / TOCK_PASSWORD, or run in an interactive terminal \
+                        to be prompted"
+                .into());
+        }
+    };
+
+    // (AC #2) Name the local account. Email-free until adopt (ADR-016 §9/Q1).
+    let name = if interactive {
+        match prompt_line_stderr("Name this local account [local]: ")? {
+            Some(entered) if !entered.is_empty() => entered,
+            _ => "local".to_string(),
+        }
+    } else {
+        "local".to_string()
+    };
+    if interactive {
+        eprintln!(
+            "  This account stays local and email-free. Add a server + email later \
+             with `tock account adopt`."
+        );
+    }
+
+    // Create the vault (no format change — stays v2, ADR-013).
+    let (vault, secret_key) = tock_storage::init(&cli.vault, password.as_bytes())?;
+    let account_id = vault.header().account_id;
+
+    // (AC #3) Show the Emergency Kit once; require an explicit save confirmation.
+    print_emergency_kit(&secret_key, account_id);
+    if interactive {
+        confirm_saved_kit()?;
+    }
+
+    // (AC #4) Cache the Secret Key so later commands don't re-prompt for it.
+    if let Err(err) = cache_local_secret_key(&name, &secret_key, account_id) {
+        tracing::warn!(error = %err, "could not cache Secret Key");
+        eprintln!(
+            "  note: could not cache the Secret Key ({err}); keep your Emergency Kit \
+             — you will need it for future commands."
+        );
+    }
+
+    Ok(vault)
+}
+
+/// Resolve the account Secret Key for opening an existing vault, falling back to
+/// a cached key when neither `--secret-key` nor `TOCK_SECRET_KEY` is set.
+fn resolve_secret_key_for_open(
+    cli: &Cli,
+) -> Result<tock_crypto::SecretKey, Box<dyn std::error::Error>> {
+    if let Some(raw) = cli.secret_key.as_deref() {
+        let (_account_id, secret_key) = tock_crypto::SecretKey::parse(raw).map_err(
+            |_| "invalid account Secret Key: check the Emergency-Kit string and try again",
+        )?;
+        return Ok(secret_key);
+    }
+    if let Some(raw) = load_cached_secret_key()
+        && let Ok((_account_id, secret_key)) = tock_crypto::SecretKey::parse(&raw)
+    {
+        return Ok(secret_key);
+    }
+    Err(
+        "missing account Secret Key: pass --secret-key or set TOCK_SECRET_KEY \
+         (the `A4-…` string from your Emergency Kit)"
+            .into(),
+    )
+}
+
+/// Resolve the password for opening an existing vault. Prefers
+/// `--password` / `TOCK_PASSWORD`; otherwise prompts on an interactive terminal;
+/// otherwise falls back to the legacy empty default so pre-existing
+/// empty-password vaults keep opening unchanged in scripts.
+fn resolve_open_password(cli: &Cli) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    if let Some(pw) = cli.password.as_deref() {
+        return Ok(pw.as_bytes().to_vec());
+    }
+    if stdio_is_interactive() {
+        return Ok(read_secret("Vault password: ")?.into_bytes());
+    }
+    Ok(Vec::new())
 }
 
 fn run_onboard_cmd(
@@ -4142,10 +4405,42 @@ impl tock_parse::filter::Filterable for TaskFilterable<'_> {
 #[cfg(test)]
 #[allow(clippy::expect_used)]
 mod cli_tests {
-    use super::{Cli, IdleAction, idle_action, undoable_label};
+    use super::{
+        Cli, IdleAction, PasswordStrength, idle_action, password_strength, undoable_label,
+        validate_first_run_password,
+    };
     use crate::commands::Commands;
     use clap::CommandFactory as _;
     use tock_core::domain::idle::IdleResolution;
+
+    /// (AC #1) An empty first-run password is rejected; any non-empty one is
+    /// accepted with an advisory strength.
+    #[test]
+    fn first_run_password_rejects_empty_accepts_nonempty() {
+        assert!(validate_first_run_password("").is_err());
+        assert!(validate_first_run_password("x").is_ok());
+        assert_eq!(
+            validate_first_run_password("correct horse battery staple"),
+            Ok(PasswordStrength::Strong)
+        );
+    }
+
+    /// (AC #1) Basic strength feedback: short → weak, long/varied → stronger.
+    #[test]
+    fn password_strength_buckets() {
+        assert_eq!(password_strength("abc"), PasswordStrength::Weak);
+        assert_eq!(password_strength("password"), PasswordStrength::Weak);
+        assert_eq!(password_strength("abcdefgh1"), PasswordStrength::Fair);
+        assert_eq!(password_strength("abcdefghijkl"), PasswordStrength::Fair);
+        assert_eq!(
+            password_strength("correcthorsebatterystaple"),
+            PasswordStrength::Strong
+        );
+        assert_eq!(
+            password_strength("Str0ng!Passphrase"),
+            PasswordStrength::Strong
+        );
+    }
 
     /// A configured default resolution is used verbatim, regardless of TTY.
     #[test]

@@ -56,6 +56,7 @@ unic-langid = { workspace = true }
 keyring = { workspace = true }
 qrcode = { workspace = true }
 printpdf = { workspace = true }
+rpassword = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
