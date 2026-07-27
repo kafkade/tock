@@ -16,11 +16,12 @@ This directory contains Architecture Decision Records for the Tock project. Each
 | [ADR-008](ADR-008-unified-domain-model.md) | Four unified domains — tasks, habits, time tracking, focus | Accepted |
 | [ADR-009](ADR-009-natural-language-cli.md) | Natural language CLI with dual-mode parsing | Accepted |
 | [ADR-010](ADR-010-srp-authentication.md) | SRP-6a authentication | Accepted (amended by ADR-011) |
-| [ADR-011](ADR-011-account-based-self-host-two-secret-auth.md) | Account-based self-host with two-secret (1Password-style) auth | Accepted (2SKD core landed in #126; format break ratified by ADR-013) |
+| [ADR-011](ADR-011-account-based-self-host-two-secret-auth.md) | Account-based self-host with two-secret (1Password-style) auth | Accepted (2SKD core landed in #126; format break ratified by ADR-013; amended by ADR-016) |
 | [ADR-012](ADR-012-client-account-onboarding.md) | Client account onboarding — Emergency Kit, Setup Code, shared orchestration | Accepted |
 | [ADR-013](ADR-013-vault-format-versioning-policy.md) | Vault format versioning & 1.0 compatibility policy | Accepted |
 | [ADR-014](ADR-014-at-rest-encryption-app-layer-aead.md) | At-rest encryption — app-layer AEAD for 1.0, SQLCipher deferred | Accepted (amends ADR-004) |
 | [ADR-015](ADR-015-pre-1.0-security-audit-status.md) | Pre-1.0 security audit status — documented unaudited stance | Accepted |
+| [ADR-016](ADR-016-three-id-identity-and-adoption.md) | Three-ID identity model & local→server adoption | Accepted (amends ADR-011) |
 
 ## Categories
 
@@ -39,10 +40,12 @@ This directory contains Architecture Decision Records for the Tock project. Each
 - ADR-013: Vault format versioning & 1.0 compatibility policy
 - ADR-014: At-rest encryption — app-layer AEAD for 1.0, SQLCipher deferred
 - ADR-015: Pre-1.0 security audit status — documented unaudited stance
+- ADR-016: Three-ID identity model & local→server adoption
 
 ### Synchronization
 
 - ADR-003: Event-sourced sync with conflict resolution
+- ADR-016: Local→server adoption (identity model & binding state machine)
 
 ### Domain Model
 
