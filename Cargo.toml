@@ -126,6 +126,8 @@ keyring = { version = "3", features = [
 ] }
 qrcode = "0.14"
 printpdf = "0.10"
+# No-echo password entry for the CLI first-run onboarding gate (#198).
+rpassword = "7"
 
 # Test-only utilities.
 proptest = "1"

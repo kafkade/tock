@@ -29,6 +29,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **First-run local onboarding gate** (#198): creating a local-only vault now
+  starts it with a **real password and a saved Emergency Kit** instead of a
+  silent empty-password default, closing the data-lock + weak-default risk. The
+  first command that would create a vault now **refuses an empty password**
+  (rejecting `--password ""` / an empty `TOCK_PASSWORD`, and — with no terminal
+  to prompt at — failing loudly rather than defaulting to empty), prompts
+  interactively for a non-empty password with basic strength feedback, lets you
+  **name the local account** (kept email-free until you `adopt` a server, per
+  [ADR-016](docs/adr/ADR-016-three-id-identity-and-adoption.md) §9), shows the
+  **Emergency Kit / Secret Key once** and requires an explicit "I saved it"
+  confirmation, then **caches the Secret Key in the OS keyring** (never the
+  password) so later commands open the vault without re-entering it. Scripts
+  stay non-interactive: a non-empty `--password` / `TOCK_PASSWORD` is accepted
+  without prompting. Existing vaults are unaffected — the vault format is
+  unchanged (stays v2, [ADR-013](docs/adr/ADR-013-vault-format-versioning-policy.md)).
+
 - **Backup & restore format and restore modes ratified** (#196): specified how a
   client-side backup is produced and restored **before** the feature is built
   (#200). Because materialized domain tables are plaintext at rest (ADR-014), a
