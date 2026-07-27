@@ -234,3 +234,29 @@ pub async fn revoke_device(
         Err(Error::NotFound)
     }
 }
+
+// ── Disconnect (ADR-016 §3) ──────────────────────────────────────────
+
+/// `DELETE /v1/account` — revoke the caller's server principal **B**.
+///
+/// The inverse of adoption: disowns the account's vault buckets (so the
+/// `vault_id` **V** returns to unowned and is re-adoptable), ends its sessions,
+/// and deletes the account row. The client keeps **A**, **V**, and all local
+/// data — this only removes the server-side principal, returning the vault to
+/// `LocalOnly`. Scoped to the caller's own account via [`authorize_sync`].
+pub async fn disconnect(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, Error> {
+    let auth = authorize_sync(&state, &headers).await?;
+    let db = state.db.clone();
+    let account_id = auth.account_id;
+    let removed = tokio::task::spawn_blocking(move || db.disconnect_account(&account_id))
+        .await
+        .map_err(|e| Error::Internal(e.to_string()))??;
+    if removed {
+        Ok((StatusCode::OK, Json(serde_json::json!({ "ok": true }))))
+    } else {
+        Err(Error::NotFound)
+    }
+}

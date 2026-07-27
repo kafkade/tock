@@ -191,6 +191,8 @@ pub fn build_router(state: AppState) -> Router {
             "/v1/account/devices/{device_id}",
             delete(selfservice::revoke_device),
         )
+        // Adoption inverse (ADR-016 §3): revoke the caller's server principal.
+        .route("/v1/account", delete(selfservice::disconnect))
         // Self-hosted account system (ADR-011 / issue #127) — available in
         // every mode. Registration stores SRP verifiers only.
         .route("/v1/accounts/register", post(accounts::register))

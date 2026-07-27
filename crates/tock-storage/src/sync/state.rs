@@ -37,6 +37,12 @@ pub fn set_state(conn: &Connection, key: &str, value: &[u8]) -> Result<(), Error
     Ok(())
 }
 
+/// Delete a `sync_state` value (no-op if absent).
+pub fn delete_state(conn: &Connection, key: &str) -> Result<(), Error> {
+    conn.execute("DELETE FROM sync_state WHERE key = ?1", params![key])?;
+    Ok(())
+}
+
 /// Read a UTF-8 `sync_state` value.
 pub fn get_state_str(conn: &Connection, key: &str) -> Result<Option<String>, Error> {
     match get_state(conn, key)? {

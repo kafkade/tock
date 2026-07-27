@@ -14,6 +14,8 @@ use tock_account::{
     AccountCredentials, CredentialStore, FinishResponse, RegisterResponse, StartResponse,
 };
 
+use tock_sync::transport::Transport as _;
+
 use crate::http_transport::HttpTransport;
 
 type CmdResult = Result<(), Box<dyn std::error::Error>>;
@@ -61,6 +63,21 @@ pub enum AccountCmd {
     },
     /// Forget stored credentials on this device.
     Logout,
+    /// Register an EXISTING local vault with a server, preserving its crypto
+    /// identity (`account_id` A and `vault_id` V) and running an initial push.
+    Adopt {
+        /// Sync server base URL to bind this vault to.
+        #[arg(long)]
+        server: String,
+        /// Account email / login to register.
+        #[arg(long)]
+        email: String,
+        /// Move an already-bound vault to a different server (ADR-016 §4).
+        #[arg(long)]
+        migrate: bool,
+    },
+    /// Revoke the server principal and return the vault to local-only.
+    Disconnect,
     /// Show the current account + session status.
     Status,
 }
@@ -87,6 +104,12 @@ pub fn run_account_cmd(cli: &crate::Cli, cmd: &AccountCmd) -> CmdResult {
             setup_code.as_deref(),
         ),
         AccountCmd::Logout => logout(),
+        AccountCmd::Adopt {
+            server,
+            email,
+            migrate,
+        } => adopt(cli, server, email, *migrate),
+        AccountCmd::Disconnect => disconnect(cli),
         AccountCmd::Status => status(),
     }
 }
@@ -108,30 +131,35 @@ fn signup(cli: &crate::Cli, server: &str, email: &str, kit_pdf: Option<&Path>) -
     let material =
         SignupMaterial::derive(email, &password_string(cli)?, &secret_key, header, server)?;
     let vault_id = header.vault_id;
+    let account_id = header.account_id;
     let header_bytes = header.to_bytes();
 
     let rt = tokio_runtime()?;
     rt.block_on(async {
         let http = reqwest::Client::new();
-        let r = http
-            .post(format!(
-                "{}/v1/accounts/register",
-                server.trim_end_matches('/')
-            ))
-            .json(&material.register_request)
-            .send()
-            .await?;
-        if r.status() != reqwest::StatusCode::CREATED {
-            return Err(format!("registration failed: {}", r.status()).into());
-        }
-        let _reg: RegisterResponse = r.json().await?;
+        let principal = match register(&http, server, &material.register_request).await? {
+            RegisterResult::Created(b) => b,
+            RegisterResult::Conflict => {
+                return Err(
+                    "that email is already registered on this server; use `tock account login`"
+                        .into(),
+                );
+            }
+        };
         let session = srp_login(&http, server, email, &password_string(cli)?, &secret_key).await?;
         let transport = HttpTransport::new(server, vault_id)?.with_auth(
             session.bearer_token.clone(),
             session.channel_binding.clone(),
         );
         transport.put_vault_header(&header_bytes).await?;
-        save_credentials(server, email, &vault_id, &secret_key, &session)?;
+        save_credentials(
+            server,
+            email,
+            &principal,
+            &account_id,
+            &secret_key,
+            &session,
+        )?;
         Ok::<_, Box<dyn std::error::Error>>(())
     })?;
 
@@ -178,10 +206,12 @@ fn login(
         let session = srp_login(&http, &server, &email, &password, &secret_key).await?;
         if cli.vault.exists() {
             let vault = tock_storage::open(&cli.vault, password.as_bytes(), &secret_key)?;
+            let vid = vault.header().vault_id;
             save_credentials(
                 &server,
                 &email,
-                &vault.header().vault_id,
+                &vid.to_string(),
+                &vid,
                 &secret_key,
                 &session,
             )?;
@@ -196,7 +226,14 @@ fn login(
                 &parsed,
                 Some("cli"),
             )?;
-            save_credentials(&server, &email, &parsed.vault_id, &secret_key, &session)?;
+            save_credentials(
+                &server,
+                &email,
+                &parsed.vault_id.to_string(),
+                &parsed.vault_id,
+                &secret_key,
+                &session,
+            )?;
         }
         Ok::<_, Box<dyn std::error::Error>>(())
     })?;
@@ -214,15 +251,205 @@ fn logout() -> CmdResult {
     Ok(())
 }
 
+/// Register an existing local vault with a server (ADR-016 adoption).
+///
+/// Adoption is `signup` **without** a fresh init: the existing vault is opened,
+/// [`SignupMaterial`] is derived from its header (so the crypto identity — the
+/// client `account_id` **A** and `vault_id` **V** — passes through verbatim),
+/// and the server mints its own principal **B**, claims **V**, and stores the
+/// already-wrapped header. No VK rotation, no re-encryption, no re-derivation
+/// against **B** (zero-knowledge preserved, §6).
+///
+/// # Errors
+/// Propagates storage, crypto, HTTP, and credential-store failures; refuses if
+/// there is no local vault or the vault is already bound elsewhere (see below).
+fn adopt(cli: &crate::Cli, server: &str, email: &str, migrate: bool) -> CmdResult {
+    if !cli.vault.exists() {
+        return Err(
+            "no local vault to adopt; run any `tock` command to create one, or use `tock account signup`"
+                .into(),
+        );
+    }
+    let password = password_string(cli)?;
+    let secret_key = crate::resolve_secret_key(cli.secret_key.as_deref())?;
+    let server = server.trim_end_matches('/').to_string();
+
+    let vault = tock_storage::open(&cli.vault, password.as_bytes(), &secret_key)?;
+    let header = vault.header().clone();
+    let vault_id = header.vault_id;
+    let account_id = header.account_id;
+
+    // Authoritative-server invariant (ADR-016 §4): a vault binds to exactly one
+    // server. Re-adopting the same server is idempotent; a different server is
+    // refused unless `--migrate` moves the binding.
+    if tock_storage::sync::binding_state(&vault)? == tock_storage::sync::BINDING_SERVER_BACKED {
+        let bound = tock_storage::sync::server_url(&vault)?.unwrap_or_default();
+        if bound != server {
+            if !migrate {
+                return Err(format!(
+                    "vault is already bound to {bound}; pass --migrate to move it to {server}"
+                )
+                .into());
+            }
+            best_effort_revoke_current();
+            KeyringStore.clear()?;
+            tock_storage::sync::clear_binding(&vault)?;
+        }
+    }
+
+    let material = SignupMaterial::derive(email, &password, &secret_key, &header, &server)?;
+
+    // Prepare the initial-push inputs (mirrors `tock sync`). Collecting local
+    // changes records them in the log regardless of whether we reach the
+    // server, so a later retry is safe.
+    let device = vault.local_device();
+    let device_id = tock_core::event::DeviceId::from_bytes(device.device_id);
+    let vk = device.signing_key.verifying_key().to_bytes();
+    let label = tock_storage::sync::device_label(&vault)?;
+    let outbound = tock_storage::sync::collect_local_changes(&vault)?;
+
+    let rt = tokio_runtime()?;
+    let (principal, pushed) = rt.block_on(async {
+        let http = reqwest::Client::new();
+        // Register: the server mints B, claims V, and stores the wrapped header
+        // in ONE transaction (§5). A 409 means the account already exists — the
+        // second-device / retry path: log in, fetch the server header, and
+        // continue only if BOTH crypto ids (A and V) match (AC #6).
+        let register_result = register(&http, &server, &material.register_request).await?;
+        let session = srp_login(&http, &server, email, &password, &secret_key).await?;
+        let principal = match register_result {
+            RegisterResult::Created(b) => Some(b),
+            RegisterResult::Conflict => {
+                let remote = fetch_vault_header(&http, &server, &session).await?;
+                let parsed = tock_core::vault::VaultHeader::from_bytes(&remote)?;
+                if parsed.vault_id != vault_id || parsed.account_id != account_id {
+                    return Err(
+                        "server account holds a different vault (crypto id mismatch); refusing to adopt"
+                            .into(),
+                    );
+                }
+                // B is not returned by login; reuse a prior value if this device
+                // recorded one. A fresh second device simply won't know B.
+                tock_storage::sync::server_principal(&vault)?
+            }
+        };
+
+        let transport = HttpTransport::new(&server, vault_id)?.with_auth(
+            session.bearer_token.clone(),
+            session.channel_binding.clone(),
+        );
+        transport
+            .register_device(device_id, &vk, label.as_deref())
+            .await?;
+        let pushed = if outbound.is_empty() {
+            0
+        } else {
+            transport.push(&outbound).await?.accepted
+        };
+        save_credentials(
+            &server,
+            email,
+            principal.as_deref().unwrap_or_default(),
+            &account_id,
+            &secret_key,
+            &session,
+        )?;
+        Ok::<_, Box<dyn std::error::Error>>((principal, pushed))
+    })?;
+
+    // Record the binding explicitly (ADR-016 §3). Nothing above persisted a
+    // binding, so any earlier failure leaves the vault LocalOnly (§5 rollback).
+    tock_storage::sync::set_server_url(&vault, &server)?;
+    if let Some(b) = &principal {
+        tock_storage::sync::set_server_principal(&vault, b)?;
+    }
+    tock_storage::sync::set_account_email(&vault, email)?;
+    tock_storage::sync::set_binding_state(&vault, tock_storage::sync::BINDING_SERVER_BACKED)?;
+
+    println!("Adopted local vault into {server} for {email}.");
+    println!("Pushed {pushed} local change(s). Run `tock sync` to keep syncing.");
+    Ok(())
+}
+
+/// Return a server-backed vault to local-only (ADR-016 `disconnect`).
+///
+/// Revokes the server principal **B** (best-effort — the local binding is
+/// cleared regardless so a vault is never stuck bound to an unreachable
+/// server), resets the pull cursor, and clears stored credentials. **A**, **V**,
+/// and every local task are preserved; the vault stays usable and re-adoptable.
+///
+/// # Errors
+/// Propagates storage, crypto, and credential-store failures.
+fn disconnect(cli: &crate::Cli) -> CmdResult {
+    let creds = KeyringStore.load()?;
+    if let Some(c) = &creds
+        && !c.bearer_token.is_empty()
+    {
+        let rt = tokio_runtime()?;
+        let http = reqwest::Client::new();
+        let revoked = rt.block_on(revoke_principal(
+            &http,
+            &c.server_url,
+            &c.bearer_token,
+            &c.channel_binding,
+        ));
+        if !matches!(revoked, Ok(true)) {
+            eprintln!(
+                "warning: could not revoke the server principal (continuing; local binding cleared)"
+            );
+        }
+    }
+
+    if cli.vault.exists() {
+        let password = password_string(cli)?;
+        let secret_key = crate::resolve_secret_key(cli.secret_key.as_deref())?;
+        let vault = tock_storage::open(&cli.vault, password.as_bytes(), &secret_key)?;
+        tock_storage::sync::clear_binding(&vault)?;
+    }
+
+    KeyringStore.clear()?;
+    let cfg = account_config_path()?;
+    if cfg.exists() {
+        std::fs::remove_file(&cfg)?;
+    }
+    println!("Disconnected. Your vault is now local-only; A, V, and all tasks are unchanged.");
+    Ok(())
+}
+
+/// Best-effort revoke of the currently signed-in principal, used when
+/// `--migrate` moves a vault off its previous server. Failures are ignored.
+fn best_effort_revoke_current() {
+    let Ok(Some(creds)) = KeyringStore.load() else {
+        return;
+    };
+    if creds.bearer_token.is_empty() {
+        return;
+    }
+    let Ok(rt) = tokio_runtime() else {
+        return;
+    };
+    let http = reqwest::Client::new();
+    let _ = rt.block_on(revoke_principal(
+        &http,
+        &creds.server_url,
+        &creds.bearer_token,
+        &creds.channel_binding,
+    ));
+}
+
 fn status() -> CmdResult {
     match KeyringStore.load()? {
-        None => println!("Not signed in. Use `tock account signup` or `tock account login`."),
+        None => println!("Not signed in. Use `tock account signup` or `tock account adopt`."),
         Some(c) => {
             let now = current_unix();
             println!("Signed in as {} @ {}", c.username, c.server_url);
-            println!("Account id : {}", c.account_id);
+            if c.account_id.is_empty() {
+                println!("Server principal : (unknown on this device)");
+            } else {
+                println!("Server principal : {}", c.account_id);
+            }
             println!(
-                "Session    : {}",
+                "Session          : {}",
                 if c.is_expired(now) {
                     "expired (re-login or sync to refresh)"
                 } else {
@@ -235,6 +462,56 @@ fn status() -> CmdResult {
 }
 
 // ── Shared SRP login + header fetch ──────────────────────────────────
+
+/// Outcome of a `POST /v1/accounts/register` attempt.
+enum RegisterResult {
+    /// The account was created; carries the server principal **B**.
+    Created(String),
+    /// The username already exists (drives the second-device / retry path).
+    Conflict,
+}
+
+/// Attempt registration, distinguishing a fresh create (201 → **B**) from an
+/// existing account (409). Any other status is an error.
+async fn register(
+    http: &reqwest::Client,
+    server: &str,
+    request: &tock_account::signup::RegisterRequest,
+) -> Result<RegisterResult, Box<dyn std::error::Error>> {
+    let resp = http
+        .post(format!(
+            "{}/v1/accounts/register",
+            server.trim_end_matches('/')
+        ))
+        .json(request)
+        .send()
+        .await?;
+    match resp.status() {
+        reqwest::StatusCode::CREATED => {
+            let reg: RegisterResponse = resp.json().await?;
+            Ok(RegisterResult::Created(reg.account_id))
+        }
+        reqwest::StatusCode::CONFLICT => Ok(RegisterResult::Conflict),
+        s => Err(format!("registration failed: {s}").into()),
+    }
+}
+
+/// Revoke the server principal via `DELETE /v1/account`. Returns whether the
+/// server reported success; callers treat this best-effort.
+async fn revoke_principal(
+    http: &reqwest::Client,
+    server: &str,
+    bearer: &str,
+    channel: &str,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    let resp = http
+        .delete(format!("{}/v1/account", server.trim_end_matches('/')))
+        .header("authorization", format!("Bearer {bearer}"))
+        .header("x-tock-channel-binding", channel)
+        .send()
+        .await?;
+    Ok(resp.status().is_success())
+}
 
 async fn srp_login(
     http: &reqwest::Client,
@@ -359,15 +636,16 @@ fn write_creds_file(json: &str) -> Result<(), Box<dyn std::error::Error>> {
 fn save_credentials(
     server: &str,
     email: &str,
-    vault_id: &uuid::Uuid,
+    principal: &str,
+    sk_account_id: &uuid::Uuid,
     secret_key: &tock_crypto::SecretKey,
     session: &tock_account::SessionMaterial,
 ) -> CmdResult {
     let creds = AccountCredentials {
         server_url: server.trim_end_matches('/').to_string(),
         username: email.to_string(),
-        account_id: vault_id.to_string(),
-        secret_key: secret_key.to_emergency_kit(vault_id.as_bytes()),
+        account_id: principal.to_string(),
+        secret_key: secret_key.to_emergency_kit(sk_account_id.as_bytes()),
         bearer_token: session.bearer_token.clone(),
         channel_binding: session.channel_binding.clone(),
         expires_at: session.expires_at,
