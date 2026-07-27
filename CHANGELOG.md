@@ -11,6 +11,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **Backup & restore format and restore modes ratified** (#196): specified how a
+  client-side backup is produced and restored **before** the feature is built
+  (#200). Because materialized domain tables are plaintext at rest (ADR-014), a
+  raw copy of the local SQLite file is a **plaintext archive**, not a safe backup.
+  The ratified default is an **outer-encrypted full snapshot**: the whole database
+  is sealed with AES-256-GCM under a domain-separated backup key
+  `HKDF(VK, info="Tock/v1/backup", salt=random)` plus an **authenticated manifest**
+  (format tag, account/vault ids, `kdf_version`, event high-water mark, snapshot
+  hash) that defeats truncation/rollback. An event-log-only archive is documented
+  as an alternative. Two restore modes are defined — **disaster recovery** (keep
+  the device id + Lamport clock, resume sync) and **clone / second-device** (mint a
+  new device id + signing key, reset the sync cursor, reconcile remote history
+  before any push). Restore needs only your **password + Secret Key**; the
+  Emergency Kit must be kept separate. Backup is explicitly distinct from
+  `tock-export` (plaintext, lossy → portability). See
+  [ADR-018](docs/adr/ADR-018-backup-restore-format-and-modes.md), building on
+  [ADR-002](docs/adr/ADR-002-end-to-end-encryption.md) and
+  [ADR-014](docs/adr/ADR-014-at-rest-encryption-app-layer-aead.md).
+
 - **Pre-1.0 security audit status documented** (#173): tock 1.0 ships with an
   explicit **"unaudited (pre-audit)"** disclosure. tock's own cryptographic
   protocol and implementation (key hierarchy + 2SKD, vault format & AEAD usage,

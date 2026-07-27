@@ -1282,6 +1282,11 @@ platform keystore on signed-in devices.
 - **Stolen server database** — holds only the SRP verifier + ciphertext; offline-cracking the verifier additionally requires the 128-bit Secret Key (ADR-011), so it is infeasible regardless of password strength.
 - **Lost Secret Key with no Emergency Kit** — **not** recoverable; this is a deliberate trade-off (ADR-011), not a protected scenario.
 - **Cross-item key reuse** — defeated by per-item HKDF derivation.
+- **Backup theft / tampering** — a backup archive is outer-encrypted under a
+  domain-separated backup key (`HKDF(VK, "Tock/v1/backup")`) with an authenticated
+  manifest (account/vault binding, event high-water mark, snapshot hash) that defeats
+  truncation/rollback; opening it still requires password **and** Secret Key. A raw
+  copy of the plaintext-at-rest SQLite file is **not** a backup ([ADR-018](adr/ADR-018-backup-restore-format-and-modes.md), §5.8).
 
 **Do not protect against:**
 
@@ -1404,6 +1409,33 @@ also accept SRP session tokens without changing the endpoints. Hosted billing
 endpoints (`POST /v1/accounts`, `GET /v1/accounts/:id`, `/usage`) remain gated
 to `--mode hosted`.
 
+### 5.8 Client-side backup & restore
+
+Backup is a distinct security surface from both the server volume backup and sync,
+and is specified in [ADR-018](adr/ADR-018-backup-restore-format-and-modes.md)
+(implementation tracked in #200). The key point: because materialized domain tables
+are **plaintext at rest** (§5.5, [ADR-014](adr/ADR-014-at-rest-encryption-app-layer-aead.md)),
+a raw copy of the local SQLite file is a **plaintext archive** — not a safe backup.
+
+The default backup is a **consistent full snapshot of the database** wrapped in an
+outer AEAD envelope under a domain-separated **backup key**
+`BK ← HKDF(VK, salt = random, info = "Tock/v1/backup")`, with a fresh nonce and an
+**authenticated manifest** (format tag, `account_id`, `vault_id`, `kdf_version`,
+event high-water mark, snapshot hash) bound as AAD. The manifest is what defeats
+**truncation and rollback** — per-item event AEAD authenticates each event in
+isolation, not the archive's completeness. An event-log-only archive (already
+ciphertext) is documented as an alternative but is not the default, because it must
+first synthesize un-synced events (§6, `collect_local_changes`) and still needs the
+same authenticated manifest.
+
+Restore has **two modes**: *disaster recovery* keeps the original `device_id` +
+Lamport clock and resumes sync; *clone / second-device* mints a **new** `device_id`
+and signing key, resets the sync cursor/binding, and reconciles remote history
+**before any push** — otherwise two writers would share one identity and Lamport
+sequence (§6.1, §5.1) and a stale restore could push old state ahead of newer remote.
+Restore needs only **password + Secret Key** (to unwrap VK); the Emergency Kit /
+Secret Key must be stored separately from the backup file.
+
 ---
 
 ## 6. Sync Protocol Design
@@ -1502,6 +1534,7 @@ A **conflict log** (queryable via `tock sync conflicts`) surfaces LWW-losers for
   4. After snapshot is replicated to ≥1 peer, the originating events older than the snapshot can be **tombstoned** (kept as `(id, lamport, device_id)` triples for causality but payload set to NULL).
 - New devices onboarding fetch the latest snapshot first, then events after it. This bounds startup time at O(snapshots + recent events).
 - Snapshots are **never authoritative for conflict detection** — they are a cache. The vector-clock state lives in the (possibly tombstoned) event metadata.
+- This **sync** snapshot is distinct from a **backup** ([ADR-018](adr/ADR-018-backup-restore-format-and-modes.md), §5.8): it is a per-vault event-store cache keyed by `HKDF(VK, "Tock/v1/snapshot/…")` and lives inside the vault, whereas a backup is a self-contained, outer-encrypted archive (keyed by `HKDF(VK, "Tock/v1/backup")`) meant for recovery. They share the VK root but not the key label or purpose.
 
 ### 6.5 Device onboarding flow
 
