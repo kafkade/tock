@@ -21,6 +21,12 @@ use std::path::PathBuf;
 
 use tock_server::ServerMode;
 
+use time::OffsetDateTime;
+use tock_core::vault::{
+    Argon2HeaderParams, FORMAT_VERSION, MAGIC, MIN_COMPAT_VERSION, VaultHeader,
+};
+use uuid::Uuid;
+
 /// A `tock-server` running on a background thread bound to an ephemeral port.
 struct TestServer {
     base_url: String,
@@ -233,4 +239,100 @@ async fn account_system_end_to_end() {
         .await
         .expect("hosted create");
     assert_eq!(resp.status(), reqwest::StatusCode::NOT_FOUND);
+}
+
+/// Serialize a minimal, well-formed public vault header embedding `vault_id`.
+fn header_bytes(vault_id: Uuid) -> Vec<u8> {
+    VaultHeader {
+        magic: MAGIC,
+        format_version: FORMAT_VERSION,
+        min_compatible_version: MIN_COMPAT_VERSION,
+        vault_id,
+        account_id: Uuid::from_bytes([8; 16]),
+        kdf_version: 1,
+        kdf_salt: [9; 16],
+        hkdf_salt: [3; 32],
+        argon2: Argon2HeaderParams {
+            t: 3,
+            m_kib: 65_536,
+            p: 1,
+        },
+        vk_wrap_nonce: [5; 12],
+        vk_wrap_ct: vec![0xAB; 48],
+        created_at: OffsetDateTime::from_unix_timestamp(1_700_000_000).expect("ts"),
+        storage_layout: "sqlite-plain-app-aead-v0".to_string(),
+    }
+    .to_bytes()
+}
+
+fn hex16(bytes: [u8; 16]) -> String {
+    use std::fmt::Write as _;
+    bytes.iter().fold(String::with_capacity(32), |mut acc, b| {
+        let _ = write!(acc, "{b:02x}");
+        acc
+    })
+}
+
+fn register_body_with_vault(
+    username: &str,
+    vault_id_hex: &str,
+    header_b64: &str,
+) -> serde_json::Value {
+    let mut body = register_body(username, None);
+    body["vault_id"] = serde_json::json!(vault_id_hex);
+    body["header"] = serde_json::json!(header_b64);
+    body
+}
+
+/// AC #2 (issue #199): registration parses the uploaded header and cross-checks
+/// the submitted `vault_id` against the header's embedded `vault_id`, rejecting a
+/// mismatch before storing anything (nothing consumed), and accepting a match.
+#[tokio::test]
+async fn register_validates_vault_id_matches_header() {
+    let server = TestServer::start();
+    let base = &server.base_url;
+    let http = reqwest::Client::new();
+
+    let submitted = [0x33_u8; 16];
+    // Header embeds a DIFFERENT vault_id than the one submitted alongside it.
+    let mismatched = b64(&header_bytes(Uuid::from_bytes([0x44; 16])));
+    let resp = http
+        .post(format!("{base}/v1/accounts/register"))
+        .json(&register_body_with_vault(
+            "alice",
+            &hex16(submitted),
+            &mismatched,
+        ))
+        .send()
+        .await
+        .expect("register mismatched header");
+    assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
+
+    // A malformed (non-header) blob is likewise rejected.
+    let resp = http
+        .post(format!("{base}/v1/accounts/register"))
+        .json(&register_body_with_vault(
+            "alice",
+            &hex16(submitted),
+            &b64(b"not-a-real-header"),
+        ))
+        .send()
+        .await
+        .expect("register malformed header");
+    assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
+
+    // Nothing was consumed by the rejected attempts: the same username still
+    // registers with a MATCHING header and is accepted (bootstrap admin).
+    let matching = b64(&header_bytes(Uuid::from_bytes(submitted)));
+    let resp = http
+        .post(format!("{base}/v1/accounts/register"))
+        .json(&register_body_with_vault(
+            "alice",
+            &hex16(submitted),
+            &matching,
+        ))
+        .send()
+        .await
+        .expect("register matching header");
+    assert_eq!(resp.status(), reqwest::StatusCode::CREATED);
 }

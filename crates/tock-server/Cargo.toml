@@ -27,6 +27,10 @@ workspace = true
 [dependencies]
 tock-sync = { workspace = true }
 tock-crypto = { workspace = true }
+# Public vault-header parsing for register-time validation (issue #199). The
+# server reads only PUBLIC header fields (vault_id, format/version) — never key
+# material. Apache-2.0 core consumed by the AGPL-3.0 server is compatible.
+tock-core = { workspace = true }
 axum = { workspace = true }
 tokio = { workspace = true }
 tower-http = { workspace = true }
@@ -37,6 +41,8 @@ uuid = { workspace = true }
 time = { workspace = true }
 sha2 = { workspace = true }
 subtle = { workspace = true }
+# NFKC + case normalization of login identifiers (issue #199).
+unicode-normalization = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 clap = { workspace = true }

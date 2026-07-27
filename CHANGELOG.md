@@ -113,6 +113,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [ADR-016](docs/adr/ADR-016-three-id-identity-and-adoption.md), which amends
   [ADR-011](docs/adr/ADR-011-account-based-self-host-two-secret-auth.md).
 
+- **Sync-server registration hardening and identifier normalization** (#199):
+  the sync server now **validates the vault header you upload at registration**
+  — it parses the public header and, if the submitted vault id doesn't match the
+  id embedded in the header, rejects the request with a clean `400` **before
+  anything is stored** (a malformed header is likewise a `400`, never a `500`),
+  so inconsistent material can never be persisted. The server still only ever
+  reads public header fields and never sees your password, keys, or any
+  plaintext. Login identifiers are now **normalized (Unicode NFKC + case
+  folding)** consistently at both registration and login, so `Alice`, `alice`,
+  and full-width or combining-mark variants resolve to one account and can't be
+  used to register confusable near-duplicates; the SRP proof is unchanged and no
+  client update is required. Residual limitation, documented deliberately:
+  normalization does not defend against cross-script homoglyphs (e.g. Cyrillic
+  `а` vs Latin `a`). `tock account adopt --migrate` reconciliation is now
+  defined as disconnect-old-then-adopt-new, sharing the same teardown as
+  `disconnect` (revoke the old server principal, reset the sync cursor, clear
+  credentials) so a failed or retried migration leaves the vault local-only
+  rather than split across two servers. See
+  [ADR-016](docs/adr/ADR-016-three-id-identity-and-adoption.md).
+
 ### CI
 
 - **macOS code signing + notarization wired into releases** (#174): the

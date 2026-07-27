@@ -191,10 +191,17 @@ same vault from being adopted onto a second server.
 - The single persisted `{server URL, B, credentials}` entry is the source of
   truth for the binding. The client enforces the invariant before starting
   `adopt`.
-- `--migrate` is the deliberate, explicit path to move a vault to a new server;
-  it `disconnect`s the old binding (or marks it superseded) and adopts the new
-  one. Its full reconciliation semantics are specified with the implementation
-  (#199).
+- `--migrate` is the deliberate, explicit path to move a vault to a new server.
+  Its reconciliation semantics (resolved in #199, see Q3) are
+  **disconnect-old-then-adopt-new**: the client first fully disconnects the
+  existing binding — best-effort revoke **B** on the old server, reset the local
+  pull cursor, and clear stored credentials + the account config — using the
+  *same* teardown as `disconnect`; only then does it run the normal `adopt`
+  against the new server. The new `{server URL, B, credentials}` is written only
+  after that fresh adopt succeeds, so a failed migration leaves the vault
+  `LocalOnly` (never half-bound to two servers). `--migrate` reuses `adopt`'s
+  atomic, idempotent server path, so a retried migration converges rather than
+  duplicating principals.
 
 ### 5. Register-and-claim must be atomic, validated, normalized, retry-safe
 
@@ -314,11 +321,17 @@ Question Q1.)
   local name vs. optional email); the recommendation here is "email-free until
   adopt". Resolve alongside #198.
 - **Q2 — alias scheme for V/A on the wire.** §7 requires an opaque per-server
-  alias (or v4) for disclosed identifiers; the concrete scheme is specified with
-  the server work (#199).
-- **Q3 — `--migrate` reconciliation semantics.** §4 mandates refusal of a second
-  adopt without `--migrate`; the precise migrate/reconcile behavior is specified
-  with #199.
+  alias (or v4) for disclosed identifiers. **Still open — deferred beyond #199.**
+  #199 hardens registration (header cross-check, identifier normalization) and
+  the `--migrate` guard but does *not* introduce the wire alias; the concrete
+  scheme remains to be specified in follow-up server work.
+- **Q3 — `--migrate` reconciliation semantics.** **Resolved (#199).** §4 mandates
+  refusal of a second adopt without `--migrate`; `--migrate` is defined as
+  disconnect-old-then-adopt-new — best-effort revoke **B**, reset the sync
+  cursor, and clear credentials/config (the shared `disconnect` teardown), then
+  run the normal atomic, idempotent `adopt` against the new server. The new
+  binding is persisted only on success, so a failed or retried migration leaves
+  the vault `LocalOnly` and re-adoptable rather than split across two servers.
 
 ## Consequences
 

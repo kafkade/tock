@@ -4603,12 +4603,14 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "time",
+ "tock-core",
  "tock-crypto",
  "tock-sync",
  "tokio",
  "tower-http 0.7.0",
  "tracing",
  "tracing-subscriber",
+ "unicode-normalization",
  "uuid",
 ]
 
