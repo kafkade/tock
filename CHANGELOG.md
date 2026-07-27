@@ -11,6 +11,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Server ciphertext export + import (round-trip) and scheduled retained
+  snapshots** (#201): three **distinct** server-side data capabilities, all of
+  which move ciphertext only and never decrypt.
+  - *Export (portability).* `GET /v1/vaults/:vault_id/export` streams an
+    account's non-secret vault header plus its full event log as a portable
+    archive. An offline operator equivalent, `tock-server admin export
+    [--all | --account <id>]`, writes per-user ciphertext archives straight from
+    the database with no running server — complementing (not replacing) the
+    whole-volume `tar`.
+  - *Import (restore / round-trip).* `POST /v1/vaults/:vault_id/import` loads an
+    exported archive back into a vault, making export a real, reversible
+    round-trip and enabling cross-server migration (#202). It is idempotent
+    (duplicate event ids are ignored), claims a fresh unowned vault for the
+    caller, and refuses a vault owned by another account.
+  - *Server-retained snapshots (survive DB loss).* A background task periodically
+    writes a consistent, ciphertext-only `VACUUM INTO` copy of the whole database
+    to a retention directory and prunes to the newest *N* — so data survives even
+    if the live DB is lost before anyone downloads an export. Configurable via
+    `--snapshot-interval-secs` / `TOCK_SNAPSHOT_INTERVAL_SECS` (default daily,
+    `0` disables), `--snapshot-dir` / `TOCK_SNAPSHOT_DIR`, and `--snapshot-keep`
+    / `TOCK_SNAPSHOT_KEEP` (default 7); `tock-server admin snapshot` forces one
+    offline. Strict WAL point-in-time recovery is intentionally deferred, as is
+    the client-side `tock account export`/`import` wrapper (tracked in #202). See
+    [docs/self-hosting.md](docs/self-hosting.md) and
+    [ADR-019](docs/adr/ADR-019-server-retained-snapshots-and-pitr.md).
+
 - **`tock backup create` and `tock backup restore`** (#200): create an
   outer-encrypted, transactionally-consistent full snapshot of your vault and
   restore it later — the first true backup path for Tock. `tock backup create
@@ -28,6 +54,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [ADR-018](docs/adr/ADR-018-backup-restore-format-and-modes.md).
 
 ### Security
+
+- **Vault export is IDOR-safe** (#201): the new ciphertext export route
+  authorizes with the same **double check** as every sync route — the session's
+  bearer (`authorize_sync`) **and** vault ownership (`require_vault_access`),
+  plus the SRP channel-binding tag — evaluated *before* any read. Guarding an
+  export by "the vault's session" alone would be an insecure direct object
+  reference (R7): it would let account A pull account B's ciphertext. The import
+  route is guarded the same way, but by **claim-semantics** (`ensure_vault` +
+  `claim_vault_for_account`) rather than the issue's literal `require_vault_access`
+  wording — a deliberate choice so a restore/migration can import into a *fresh,
+  unowned* vault while still returning `403` for a vault owned by another account
+  (proven by the `import_authorization_is_idor_safe` test importing into an
+  already-owned vault). This matches the existing push/put_header/put_onboarding
+  ownership pattern; see
+  [ADR-019](docs/adr/ADR-019-server-retained-snapshots-and-pitr.md). The server
+  still never decrypts — export and import move ciphertext only.
 
 - **Backups are outer-encrypted; export is not a backup** (#200): because
   materialized domain tables (task titles/notes, habit text, checklist item

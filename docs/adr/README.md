@@ -23,6 +23,7 @@ This directory contains Architecture Decision Records for the Tock project. Each
 | [ADR-015](ADR-015-pre-1.0-security-audit-status.md) | Pre-1.0 security audit status — documented unaudited stance | Accepted |
 | [ADR-016](ADR-016-three-id-identity-and-adoption.md) | Three-ID identity model & local→server adoption | Accepted (amends ADR-011) |
 | [ADR-018](ADR-018-backup-restore-format-and-modes.md) | Encrypted backup & restore — format and restore modes | Accepted |
+| [ADR-019](ADR-019-server-retained-snapshots-and-pitr.md) | Server data portability & retained snapshots (export, import, PITR deferral) | Accepted |
 
 ## Categories
 
@@ -43,11 +44,13 @@ This directory contains Architecture Decision Records for the Tock project. Each
 - ADR-015: Pre-1.0 security audit status — documented unaudited stance
 - ADR-016: Three-ID identity model & local→server adoption
 - ADR-018: Encrypted backup & restore — format and restore modes
+- ADR-019: Server data portability & retained snapshots (export, import, PITR deferral)
 
 ### Synchronization
 
 - ADR-003: Event-sourced sync with conflict resolution
 - ADR-016: Local→server adoption (identity model & binding state machine)
+- ADR-019: Server export/import round-trip (unblocks cross-server migration)
 
 ### Domain Model
 
