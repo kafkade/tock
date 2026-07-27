@@ -291,9 +291,16 @@ fn adopt(cli: &crate::Cli, server: &str, email: &str, migrate: bool) -> CmdResul
                 )
                 .into());
             }
+            // `--migrate` reconciliation (ADR-016 §4, Q3): move the vault to a
+            // new server by first fully **disconnecting the old binding** —
+            // best-effort revoke B on the old server, then reset the local sync
+            // cursor + clear the binding and stored credentials — before the
+            // fresh `adopt` below re-binds to `server`. This is deliberately
+            // disconnect-old-then-adopt-new: the new `{URL, B, credentials}` is
+            // written only after the new adopt succeeds, so a failed migration
+            // leaves the vault LocalOnly (nothing half-bound to two servers).
             best_effort_revoke_current();
-            KeyringStore.clear()?;
-            tock_storage::sync::clear_binding(&vault)?;
+            clear_local_binding(&vault)?;
         }
     }
 
@@ -404,15 +411,39 @@ fn disconnect(cli: &crate::Cli) -> CmdResult {
         let password = password_string(cli)?;
         let secret_key = crate::resolve_secret_key(cli.secret_key.as_deref())?;
         let vault = tock_storage::open(&cli.vault, password.as_bytes(), &secret_key)?;
-        tock_storage::sync::clear_binding(&vault)?;
+        clear_local_binding(&vault)?;
+    } else {
+        // No local vault to reset; still clear stored credentials + config so
+        // the client is fully signed out.
+        KeyringStore.clear()?;
+        let cfg = account_config_path()?;
+        if cfg.exists() {
+            std::fs::remove_file(&cfg)?;
+        }
     }
 
+    println!("Disconnected. Your vault is now local-only; A, V, and all tasks are unchanged.");
+    Ok(())
+}
+
+/// Clear all **local** traces of a server binding (ADR-016 §3): reset the pull
+/// cursor and clear the vault's binding state (server URL, principal **B**,
+/// email), wipe stored credentials, and remove the account config file. It does
+/// **not** contact the server — callers revoke **B** separately (best-effort).
+///
+/// Shared by `disconnect` and the `--migrate` reconciliation path so both return
+/// the vault to an identical, cleanly re-adoptable `LocalOnly` state. **A**,
+/// **V**, and all local data are preserved.
+///
+/// # Errors
+/// Propagates storage and credential-store failures.
+fn clear_local_binding(vault: &tock_storage::OpenVault) -> CmdResult {
+    tock_storage::sync::clear_binding(vault)?;
     KeyringStore.clear()?;
     let cfg = account_config_path()?;
     if cfg.exists() {
         std::fs::remove_file(&cfg)?;
     }
-    println!("Disconnected. Your vault is now local-only; A, V, and all tasks are unchanged.");
     Ok(())
 }
 

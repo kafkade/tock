@@ -187,11 +187,26 @@ pub async fn register(
     let invite = body.invite_token;
 
     // Optional vault header uploaded at registration (issue #129/#131). Decoded
-    // up front so a malformed value is a clean 400 before we touch the account.
+    // and validated up front so malformed or inconsistent material is a clean
+    // 400 before we touch the account (nothing consumed).
     let header_upload = match (body.vault_id.as_deref(), body.header.as_deref()) {
         (Some(vault_id), Some(header_b64)) if !header_b64.is_empty() => {
             let vault_bytes = crate::codec::parse_hex_16(vault_id)?;
             let header = base64_decode(header_b64)?;
+            // Validate the PUBLIC header before storing (ADR-016 §5, issue
+            // #199): parse it and cross-check the submitted `vault_id` (V)
+            // against the `vault_id` embedded in the header. The server reads
+            // only non-secret fields — it never derives keys from the header
+            // (the VK stays wrapped) — so parsing preserves zero-knowledge.
+            // Rejecting a mismatch here means inconsistent public material can
+            // never be stored.
+            let parsed = tock_core::vault::VaultHeader::from_bytes(&header)
+                .map_err(|e| Error::BadRequest(format!("invalid vault header: {e}")))?;
+            if parsed.vault_id.as_bytes() != &vault_bytes {
+                return Err(Error::BadRequest(
+                    "submitted vault_id does not match the vault header".into(),
+                ));
+            }
             Some((vault_bytes, header))
         }
         _ => None,

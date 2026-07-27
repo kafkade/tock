@@ -44,6 +44,7 @@ mod cli;
 mod codec;
 mod db;
 mod error;
+mod identifier;
 mod metrics;
 mod quota;
 mod routes;

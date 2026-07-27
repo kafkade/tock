@@ -762,6 +762,14 @@ impl ServerDb {
     ) -> Result<RegisterOutcome, Error> {
         use crate::accounts::RegistrationPolicy;
 
+        // Canonicalize the identifier once (issue #199 / ADR-016 §5): store and
+        // uniqueness-check the normalized form so case- and Unicode-equivalent
+        // spellings (`Alice` vs `alice`, full-width, combining sequences) map to
+        // a single account. The SRP verifier is username-independent and the
+        // login M1 identity binds the raw wire string per-handshake, so
+        // normalizing storage/lookup here does not affect the SRP proof.
+        let username = crate::identifier::normalize(new.username);
+
         // An already-registered username is a conflict, not a policy failure —
         // check it first so a re-registration is a deterministic 409 regardless
         // of the registration policy or invite state. This keeps register (and
@@ -769,13 +777,12 @@ impl ServerDb {
         // device re-adopting drives this 409 → SRP-login + verify path.
         let exists: bool = tx.query_row(
             "SELECT COUNT(*) > 0 FROM accounts WHERE username = ?1",
-            params![new.username],
+            params![username],
             |r| r.get(0),
         )?;
         if exists {
             return Err(Error::Conflict(format!(
-                "username already registered: {}",
-                new.username
+                "username already registered: {username}"
             )));
         }
 
@@ -787,14 +794,14 @@ impl ServerDb {
         } else {
             match policy {
                 RegistrationPolicy::Open => match new.invite_token {
-                    Some(token) => Self::consume_invite_tx(tx, token, new.username)?,
+                    Some(token) => Self::consume_invite_tx(tx, token, &username)?,
                     None => "user".to_string(),
                 },
                 RegistrationPolicy::InviteOnly | RegistrationPolicy::Disabled => {
                     let token = new
                         .invite_token
                         .ok_or(Error::Forbidden("registration requires a valid invite"))?;
-                    Self::consume_invite_tx(tx, token, new.username)?
+                    Self::consume_invite_tx(tx, token, &username)?
                 }
             }
         };
@@ -814,7 +821,7 @@ impl ServerDb {
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'active', ?8, 'free', ?9)",
             params![
                 account_id,
-                new.username,
+                username,
                 new.srp_salt,
                 new.srp_verifier,
                 new.srp_group,
@@ -934,16 +941,21 @@ impl ServerDb {
 
     /// Create an invite, optionally pinned to a `username`, granting `role`.
     /// Returns the opaque invite token.
+    ///
+    /// The pinned username is stored in its normalized form (issue #199) so it
+    /// compares equal to the normalized identifier a client later registers
+    /// with (see [`Self::consume_invite_tx`]).
     pub fn create_invite(&self, username: Option<&str>, role: &str) -> Result<String, Error> {
         let conn = self
             .conn
             .lock()
             .map_err(|e| Error::Internal(e.to_string()))?;
+        let pinned = username.map(crate::identifier::normalize);
         let token = format!("inv_{}", uuid::Uuid::now_v7().as_hyphenated());
         conn.execute(
             "INSERT INTO account_invites (token, username, role, created_at, used)
              VALUES (?1, ?2, ?3, ?4, 0)",
-            params![token, username, role, rfc3339_now()],
+            params![token, pinned, role, rfc3339_now()],
         )?;
         Ok(token)
     }
@@ -1065,6 +1077,10 @@ impl ServerDb {
             .conn
             .lock()
             .map_err(|e| Error::Internal(e.to_string()))?;
+        // Look up by the normalized identifier (issue #199) so a login succeeds
+        // regardless of the case/Unicode spelling the client sent, matching the
+        // form stored at registration.
+        let username = crate::identifier::normalize(username);
         conn.query_row(
             "SELECT id, srp_salt, srp_verifier, srp_group, kdf_params FROM accounts
              WHERE username = ?1 AND status = 'active'
@@ -1810,6 +1826,74 @@ mod tests {
             db.register_account(&sample_account("frank", None), RegistrationPolicy::Open),
             Err(Error::Conflict(_))
         ));
+    }
+
+    // ── Identifier normalization (issue #199, ADR-016 §5) ────────────────
+
+    #[test]
+    fn register_rejects_case_and_unicode_near_duplicates() {
+        let db = ServerDb::open_memory().expect("open");
+        db.register_account(&sample_account("admin", None), RegistrationPolicy::Open)
+            .expect("bootstrap");
+        db.register_account(&sample_account("alice", None), RegistrationPolicy::Open)
+            .expect("first alice");
+
+        // Every case/Unicode-equivalent spelling collapses to the same stored
+        // identifier and is refused as a duplicate.
+        let fullwidth = "\u{FF41}\u{FF4C}\u{FF49}\u{FF43}\u{FF45}"; // "ａｌｉｃｅ"
+        let combining = "alice\u{0301}"; // "alicé" via combining acute — differs from "alice"
+        for near in ["Alice", "ALICE", "  alice  ", fullwidth] {
+            assert!(
+                matches!(
+                    db.register_account(&sample_account(near, None), RegistrationPolicy::Open),
+                    Err(Error::Conflict(_))
+                ),
+                "near-duplicate {near:?} should conflict with 'alice'"
+            );
+        }
+
+        // A genuinely different identifier (an extra combining mark, or a plain
+        // different name) is allowed.
+        db.register_account(&sample_account(combining, None), RegistrationPolicy::Open)
+            .expect("distinct combining variant");
+        db.register_account(&sample_account("bob", None), RegistrationPolicy::Open)
+            .expect("distinct name");
+    }
+
+    #[test]
+    fn register_stores_normalized_form() {
+        let db = ServerDb::open_memory().expect("open");
+        db.register_account(&sample_account("admin", None), RegistrationPolicy::Open)
+            .expect("bootstrap");
+        db.register_account(
+            &sample_account("Alice@Example.COM", None),
+            RegistrationPolicy::Open,
+        )
+        .expect("register mixed-case");
+
+        // The row is persisted under the normalized (lowercased) identifier.
+        let creds = db
+            .get_srp_credentials("alice@example.com")
+            .expect("lookup")
+            .expect("found normalized");
+        assert!(!creds.account_id.is_empty());
+    }
+
+    #[test]
+    fn srp_lookup_is_case_and_unicode_insensitive() {
+        let db = ServerDb::open_memory().expect("open");
+        db.register_account(&sample_account("admin", None), RegistrationPolicy::Open)
+            .expect("bootstrap");
+        db.register_account(&sample_account("alice", None), RegistrationPolicy::Open)
+            .expect("register alice");
+
+        let fullwidth = "\u{FF21}\u{FF2C}\u{FF29}\u{FF23}\u{FF25}"; // "ＡＬＩＣＥ"
+        for spelling in ["alice", "Alice", "ALICE", "  alice ", fullwidth] {
+            assert!(
+                db.get_srp_credentials(spelling).expect("lookup").is_some(),
+                "login lookup for {spelling:?} should resolve to the registered account"
+            );
+        }
     }
 
     // ── Adoption: atomic register + claim + header (issue #197, ADR-016 §5) ──

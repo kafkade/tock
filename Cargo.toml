@@ -82,6 +82,9 @@ time = { version = "0.3", default-features = false, features = ["std", "macros",
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rusqlite = { version = "0.40", features = ["bundled", "blob", "uuid", "time"] }
+# Unicode NFKC normalization for server-side identifier canonicalization
+# (issue #199). Already in the tree transitively; MIT/Apache-2.0.
+unicode-normalization = "0.1"
 
 # Async runtime + HTTP server (used by tock-server, AGPL-3.0).
 axum = "0.8"

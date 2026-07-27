@@ -405,10 +405,21 @@ fn adopt_refuses_second_server_without_migrate() {
         "migrate adopt should succeed:\n{out}"
     );
     assert!(s2.account_exists("alice@example.com"));
+    // Reconciliation (AC #5, ADR-016 §4/Q3): `--migrate` disconnected the old
+    // binding — B was revoked on s1 (its account row is gone) and the local
+    // binding moved entirely to s2.
+    assert!(
+        !s1.account_exists("alice@example.com"),
+        "migrate should have revoked B on the old server"
+    );
     let status = a.run(&["account", "status"]);
     assert!(
         status.contains(&s2.base_url),
         "status should now point at s2:\n{status}"
+    );
+    assert!(
+        !status.contains(&s1.base_url),
+        "status should no longer reference the old server:\n{status}"
     );
 }
 
