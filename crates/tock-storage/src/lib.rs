@@ -10,6 +10,7 @@
 //! See `docs/architecture.md` §3 and §5, ADR-002, and ADR-004 for the
 //! design.
 
+pub mod backup;
 pub mod error;
 pub mod event_log;
 pub mod migrations;
@@ -18,6 +19,7 @@ pub mod sync;
 pub mod undo;
 pub mod vault;
 
+pub use backup::{BackupInfo, RestoreMode, RestoreOutcome};
 pub use error::Error;
 pub use event_log::EventLog;
 pub use vault::{LocalDevice, OpenVault, VaultStatus, init, init_from_header, open, status};

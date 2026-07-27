@@ -456,6 +456,82 @@ fn unauthenticated_sync_is_rejected_with_401() {
     );
 }
 
+/// (ADR-018 §3B step 3) A clone restore must **reconcile remote history
+/// before pushing**. This proves the one-shot `pending_reconcile` flag is
+/// honored end-to-end: the clone's first `tock sync` pulls the server-only
+/// task it never had *before* any push, and a second sync no longer
+/// reconciles (the flag is one-shot).
+#[test]
+fn clone_restore_reconciles_before_push_then_clears_flag() {
+    let server = TestServer::start();
+    let dir = tempfile::tempdir().expect("work dir");
+    let a = Device::new(dir.path(), "a");
+    let clone = Device::new(dir.path(), "clone");
+
+    // Device A: account + one task, pushed to the server.
+    let signup = signup(&server.base_url, &a, "alice@example.com");
+    a.run(&["add", "AlphaZZ"]);
+    a.run(&["sync", "--server", &server.base_url]);
+
+    // Back up A at this point (archive holds only Alpha).
+    let archive = dir.path().join("clone.tockbak");
+    let archive_str = archive.to_str().expect("utf8 path");
+    a.run(&["backup", "create", "--out", archive_str]);
+
+    // A then adds a SECOND task and pushes it — this is "newer remote
+    // history" the clone's archive does not contain.
+    a.run(&["add", "BetaZZ"]);
+    a.run(&["sync"]);
+
+    // Restore the archive as a CLONE onto a fresh device. It shares A's
+    // account Secret Key, mints a new device id, and arms reconcile.
+    clone.set_secret_key(signup.secret_key.clone());
+    let restore_out = clone.run(&["backup", "restore", archive_str, "--mode", "clone"]);
+    assert!(
+        restore_out.contains("clone") && restore_out.contains("tock sync"),
+        "clone restore should print reconcile guidance:\n{restore_out}"
+    );
+    // The clone starts with only Alpha (the archive's state).
+    assert_eq!(
+        clone.title_status().keys().cloned().collect::<Vec<_>>(),
+        vec!["AlphaZZ".to_string()],
+        "clone should start from the archive's single task"
+    );
+
+    // Reconnect this device to the server, then sync.
+    login_with_setup_code(&clone, &signup);
+    let first_sync = clone.run(&["sync", "--server", &server.base_url]);
+
+    // Ordering proof: the reconcile pull is reported, and it precedes the
+    // normal push/pull round in the same invocation.
+    let reconcile_at = first_sync
+        .find("Reconciled remote history before pushing")
+        .unwrap_or_else(|| {
+            panic!("clone's first sync must reconcile before pushing:\n{first_sync}")
+        });
+    let synced_at = first_sync.find("Synced with").unwrap_or_else(|| {
+        panic!("clone's first sync must also run a normal round:\n{first_sync}")
+    });
+    assert!(
+        reconcile_at < synced_at,
+        "reconcile must run before the push/pull round:\n{first_sync}"
+    );
+
+    // The clone pulled the server-only task during reconcile.
+    let titles = clone.title_status();
+    assert!(
+        titles.contains_key("AlphaZZ") && titles.contains_key("BetaZZ"),
+        "clone should have reconciled BOTH tasks from the server, got: {titles:?}"
+    );
+
+    // One-shot: a second sync no longer reconciles (flag cleared).
+    let second_sync = clone.run(&["sync"]);
+    assert!(
+        !second_sync.contains("Reconciled remote history before pushing"),
+        "reconcile-before-push must be one-shot; second sync still reconciled:\n{second_sync}"
+    );
+}
+
 /// Extract the first conflict id (the `[uuid]` token) from `tock sync
 /// conflicts` output.
 fn parse_first_conflict_id(listing: &str) -> String {

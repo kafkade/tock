@@ -173,6 +173,41 @@ impl OpenVault {
     pub fn lock(self) {
         drop(self);
     }
+
+    /// Mint a brand-new local device identity on this already-open vault:
+    /// a fresh random `device_id` and Ed25519 signing key, persisted and
+    /// registered in the device table, replacing the in-memory device.
+    ///
+    /// This is the clone / second-device restore primitive (ADR-018 §3B):
+    /// after restoring a snapshot that carries the *original* device's
+    /// identity and Lamport clock, the clone must adopt a **new** identity
+    /// so it does not become a second writer under the original id. The new
+    /// `device_id` has no rows in the event log, so it starts a fresh
+    /// Lamport sequence (`next_local_lamport` → 1) and cannot corrupt the
+    /// original device's ordering.
+    ///
+    /// Returns the new 16-byte `device_id`.
+    ///
+    /// # Errors
+    /// - [`Error::Crypto`] on RNG failure.
+    /// - [`Error::Sqlite`] on persistence failure.
+    pub fn remint_identity(&mut self) -> Result<[u8; 16], Error> {
+        let mut device_id = [0_u8; 16];
+        tock_crypto::random::fill_random(&mut device_id)?;
+        let signing_key = SigningKey::try_generate().map_err(map_crypto_err)?;
+        let verifying = signing_key.verifying_key();
+        save_local_device(&self.conn, &self.vk, &device_id, &signing_key)?;
+        register_device(&self.conn, &device_id, &verifying, Some("restored-clone"))?;
+        self.device = LocalDevice {
+            device_id,
+            signing_key,
+        };
+        tracing::info!(
+            vault_id = %self.header.vault_id,
+            "minted fresh device identity for clone restore"
+        );
+        Ok(device_id)
+    }
 }
 
 /// Open an existing vault file with the given password and account

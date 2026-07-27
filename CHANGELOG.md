@@ -11,6 +11,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`tock backup create` and `tock backup restore`** (#200): create an
+  outer-encrypted, transactionally-consistent full snapshot of your vault and
+  restore it later — the first true backup path for Tock. `tock backup create
+  [--out FILE]` takes a `VACUUM INTO` snapshot, hashes it, and seals it with
+  AES-256-GCM under a domain-separated backup key derived from your Vault Key,
+  binding an authenticated manifest (format tag/version, account id, vault id,
+  event high-water mark, snapshot hash, salt, nonce) as the AEAD AAD. `tock
+  backup restore FILE --mode <disaster-recovery|clone>` re-derives the key from
+  your password and Secret Key, verifies the manifest, and swaps the database
+  in place. The mode is **explicit, never inferred**: `disaster-recovery` keeps
+  the original device identity, Lamport clock, sync cursor, and server binding
+  so you resume as the same writer; `clone` mints a fresh device identity,
+  resets the sync cursor, and clears the server binding so a second device
+  reconciles remote history before its first push. See
+  [ADR-018](docs/adr/ADR-018-backup-restore-format-and-modes.md).
+
+### Security
+
+- **Backups are outer-encrypted; export is not a backup** (#200): because
+  materialized domain tables (task titles/notes, habit text, checklist item
+  titles) are plaintext at rest (see
+  [ADR-014](docs/adr/ADR-014-at-rest-encryption-app-layer-aead.md)), a naive file
+  copy would leak them. `tock backup` seals the whole snapshot under
+  `HKDF-SHA256(VK)` so the archive reveals nothing without your password **and**
+  Secret Key — an archive made without the Secret Key is undecryptable by
+  design. The authenticated manifest (bound as AEAD AAD, with the event
+  high-water mark and snapshot hash) rejects tampered, truncated, or
+  rolled-back archives, as well as cross-vault and cross-account restores.
+  Separately, `tock export json`/`md` now prints a loud stderr warning that its
+  output is **unencrypted portability data, not a backup**.
+
 - **`tock account adopt` and `tock account disconnect`** (#197): connect an
   existing local-only vault to a sync server — and disconnect it again —
   without ever re-creating or re-encrypting it. `tock account adopt --server
