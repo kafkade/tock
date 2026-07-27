@@ -236,8 +236,9 @@ the page, sign in again to use them.
 
 ### Backup & restore
 
-The data volume holds the **only copy** of your encrypted event store — back it
-up. With the default named volume `tock-data`:
+This is the **server-side** backup: the data volume holds the **only copy** of the
+encrypted event store the server relays — back it up. With the default named volume
+`tock-data`:
 
 ```sh
 # Backup: stop for a consistent snapshot, tar the volume, restart.
@@ -253,6 +254,17 @@ docker run --rm -v tock-data:/data -v "$PWD":/backup alpine \
 
 The backup is ciphertext only; keep your Emergency Kit separately — without it
 the data cannot be decrypted.
+
+> **Server backup ≠ client (vault) backup.** The volume snapshot above protects the
+> *server's* relayed ciphertext. It is **not** a backup of a client's local vault,
+> whose materialized tables hold plaintext at rest
+> ([ADR-014](adr/ADR-014-at-rest-encryption-app-layer-aead.md)) — so copying a
+> client's SQLite file is a *plaintext* archive, not a safe backup. Client-side
+> backup/restore has its own outer-encrypted format and restore modes, specified in
+> [ADR-018](adr/ADR-018-backup-restore-format-and-modes.md) (implementation tracked
+> in [#200](https://github.com/kafkade/tock/issues/200)). As with the server backup,
+> restore needs only your password **and** Secret Key, and the Emergency Kit must be
+> stored separately from the backup file.
 
 ### Upgrades
 

@@ -22,6 +22,7 @@ This directory contains Architecture Decision Records for the Tock project. Each
 | [ADR-014](ADR-014-at-rest-encryption-app-layer-aead.md) | At-rest encryption — app-layer AEAD for 1.0, SQLCipher deferred | Accepted (amends ADR-004) |
 | [ADR-015](ADR-015-pre-1.0-security-audit-status.md) | Pre-1.0 security audit status — documented unaudited stance | Accepted |
 | [ADR-016](ADR-016-three-id-identity-and-adoption.md) | Three-ID identity model & local→server adoption | Accepted (amends ADR-011) |
+| [ADR-018](ADR-018-backup-restore-format-and-modes.md) | Encrypted backup & restore — format and restore modes | Accepted |
 
 ## Categories
 
@@ -41,6 +42,7 @@ This directory contains Architecture Decision Records for the Tock project. Each
 - ADR-014: At-rest encryption — app-layer AEAD for 1.0, SQLCipher deferred
 - ADR-015: Pre-1.0 security audit status — documented unaudited stance
 - ADR-016: Three-ID identity model & local→server adoption
+- ADR-018: Encrypted backup & restore — format and restore modes
 
 ### Synchronization
 
