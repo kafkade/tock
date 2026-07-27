@@ -41,6 +41,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [ADR-014](docs/adr/ADR-014-at-rest-encryption-app-layer-aead.md), which
   amends [ADR-004](docs/adr/ADR-004-sqlite-app-layer-encryption.md).
 
+- **Three-ID identity model & local→server adoption ratified** (#195):
+  documented that tock uses **three distinct identifiers** and specified how a
+  local-only vault is later published to a server. The three are: the
+  **client crypto `account_id`** (minted on-device at first use, bound into the
+  vault's key derivation, stable for the life of the vault), the **`vault_id`**
+  (the sync bucket key), and the **server principal `account_id`** (minted by
+  the server at registration). This corrects earlier "server-assigned
+  `account_id`" wording that conflated the client crypto identity with the
+  server principal. The ADR pins the adoption lifecycle
+  (`LocalOnly → Adopting → ServerBacked`, with `disconnect` and abort/rollback),
+  an authoritative-server invariant (a vault binds to one server; a second bind
+  needs an explicit `--migrate`), the zero-knowledge invariant with an honest
+  metadata-disclosure table, a UUIDv7 correlation mitigation, a threat model,
+  and the recommendation to bind email at adopt rather than at first init. No
+  plaintext or key material leaves the device and there is no vault-format
+  change (stays `v2`). See
+  [ADR-016](docs/adr/ADR-016-three-id-identity-and-adoption.md), which amends
+  [ADR-011](docs/adr/ADR-011-account-based-self-host-two-secret-auth.md).
+
 ### CI
 
 - **macOS code signing + notarization wired into releases** (#174): the
