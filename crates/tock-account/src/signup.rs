@@ -275,4 +275,91 @@ mod tests {
         assert!(t.contains("A4-X"));
         assert!(t.contains("NOT stored"));
     }
+
+    /// Adoption (issue #197): `derive` on an *existing* vault header must
+    /// preserve BOTH crypto ids (A = `account_id`, V = `vault_id`) verbatim and
+    /// send only non-secret fields — parity with signup (AC #1, #4).
+    #[test]
+    fn adopt_derive_preserves_ids_and_leaks_no_secrets() {
+        use tock_core::vault::header::{
+            FORMAT_VERSION, MAGIC, MIN_COMPAT_VERSION, STORAGE_LAYOUT_V0,
+        };
+        use tock_core::vault::{Argon2HeaderParams, VaultHeader};
+        use tock_crypto::SecretKey;
+
+        // Distinct A and V: adoption must carry each through unchanged.
+        let vault_id = uuid::Uuid::from_bytes([1u8; 16]);
+        let account_id = uuid::Uuid::from_bytes([2u8; 16]);
+        let header = VaultHeader {
+            magic: MAGIC,
+            format_version: FORMAT_VERSION,
+            min_compatible_version: MIN_COMPAT_VERSION,
+            vault_id,
+            account_id,
+            kdf_version: 1,
+            kdf_salt: [7u8; 16],
+            hkdf_salt: [9u8; 32],
+            argon2: Argon2HeaderParams {
+                t: 3,
+                m_kib: 65_536,
+                p: 1,
+            },
+            vk_wrap_nonce: [3u8; 12],
+            vk_wrap_ct: vec![0xAB; 60],
+            created_at: time::OffsetDateTime::UNIX_EPOCH,
+            storage_layout: STORAGE_LAYOUT_V0.to_string(),
+        };
+
+        let secret_key = SecretKey::generate().expect("sk");
+        let password = "correct horse battery staple";
+        let material =
+            SignupMaterial::derive("adopt@b.c", password, &secret_key, &header, "https://srv")
+                .expect("derive");
+        let req = &material.register_request;
+
+        // V echoed as hex; the already-wrapped header travels verbatim.
+        assert_eq!(
+            req.vault_id.as_deref(),
+            Some(crate::codec::hex_encode(vault_id.as_bytes()).as_str())
+        );
+        let sent_header =
+            crate::codec::base64_decode(req.header.as_ref().expect("header")).expect("b64");
+        assert_eq!(sent_header, header.to_bytes());
+        // The decoded header still carries the SAME A and V (no rotation).
+        let parsed = VaultHeader::from_bytes(&sent_header).expect("parse");
+        assert_eq!(parsed.vault_id, vault_id);
+        assert_eq!(parsed.account_id, account_id);
+
+        // AC #4: exactly the allowed, non-secret fields leave the device.
+        let json = serde_json::to_value(req).expect("json");
+        let mut keys: Vec<&str> = json
+            .as_object()
+            .expect("object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            [
+                "header",
+                "kdf_params",
+                "srp_group",
+                "srp_salt",
+                "srp_verifier",
+                "username",
+                "vault_id",
+            ]
+        );
+        let blob = serde_json::to_string(req).expect("str");
+        assert!(
+            !blob.contains(password),
+            "password must never be serialized"
+        );
+        let sk_string = secret_key.to_emergency_kit(account_id.as_bytes());
+        assert!(
+            !blob.contains(&sk_string),
+            "secret key must never be serialized"
+        );
+    }
 }

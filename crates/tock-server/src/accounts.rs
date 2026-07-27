@@ -200,7 +200,13 @@ pub async fn register(
     let db = state.db.clone();
     let outcome = tokio::task::spawn_blocking(move || {
         let policy = db.registration_policy()?;
-        let outcome = db.register_account(
+        // Register the account and, when a header was supplied, claim the vault
+        // and store the header in the SAME transaction (ADR-016 §5) so a
+        // partial failure consumes nothing and the operation is retry-safe.
+        let vault_ref = header_upload
+            .as_ref()
+            .map(|(vault_bytes, header)| (vault_bytes, header.as_slice()));
+        db.adopt_register(
             &NewAccount {
                 username: &username,
                 srp_salt: &salt,
@@ -210,13 +216,8 @@ pub async fn register(
                 invite_token: invite.as_deref(),
             },
             policy,
-        )?;
-        if let Some((vault_bytes, header)) = header_upload {
-            db.ensure_vault(&vault_bytes)?;
-            db.claim_vault_for_account(&vault_bytes, &outcome.account_id)?;
-            db.put_vault_header(&vault_bytes, &header)?;
-        }
-        Ok::<_, Error>(outcome)
+            vault_ref,
+        )
     })
     .await
     .map_err(|e| Error::Internal(e.to_string()))??;

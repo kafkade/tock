@@ -41,6 +41,22 @@ const KEY_SERVER_URL: &str = "server_url";
 const KEY_DEVICE_LABEL: &str = "device_label";
 /// `sync_state` key for the server pull cursor (opaque monotonic position).
 const KEY_PULL_CURSOR: &str = "pull_cursor";
+/// `sync_state` key for the explicit server-binding state (ADR-016 §3).
+const KEY_BINDING_STATE: &str = "binding_state";
+/// `sync_state` key for the server principal **B** — the server-assigned
+/// account id returned at registration (ADR-016 §1). Distinct from the
+/// client-minted crypto `account_id` (**A**) and the `vault_id` (**V**).
+const KEY_SERVER_PRINCIPAL: &str = "server_principal";
+/// `sync_state` key for the account email bound at adopt (ADR-016 §9).
+const KEY_ACCOUNT_EMAIL: &str = "account_email";
+
+/// A vault has no server binding: **A** and **V** exist, but there is no
+/// server URL, principal **B**, or credentials. This is the default after
+/// `init` (ADR-016 §3).
+pub const BINDING_LOCAL_ONLY: &str = "local_only";
+/// A vault bound to exactly one server: the client has persisted the server
+/// URL, principal **B**, and credentials (ADR-016 §3).
+pub const BINDING_SERVER_BACKED: &str = "server_backed";
 
 /// Columns excluded from an `Update` event's changed-field list (but
 /// still carried in the snapshot payload). These are derived metadata
@@ -95,6 +111,82 @@ pub fn pull_cursor(vault: &OpenVault) -> Result<u64, Error> {
 /// [`Error::Sqlite`] on persistence failure.
 pub fn set_pull_cursor(vault: &OpenVault, cursor: u64) -> Result<(), Error> {
     state::set_cursor(vault.connection(), KEY_PULL_CURSOR, cursor)
+}
+
+/// Read the explicit binding state, defaulting to [`BINDING_LOCAL_ONLY`].
+///
+/// The binding state is explicit and recorded at adopt (ADR-016 §3) — it is
+/// **not** inferred from the `"local"` device label.
+///
+/// # Errors
+/// [`Error::Sqlite`] on query failure.
+pub fn binding_state(vault: &OpenVault) -> Result<String, Error> {
+    Ok(state::get_state_str(vault.connection(), KEY_BINDING_STATE)?
+        .unwrap_or_else(|| BINDING_LOCAL_ONLY.to_string()))
+}
+
+/// Persist the explicit binding state (ADR-016 §3).
+///
+/// # Errors
+/// [`Error::Sqlite`] on persistence failure.
+pub fn set_binding_state(vault: &OpenVault, value: &str) -> Result<(), Error> {
+    state::set_state_str(vault.connection(), KEY_BINDING_STATE, value)
+}
+
+/// Read the persisted server principal **B**, if the vault is server-backed
+/// (ADR-016 §1).
+///
+/// # Errors
+/// [`Error::Sqlite`] on query failure.
+pub fn server_principal(vault: &OpenVault) -> Result<Option<String>, Error> {
+    state::get_state_str(vault.connection(), KEY_SERVER_PRINCIPAL)
+}
+
+/// Persist the server principal **B** returned at registration (ADR-016 §1).
+/// This is the server-assigned account id; the client previously discarded it.
+///
+/// # Errors
+/// [`Error::Sqlite`] on persistence failure.
+pub fn set_server_principal(vault: &OpenVault, principal: &str) -> Result<(), Error> {
+    state::set_state_str(vault.connection(), KEY_SERVER_PRINCIPAL, principal)
+}
+
+/// Read the account email bound at adopt, if any (ADR-016 §9).
+///
+/// # Errors
+/// [`Error::Sqlite`] on query failure.
+pub fn account_email(vault: &OpenVault) -> Result<Option<String>, Error> {
+    state::get_state_str(vault.connection(), KEY_ACCOUNT_EMAIL)
+}
+
+/// Persist the account email bound at adopt (ADR-016 §9).
+///
+/// # Errors
+/// [`Error::Sqlite`] on persistence failure.
+pub fn set_account_email(vault: &OpenVault, email: &str) -> Result<(), Error> {
+    state::set_state_str(vault.connection(), KEY_ACCOUNT_EMAIL, email)
+}
+
+/// Clear the server binding, returning the vault to `LocalOnly`.
+///
+/// The inverse of adoption (ADR-016 §3 `disconnect`): removes the server URL,
+/// principal **B**, email, and binding state, and resets the pull cursor. **A**,
+/// **V**, and all local data are preserved — no keys are rotated or re-wrapped.
+///
+/// # Errors
+/// [`Error::Sqlite`] on persistence failure.
+pub fn clear_binding(vault: &OpenVault) -> Result<(), Error> {
+    let conn = vault.connection();
+    for key in [
+        KEY_SERVER_URL,
+        KEY_SERVER_PRINCIPAL,
+        KEY_ACCOUNT_EMAIL,
+        KEY_BINDING_STATE,
+    ] {
+        state::delete_state(conn, key)?;
+    }
+    state::set_cursor(conn, KEY_PULL_CURSOR, 0)?;
+    Ok(())
 }
 
 // ── Outbound: collect local changes ──────────────────────────────────

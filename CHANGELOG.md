@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`tock account adopt` and `tock account disconnect`** (#197): connect an
+  existing local-only vault to a sync server — and disconnect it again —
+  without ever re-creating or re-encrypting it. `tock account adopt --server
+  <url> --email <you>` keeps the vault's crypto identity intact (its account id
+  and vault id are unchanged), lets the server mint its own principal, uploads
+  the already-wrapped vault header, and runs an initial push. The server still
+  only ever receives your SRP verifier, KDF parameters, vault id, and encrypted
+  header — never your password, Secret Key, or any plaintext. A vault binds to
+  exactly one server, so adopting a different server is refused unless you pass
+  `--migrate`; re-running `adopt` from a second device is safe, continuing only
+  when the crypto identity matches. `tock account disconnect` is the inverse: it
+  revokes the server principal, resets the sync cursor, and clears stored
+  credentials, returning the vault to local-only with every task preserved.
+  `tock account status` now shows the current server binding. See
+  [ADR-016](docs/adr/ADR-016-three-id-identity-and-adoption.md).
+
 ### Security
 
 - **Backup & restore format and restore modes ratified** (#196): specified how a

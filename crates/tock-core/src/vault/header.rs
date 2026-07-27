@@ -69,8 +69,10 @@ pub struct VaultHeader {
     pub min_compatible_version: u16,
     /// Globally unique vault identifier (`UUIDv7`).
     pub vault_id: Uuid,
-    /// Server-assigned account identifier this vault belongs to
-    /// (`UUIDv7`). Bound into the 2SKD Secret-Key step and the wrap AAD.
+    /// Client-minted crypto account identifier **A** (`UUIDv7`), stamped at
+    /// vault `init` and never assigned by a server (ADR-016). Bound into the
+    /// 2SKD Secret-Key step and the wrap AAD, so it is stable across adoption
+    /// (the server's own principal **B** is tracked separately, off-header).
     pub account_id: Uuid,
     /// Two-secret KDF version. Selects Argon2id parameters and the 2SKD
     /// `info` labels; bumping it is a forward-compatible re-wrap.

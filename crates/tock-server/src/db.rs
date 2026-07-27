@@ -706,39 +706,67 @@ impl ServerDb {
     ///
     /// The server never receives a password, Secret Key, URK, or `x` — only the
     /// public verifier and its salt/parameters.
+    /// Convenience wrapper around [`Self::adopt_register`] with no vault claim
+    /// (fresh registration). Retained for the unit tests that exercise the
+    /// account-registration path directly.
+    #[cfg(test)]
     pub fn register_account(
         &self,
         new: &NewAccount<'_>,
         policy: crate::accounts::RegistrationPolicy,
     ) -> Result<RegisterOutcome, Error> {
-        use crate::accounts::RegistrationPolicy;
+        self.adopt_register(new, policy, None)
+    }
 
+    /// Register an account and, when `vault` is supplied, claim the vault
+    /// bucket and store its wrapped header — all in **one** database
+    /// transaction (ADR-016 §5). This is the register-and-claim path behind
+    /// both `signup` (fresh vault) and `adopt` (existing local vault): a
+    /// partial failure consumes no username/invite and leaves no half-bound
+    /// vault, so the operation is retry-safe.
+    ///
+    /// `vault` is `(vault_id, wrapped_header)`; the header is opaque — the
+    /// server never decrypts it and never mints the vault's crypto identity
+    /// (**A**/**V** stay client-owned). Full normalization and the opaque
+    /// per-server alias are tightened in issue #199.
+    pub fn adopt_register(
+        &self,
+        new: &NewAccount<'_>,
+        policy: crate::accounts::RegistrationPolicy,
+        vault: Option<(&[u8; 16], &[u8])>,
+    ) -> Result<RegisterOutcome, Error> {
         let conn = self
             .conn
             .lock()
             .map_err(|e| Error::Internal(e.to_string()))?;
         let tx = conn.unchecked_transaction()?;
 
-        let count: i64 = tx.query_row("SELECT COUNT(*) FROM accounts", [], |r| r.get(0))?;
-        let bootstrap = count == 0;
+        let outcome = Self::register_account_tx(&tx, new, policy)?;
 
-        let role = if bootstrap {
-            "admin".to_string()
-        } else {
-            match policy {
-                RegistrationPolicy::Open => match new.invite_token {
-                    Some(token) => Self::consume_invite_tx(&tx, token, new.username)?,
-                    None => "user".to_string(),
-                },
-                RegistrationPolicy::InviteOnly | RegistrationPolicy::Disabled => {
-                    let token = new
-                        .invite_token
-                        .ok_or(Error::Forbidden("registration requires a valid invite"))?;
-                    Self::consume_invite_tx(&tx, token, new.username)?
-                }
-            }
-        };
+        if let Some((vault_id, header)) = vault {
+            Self::ensure_and_claim_vault_tx(&tx, vault_id, &outcome.account_id)?;
+            Self::put_vault_header_tx(&tx, vault_id, header)?;
+        }
 
+        tx.commit()?;
+        Ok(outcome)
+    }
+
+    /// Account-creation body of [`Self::adopt_register`], operating on an open
+    /// transaction so the optional vault-claim + header-store commit or roll
+    /// back together with it.
+    fn register_account_tx(
+        tx: &Connection,
+        new: &NewAccount<'_>,
+        policy: crate::accounts::RegistrationPolicy,
+    ) -> Result<RegisterOutcome, Error> {
+        use crate::accounts::RegistrationPolicy;
+
+        // An already-registered username is a conflict, not a policy failure —
+        // check it first so a re-registration is a deterministic 409 regardless
+        // of the registration policy or invite state. This keeps register (and
+        // therefore `adopt`) idempotent and retry-safe (ADR-016 §5); a second
+        // device re-adopting drives this 409 → SRP-login + verify path.
         let exists: bool = tx.query_row(
             "SELECT COUNT(*) > 0 FROM accounts WHERE username = ?1",
             params![new.username],
@@ -750,6 +778,26 @@ impl ServerDb {
                 new.username
             )));
         }
+
+        let count: i64 = tx.query_row("SELECT COUNT(*) FROM accounts", [], |r| r.get(0))?;
+        let bootstrap = count == 0;
+
+        let role = if bootstrap {
+            "admin".to_string()
+        } else {
+            match policy {
+                RegistrationPolicy::Open => match new.invite_token {
+                    Some(token) => Self::consume_invite_tx(tx, token, new.username)?,
+                    None => "user".to_string(),
+                },
+                RegistrationPolicy::InviteOnly | RegistrationPolicy::Disabled => {
+                    let token = new
+                        .invite_token
+                        .ok_or(Error::Forbidden("registration requires a valid invite"))?;
+                    Self::consume_invite_tx(tx, token, new.username)?
+                }
+            }
+        };
 
         let account_id = uuid::Uuid::now_v7().to_string();
         let now = rfc3339_now();
@@ -776,7 +824,6 @@ impl ServerDb {
                 now,
             ],
         )?;
-        tx.commit()?;
 
         Ok(RegisterOutcome {
             account_id,
@@ -784,6 +831,80 @@ impl ServerDb {
             status: "active".to_string(),
             admin_token,
         })
+    }
+
+    /// Transaction-scoped `ensure_vault` + `claim_vault_for_account`: create
+    /// the bucket if absent, then claim it for `account_id` or verify existing
+    /// ownership. Rejects a vault already owned by a different account so a
+    /// second, unrelated adoption of the same `vault_id` cannot succeed.
+    fn ensure_and_claim_vault_tx(
+        tx: &Connection,
+        vault_id: &[u8; 16],
+        account_id: &str,
+    ) -> Result<(), Error> {
+        tx.execute(
+            "INSERT OR IGNORE INTO vaults (id, created_at) VALUES (?1, ?2)",
+            params![vault_id.to_vec(), rfc3339_now()],
+        )?;
+        let current: Option<Option<String>> = tx
+            .query_row(
+                "SELECT account_id FROM vaults WHERE id = ?1",
+                params![vault_id.to_vec()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        match current {
+            None => return Err(Error::NotFound),
+            Some(Some(existing)) if existing != account_id => {
+                return Err(Error::Forbidden("vault belongs to a different account"));
+            }
+            Some(Some(_)) => return Ok(()),
+            Some(None) => {}
+        }
+        tx.execute(
+            "UPDATE vaults SET account_id = ?2 WHERE id = ?1",
+            params![vault_id.to_vec(), account_id],
+        )?;
+        Ok(())
+    }
+
+    /// Transaction-scoped `put_vault_header`.
+    fn put_vault_header_tx(
+        tx: &Connection,
+        vault_id: &[u8; 16],
+        header: &[u8],
+    ) -> Result<(), Error> {
+        tx.execute(
+            "INSERT OR REPLACE INTO vault_headers (vault_id, header, updated_at)
+             VALUES (?1, ?2, ?3)",
+            params![vault_id.to_vec(), header, rfc3339_now()],
+        )?;
+        Ok(())
+    }
+
+    /// Revoke the server principal **B** for `disconnect` (ADR-016 §3): in one
+    /// transaction, disown the account's vault buckets (so **V** returns to
+    /// unowned and is re-adoptable), delete its sessions, and delete the
+    /// account row. The encrypted events and header remain untouched; **A**,
+    /// **V**, and all local data live only on the client and are unaffected.
+    /// Returns `false` if no such account exists.
+    pub fn disconnect_account(&self, account_id: &str) -> Result<bool, Error> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))?;
+        let tx = conn.unchecked_transaction()?;
+        tx.execute(
+            "UPDATE vaults SET account_id = NULL WHERE account_id = ?1",
+            params![account_id],
+        )?;
+        tx.execute(
+            "DELETE FROM sessions WHERE account_id = ?1",
+            params![account_id],
+        )?;
+        let deleted = tx.execute("DELETE FROM accounts WHERE id = ?1", params![account_id])?;
+        tx.commit()?;
+        Ok(deleted > 0)
     }
 
     /// Validate and consume an invite token, returning the role it grants.
@@ -1689,6 +1810,117 @@ mod tests {
             db.register_account(&sample_account("frank", None), RegistrationPolicy::Open),
             Err(Error::Conflict(_))
         ));
+    }
+
+    // ── Adoption: atomic register + claim + header (issue #197, ADR-016 §5) ──
+
+    #[test]
+    fn adopt_register_claims_vault_and_stores_header_atomically() {
+        let db = ServerDb::open_memory().expect("open");
+        db.register_account(&sample_account("admin", None), RegistrationPolicy::Open)
+            .expect("bootstrap");
+
+        let vault = [0x11_u8; 16];
+        let header = b"wrapped-header-bytes".to_vec();
+        let out = db
+            .adopt_register(
+                &sample_account("alice", None),
+                RegistrationPolicy::Open,
+                Some((&vault, &header)),
+            )
+            .expect("adopt");
+
+        // Account exists, vault is claimed for it, and the header is stored —
+        // all committed together.
+        db.require_vault_access(&vault, &out.account_id)
+            .expect("claimed");
+        assert_eq!(
+            db.get_vault_header(&vault).expect("header").as_deref(),
+            Some(header.as_slice())
+        );
+    }
+
+    #[test]
+    fn adopt_register_duplicate_username_consumes_nothing() {
+        let db = ServerDb::open_memory().expect("open");
+        db.register_account(&sample_account("admin", None), RegistrationPolicy::Open)
+            .expect("bootstrap");
+
+        let vault_a = [0x11_u8; 16];
+        let header_a = b"header-a".to_vec();
+        db.adopt_register(
+            &sample_account("alice", None),
+            RegistrationPolicy::Open,
+            Some((&vault_a, &header_a)),
+        )
+        .expect("first adopt");
+        let count_before = db.account_count().expect("count");
+
+        // A second adopt reusing the SAME username but a DIFFERENT vault must
+        // fail — and roll back entirely: no new account, no claim on vault_b,
+        // no header stored, and the first vault's header is untouched.
+        let vault_b = [0x22_u8; 16];
+        let header_b = b"header-b".to_vec();
+        assert!(matches!(
+            db.adopt_register(
+                &sample_account("alice", None),
+                RegistrationPolicy::Open,
+                Some((&vault_b, &header_b)),
+            ),
+            Err(Error::Conflict(_))
+        ));
+
+        assert_eq!(db.account_count().expect("count"), count_before);
+        assert!(
+            db.get_vault_header(&vault_b).expect("header b").is_none(),
+            "failed adopt must store no header"
+        );
+        assert!(
+            matches!(
+                db.require_vault_access(&vault_b, "whoever"),
+                Err(Error::NotFound)
+            ),
+            "failed adopt must not create the vault bucket"
+        );
+        assert_eq!(
+            db.get_vault_header(&vault_a).expect("header a").as_deref(),
+            Some(header_a.as_slice()),
+            "prior state stays intact (retry-safe)"
+        );
+    }
+
+    #[test]
+    fn disconnect_account_revokes_principal_but_preserves_data() {
+        let db = ServerDb::open_memory().expect("open");
+        db.register_account(&sample_account("admin", None), RegistrationPolicy::Open)
+            .expect("bootstrap");
+
+        let vault = [0x33_u8; 16];
+        let header = b"still-here".to_vec();
+        let out = db
+            .adopt_register(
+                &sample_account("alice", None),
+                RegistrationPolicy::Open,
+                Some((&vault, &header)),
+            )
+            .expect("adopt");
+
+        assert!(db.disconnect_account(&out.account_id).expect("disconnect"));
+
+        // The principal (B) is gone: the account no longer exists and the vault
+        // is disowned (re-adoptable). The wrapped header — opaque data — stays.
+        assert!(db.get_account(&out.account_id).expect("get").is_none());
+        assert!(matches!(
+            db.require_vault_access(&vault, &out.account_id),
+            Err(Error::Forbidden(_))
+        ));
+        assert_eq!(
+            db.get_vault_header(&vault).expect("header").as_deref(),
+            Some(header.as_slice())
+        );
+
+        // Idempotent: disconnecting an unknown principal is a no-op false.
+        assert!(!db.disconnect_account("no-such-account").expect("noop"));
     }
 
     #[test]
