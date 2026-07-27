@@ -236,9 +236,49 @@ the page, sign in again to use them.
 
 ### Backup & restore
 
-This is the **server-side** backup: the data volume holds the **only copy** of the
-encrypted event store the server relays — back it up. With the default named volume
-`tock-data`:
+The server relays **ciphertext only** — it never holds keys and never decrypts.
+Around that there are **three distinct** server-side data capabilities; keep them
+straight because they solve different problems:
+
+| Capability | What it is | Who runs it | Survives server DB loss? |
+| --- | --- | --- | --- |
+| **Server-retained snapshots** | Independently retained, timestamped copies of the server DB | Operator (automatic + manual) | **Yes** — that's the point |
+| **Per-user ciphertext export** | A portable archive (header + event log) of *one* account's vault | Account owner (or admin, offline) | No — it's portability, not a backup |
+| **Restore / import** | Loading an exported archive back into a vault | Account owner | N/A — it's the reverse of export |
+
+None of these ever decrypt; all three move ciphertext only. Export ≠ import ≠
+server-retained snapshot — a download endpoint is portability, a retained snapshot
+is what protects you when the DB is lost **before** anyone downloads.
+
+#### Server-retained snapshots (survive DB loss)
+
+The data volume holds the **only copy** of the encrypted event store the server
+relays — so it must be backed up independently. Two mechanisms, use both:
+
+**Scheduled snapshots (built in).** The server runs a background task that
+periodically writes a consistent, ciphertext-only copy of the whole database
+(`VACUUM INTO` a timestamped `tock-server-<UTC>.db` file) into a retention
+directory, then prunes to the newest *N*. This means data survives even if the
+live DB is lost before a user downloads an export. Configure it on the server
+binary (flags or environment; snapshots are **on by default**, daily):
+
+| Flag | Environment | Default | Meaning |
+| --- | --- | --- | --- |
+| `--snapshot-interval-secs` | `TOCK_SNAPSHOT_INTERVAL_SECS` | `86400` (daily) | Seconds between snapshots; `0` disables |
+| `--snapshot-dir` | `TOCK_SNAPSHOT_DIR` | `<data_dir>/snapshots` | Where snapshot files are written |
+| `--snapshot-keep` | `TOCK_SNAPSHOT_KEEP` | `7` | Newest *N* snapshots kept; older ones pruned |
+
+Restore is a file copy: stop the server, replace the live DB with a snapshot file,
+restart. Snapshots are ciphertext only — keep your Emergency Kit separately.
+
+> **Scope note.** This ships scheduled *snapshot* retention (keep newest *N*).
+> Strict write-ahead-log point-in-time recovery (continuous WAL archiving + replay
+> to an arbitrary instant) is **deferred** — for a personal-scale ciphertext relay
+> whose clients hold the authoritative copy and can re-push, per-interval snapshots
+> are the right depth/cost trade-off for 1.0.
+
+**Manual volume snapshot.** For an out-of-band copy (or before an upgrade), stop
+the server and `tar` the volume. With the default named volume `tock-data`:
 
 ```sh
 # Backup: stop for a consistent snapshot, tar the volume, restart.
@@ -254,6 +294,43 @@ docker run --rm -v tock-data:/data -v "$PWD":/backup alpine \
 
 The backup is ciphertext only; keep your Emergency Kit separately — without it
 the data cannot be decrypted.
+
+#### Per-user ciphertext export (portability)
+
+Export produces a portable, **ciphertext-only** archive of a single account's
+vault — its non-secret header plus the full event log — without ever decrypting.
+It's how a user takes their data elsewhere (and the first half of cross-server
+migration). It is **not** a server backup: it covers one vault and does nothing to
+protect against the server losing its DB.
+
+- **Over HTTP (self-service):** an authenticated owner calls
+  `GET /v1/vaults/:vault_id/export`. Authorization runs the same double check as
+  every sync route — the session's bearer **and** vault ownership — so account A can
+  never export account B's ciphertext.
+- **Offline (operator, whole instance):** produce per-user archives directly from
+  the database with no running server, never decrypting:
+
+  ```sh
+  # Every vault on the instance:
+  tock-server admin export --all --out ./export
+
+  # Only one account's vaults:
+  tock-server admin export --account <account-id> --out ./export
+  ```
+
+  Each archive is written as `<account>-<vaulthex>.json` (or
+  `unowned-<vaulthex>.json`) containing only stored ciphertext. This complements —
+  it does not replace — the whole-volume `tar` above.
+
+#### Restore / import (round-trip)
+
+Import is the reverse of export: it loads an exported archive back into a vault via
+`POST /v1/vaults/:vault_id/import`, making export a **real, reversible round-trip**
+and enabling cross-server migration. It uses the same double authorization as the
+sync routes and is idempotent — re-importing an archive re-adds nothing (duplicate
+event ids are ignored). Importing into a fresh, unowned vault claims it for the
+caller; importing into a vault owned by a different account is refused. As with
+everything server-side, import moves ciphertext only and never decrypts.
 
 > **Server backup ≠ client (vault) backup.** The volume snapshot above protects the
 > *server's* relayed ciphertext. It is **not** a backup of a client's local vault,

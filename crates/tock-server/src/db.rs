@@ -10,6 +10,10 @@ use std::sync::Mutex;
 
 use crate::error::Error;
 
+/// One row of [`ServerDb::list_vaults`]: a vault id and its owning account id
+/// (`None` when the vault is unclaimed).
+pub type VaultListing = (Vec<u8>, Option<String>);
+
 /// Server database wrapper.
 pub struct ServerDb {
     conn: Mutex<Connection>,
@@ -431,6 +435,40 @@ impl ServerDb {
         Ok(events)
     }
 
+    /// Read the **entire** event log for a vault, ordered by `rowid ASC`.
+    ///
+    /// Unlike [`pull_events`](Self::pull_events) (cursor-paged incremental sync),
+    /// this returns every stored event in one pass for a point-in-time
+    /// ciphertext **export** (issue #201). Payloads are returned opaquely; the
+    /// server never decrypts.
+    pub fn all_events(&self, vault_id: &[u8; 16]) -> Result<Vec<StoredEvent>, Error> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))?;
+        let mut stmt = conn.prepare(
+            "SELECT rowid, id, device_id, lamport, payload, created_at
+             FROM server_events
+             WHERE vault_id = ?1
+             ORDER BY rowid ASC",
+        )?;
+        let rows = stmt.query_map(params![vault_id.to_vec()], |row| {
+            Ok(StoredEvent {
+                rowid: row.get(0)?,
+                id: row.get(1)?,
+                device_id: row.get(2)?,
+                lamport: row.get(3)?,
+                payload: row.get(4)?,
+                created_at: row.get(5)?,
+            })
+        })?;
+        let mut events = Vec::new();
+        for row in rows {
+            events.push(row?);
+        }
+        Ok(events)
+    }
+
     /// Store an onboarding blob.
     pub fn put_onboarding_blob(
         &self,
@@ -569,6 +607,66 @@ impl ServerDb {
             .optional()?
             .flatten();
         Ok(max.unwrap_or(0))
+    }
+
+    // ── Export enumeration + snapshot (issue #201) ───────────────────
+
+    /// List every vault as `(vault_id_bytes, account_id)` for the offline
+    /// admin `--all` export. `account_id` is `None` for an unclaimed vault.
+    /// Returns only opaque ids — no ciphertext is read.
+    pub fn list_vaults(&self) -> Result<Vec<VaultListing>, Error> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))?;
+        let mut stmt = conn.prepare("SELECT id, account_id FROM vaults ORDER BY id ASC")?;
+        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        let mut vaults = Vec::new();
+        for row in rows {
+            vaults.push(row?);
+        }
+        Ok(vaults)
+    }
+
+    /// List the vault ids claimed by `account_id`, for the offline admin
+    /// `--account <id>` export.
+    pub fn vaults_for_account(&self, account_id: &str) -> Result<Vec<[u8; 16]>, Error> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))?;
+        let mut stmt =
+            conn.prepare("SELECT id FROM vaults WHERE account_id = ?1 ORDER BY id ASC")?;
+        let rows = stmt.query_map(params![account_id], |row| row.get::<_, Vec<u8>>(0))?;
+        let mut vaults = Vec::new();
+        for row in rows {
+            let bytes = row?;
+            let arr: [u8; 16] = bytes
+                .as_slice()
+                .try_into()
+                .map_err(|_| Error::Internal("stored vault id is not 16 bytes".into()))?;
+            vaults.push(arr);
+        }
+        Ok(vaults)
+    }
+
+    /// Produce a consistent point-in-time snapshot of the whole database at
+    /// `dest` (which must not already exist) using `SQLite` `VACUUM INTO`.
+    ///
+    /// This is the primitive behind the scheduled server-retained snapshots
+    /// (issue #201). It is consistent even under WAL journaling and mirrors
+    /// `tock-storage`'s client-side backup path. The snapshot is ciphertext
+    /// only — the server never decrypts.
+    pub fn snapshot_to(&self, dest: &Path) -> Result<(), Error> {
+        let dest_str = dest
+            .to_str()
+            .ok_or_else(|| Error::Internal("snapshot path is not valid UTF-8".into()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))?;
+        conn.execute("VACUUM INTO ?1", params![dest_str])?;
+        Ok(())
     }
 
     // ── Account management (hosted mode) ─────────────────────────────
@@ -1600,6 +1698,82 @@ mod tests {
         assert_eq!(after_3.len(), 2); // lamport 4 and 5
         assert_eq!(after_3[0].lamport, 4);
         assert_eq!(after_3[1].lamport, 5);
+    }
+
+    #[test]
+    fn all_events_orders_by_rowid() {
+        let db = ServerDb::open_memory().expect("open");
+        let vault = [1_u8; 16];
+        let other = [9_u8; 16];
+        let device = [2_u8; 16];
+
+        db.ensure_vault(&vault).expect("vault");
+        db.ensure_vault(&other).expect("other vault");
+        for i in 1..=3 {
+            let mut eid = [0_u8; 16];
+            eid[0] = i;
+            db.push_event(&eid, &vault, &device, i64::from(i), &[i])
+                .expect("push");
+        }
+        // An event in a different vault must not appear in this vault's export.
+        db.push_event(&[0xFF; 16], &other, &device, 1, b"other")
+            .expect("push other");
+
+        let all = db.all_events(&vault).expect("all");
+        assert_eq!(all.len(), 3);
+        assert_eq!(all[0].lamport, 1);
+        assert_eq!(all[2].lamport, 3);
+        // Monotonic rowid ordering.
+        assert!(all[0].rowid < all[1].rowid && all[1].rowid < all[2].rowid);
+    }
+
+    #[test]
+    fn list_and_scope_vaults() {
+        let db = ServerDb::open_memory().expect("open");
+        let owned = [1_u8; 16];
+        let unowned = [2_u8; 16];
+        db.ensure_vault(&owned).expect("owned");
+        db.ensure_vault(&unowned).expect("unowned");
+        db.claim_vault_for_account(&owned, "acct-1").expect("claim");
+
+        let vaults = db.list_vaults().expect("list");
+        assert_eq!(vaults.len(), 2);
+        assert!(
+            vaults
+                .iter()
+                .any(|(id, acct)| id == &owned.to_vec() && acct.as_deref() == Some("acct-1"))
+        );
+        assert!(
+            vaults
+                .iter()
+                .any(|(id, acct)| id == &unowned.to_vec() && acct.is_none())
+        );
+
+        let scoped = db.vaults_for_account("acct-1").expect("scoped");
+        assert_eq!(scoped, vec![owned]);
+        assert!(db.vaults_for_account("acct-2").expect("none").is_empty());
+    }
+
+    #[test]
+    fn snapshot_to_produces_openable_copy() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let src_path = tmp.path().join("tock-server.db");
+        let db = ServerDb::open(&src_path).expect("open");
+        let vault = [7_u8; 16];
+        let device = [8_u8; 16];
+        db.ensure_vault(&vault).expect("vault");
+        db.push_event(&[1_u8; 16], &vault, &device, 1, b"opaque")
+            .expect("push");
+
+        let snap_path = tmp.path().join("snapshot.db");
+        db.snapshot_to(&snap_path).expect("snapshot");
+        assert!(snap_path.exists());
+
+        // The snapshot is a real, consistent database carrying the same event.
+        let restored = ServerDb::open(&snap_path).expect("open snapshot");
+        let events = restored.all_events(&vault).expect("all");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].payload, b"opaque");
     }
 
     #[test]
