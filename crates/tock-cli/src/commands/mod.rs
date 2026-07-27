@@ -2,6 +2,7 @@
 
 pub mod account;
 pub mod add;
+pub mod backup;
 pub mod caldav;
 pub mod checklist;
 pub mod config;
@@ -194,6 +195,8 @@ pub enum Commands {
     Onboard(sync_cmd::OnboardArgs),
     /// Inspect and revoke registered devices.
     Device(sync_cmd::DeviceArgs),
+    /// Create and restore encrypted vault backups (ADR-018).
+    Backup(backup::BackupArgs),
     /// Export data to a file.
     Export {
         /// Format: 'json' or 'md'.

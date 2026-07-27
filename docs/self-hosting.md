@@ -261,10 +261,34 @@ the data cannot be decrypted.
 > ([ADR-014](adr/ADR-014-at-rest-encryption-app-layer-aead.md)) — so copying a
 > client's SQLite file is a *plaintext* archive, not a safe backup. Client-side
 > backup/restore has its own outer-encrypted format and restore modes, specified in
-> [ADR-018](adr/ADR-018-backup-restore-format-and-modes.md) (implementation tracked
-> in [#200](https://github.com/kafkade/tock/issues/200)). As with the server backup,
-> restore needs only your password **and** Secret Key, and the Emergency Kit must be
-> stored separately from the backup file.
+> [ADR-018](adr/ADR-018-backup-restore-format-and-modes.md). As with the server
+> backup, restore needs only your password **and** Secret Key, and the Emergency Kit
+> must be stored separately from the backup file.
+
+#### Client-side vault backup
+
+Use the built-in encrypted backup for a client vault — never copy the raw
+`.tockvault` file (it contains plaintext at rest):
+
+```sh
+# Create an outer-encrypted snapshot (AES-256-GCM under a key derived from
+# your Vault Key). Needs your password and Secret Key.
+tock backup create --out my-vault-$(date +%F).tockbak
+
+# Restore after losing the device (keeps the original device identity and
+# sync state):
+tock backup restore my-vault-YYYY-MM-DD.tockbak --mode disaster-recovery
+
+# Restore onto a *second, still-active* device (mints a fresh device identity,
+# resets the sync cursor, and clears the server binding so it reconciles
+# remote history before pushing):
+tock backup restore my-vault-YYYY-MM-DD.tockbak --mode clone
+```
+
+The archive is decryptable **only** with your password and Secret Key; an archive
+made without the Secret Key cannot be recovered, by design. The `--mode` choice is
+required and explicit — never inferred. `tock export` is portability, **not** a
+backup: its output is unencrypted.
 
 ### Upgrades
 
