@@ -151,6 +151,7 @@ navigate, `Tab` to switch panes, `Enter` to select, `d` to complete,
 - **Encrypted vault** — password-protected, AES-256-GCM per-event AEAD, Ed25519 signed event log
 - **Multi-device sync** — end-to-end encrypted sync through a self-hostable server; see the [dogfooding guide](docs/dogfooding.md)
 - **Self-hosting** — one-command Docker Compose stack with a web **admin + onboarding console** (first-run wizard, account self-service) and automatic TLS; the browser is not a full productivity client for 1.0 (tasks/habits/time live in the CLI; the Apple apps arrive in 1.x). See the [self-hosting guide](docs/self-hosting.md)
+- **No lock-in** — `tock account export` downloads everything your server holds, and `tock account adopt --migrate` moves your account to a different server with your crypto identity intact; see the [migration guide](docs/migration.md)
 
 ## Install
 
@@ -202,6 +203,7 @@ tock/
 └── docs/
     ├── architecture.md
     ├── dogfooding.md           # self-host + multi-device sync guide
+    ├── migration.md            # move servers + download your data
     ├── adr/                    # 15 Architecture Decision Records
     └── distribution/
 ```

@@ -571,7 +571,10 @@ fn tokio_runtime() -> Result<tokio::runtime::Runtime, Box<dyn std::error::Error>
 /// Build an [`HttpTransport`], attaching SRP session credentials from the OS
 /// keyring when an account is signed in (issue #129). Pre-account device
 /// pairing still works against unauthenticated servers.
-fn authed_transport(
+///
+/// # Errors
+/// Fails if the underlying HTTP client cannot be constructed.
+pub fn authed_transport(
     server: &str,
     vault_id: uuid::Uuid,
 ) -> Result<HttpTransport, Box<dyn std::error::Error>> {

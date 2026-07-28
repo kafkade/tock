@@ -78,6 +78,22 @@ pub enum AccountCmd {
     },
     /// Revoke the server principal and return the vault to local-only.
     Disconnect,
+    /// Download this vault's ciphertext archive (header + full event log) from
+    /// its server — the "download my data" path (ADR-019 §2).
+    Export {
+        /// Output file (default: `tock-vault-<vaultid>-<unix>.json`).
+        #[arg(long, short)]
+        out: Option<PathBuf>,
+        /// Server base URL (defaults to the vault's persisted binding).
+        #[arg(long)]
+        server: Option<String>,
+    },
+    /// Upload a ciphertext archive back into this vault's server — the second
+    /// half of a cross-server migration (ADR-019 §3).
+    Import {
+        /// Archive file produced by `tock account export`.
+        file: PathBuf,
+    },
     /// Show the current account + session status.
     Status,
 }
@@ -110,6 +126,8 @@ pub fn run_account_cmd(cli: &crate::Cli, cmd: &AccountCmd) -> CmdResult {
             migrate,
         } => adopt(cli, server, email, *migrate),
         AccountCmd::Disconnect => disconnect(cli),
+        AccountCmd::Export { out, server } => export(cli, out.as_deref(), server.as_deref()),
+        AccountCmd::Import { file } => import(cli, file),
         AccountCmd::Status => status(),
     }
 }
@@ -279,6 +297,16 @@ fn adopt(cli: &crate::Cli, server: &str, email: &str, migrate: bool) -> CmdResul
     let vault_id = header.vault_id;
     let account_id = header.account_id;
 
+    // The server this vault was pointing at before this adopt, captured *before*
+    // any teardown clears it. Used only to decide whether the summary should warn
+    // that a migration moved the binding but not the history.
+    //
+    // Deliberately independent of `binding_state`: a `signup`-created vault
+    // records a server URL without ever being marked `ServerBacked`, and its
+    // history needs importing just the same.
+    let migrated_from = tock_storage::sync::server_url(&vault)?
+        .filter(|previous| migrate && previous.trim_end_matches('/') != server);
+
     // Authoritative-server invariant (ADR-016 §4): a vault binds to exactly one
     // server. Re-adopting the same server is idempotent; a different server is
     // refused unless `--migrate` moves the binding.
@@ -375,6 +403,30 @@ fn adopt(cli: &crate::Cli, server: &str, email: &str, migrate: bool) -> CmdResul
 
     println!("Adopted local vault into {server} for {email}.");
     println!("Pushed {pushed} local change(s). Run `tock sync` to keep syncing.");
+
+    // A migration moves the *binding*, not the history. Adoption's initial push
+    // only carries changes this device had not yet synced, so a fully-synced
+    // vault pushes nothing and the new server ends up holding the wrapped header
+    // with an EMPTY event log — a second device signing in there would
+    // materialize an empty vault. Documentation alone doesn't defuse that, so
+    // say it at the moment it becomes true. Printed guidance only: no state is
+    // recorded and no behaviour changes.
+    if let Some(previous) = migrated_from {
+        println!();
+        println!("Binding moved: {previous} -> {server}");
+        println!(
+            "Your event history did NOT move. Adoption pushes only changes this device\n\
+             had not yet synced ({pushed} here), so until you import your archive,\n\
+             {server} will serve an EMPTY vault to any new device that signs in."
+        );
+        println!("Finish the move with the archive from `tock account export`:");
+        println!("  tock account import <archive.json>");
+        println!("  tock sync");
+        println!(
+            "No archive yet? `tock account export` must run while still bound to the old\n\
+             server, so re-adopt {previous} with --migrate, export, then migrate back here."
+        );
+    }
     Ok(())
 }
 
@@ -466,6 +518,203 @@ fn best_effort_revoke_current() {
         &creds.bearer_token,
         &creds.channel_binding,
     ));
+}
+
+// ── Ciphertext export / import (issue #202) ──────────────────────────
+
+/// Open the local vault the way `adopt`/`disconnect` do.
+///
+/// `tock account` is dispatched *before* `main` opens the vault, so any account
+/// subcommand that needs one opens it itself. Keeping that in a helper means
+/// `export`/`import` cannot drift from the existing precedent.
+fn open_local_vault(
+    cli: &crate::Cli,
+) -> Result<tock_storage::OpenVault, Box<dyn std::error::Error>> {
+    if !cli.vault.exists() {
+        return Err("no local vault; run `tock account login` on this device first".into());
+    }
+    let password = password_string(cli)?;
+    let secret_key = crate::resolve_secret_key(cli.secret_key.as_deref())?;
+    Ok(tock_storage::open(
+        &cli.vault,
+        password.as_bytes(),
+        &secret_key,
+    )?)
+}
+
+/// Turn a transport error into an actionable message when it is really an
+/// expired or missing SRP session.
+fn explain_auth(err: &tock_sync::Error) -> Box<dyn std::error::Error> {
+    let msg = err.to_string();
+    if msg.contains("401") || msg.contains("403") {
+        return format!(
+            "{msg}\nhint: this needs a live session on that server — \
+             run `tock account login` (or `tock account adopt`) and retry"
+        )
+        .into();
+    }
+    msg.into()
+}
+
+/// The server this vault is bound to (ADR-016 §3 binding state).
+///
+/// Never persists anything and never accepts an override — callers that write
+/// to a server must target the vault's own binding, so a stray flag can't make
+/// a second server claim this `vault_id`.
+fn bound_server(vault: &tock_storage::OpenVault) -> Result<String, Box<dyn std::error::Error>> {
+    tock_storage::sync::server_url(vault)?.ok_or_else(|| {
+        Box::<dyn std::error::Error>::from(
+            "no sync server configured; this vault is local-only — \
+             run `tock account adopt --server <url> --email <email>` first",
+        )
+    })
+}
+
+/// Which server `export` should read from.
+///
+/// Deliberately **not** `sync_cmd::resolve_server`: that one *persists* an
+/// explicit `--server`, which would let `export --server …` silently re-point a
+/// vault's binding and sidestep the authoritative-server invariant (ADR-016 §4).
+/// Here the flag is a one-shot, read-only override (useful when a server's URL
+/// changed) and the stored binding is left untouched.
+fn export_server(
+    vault: &tock_storage::OpenVault,
+    flag: Option<&str>,
+) -> Result<String, Box<dyn std::error::Error>> {
+    if let Some(url) = flag {
+        return Ok(url.trim_end_matches('/').to_string());
+    }
+    bound_server(vault)
+}
+
+/// `tock account export` — download this vault's ciphertext archive.
+///
+/// The "download my data" path (ADR-019 §2). The archive holds the non-secret
+/// vault header plus every event as opaque ciphertext; decrypting it still needs
+/// the password **and** the Secret Key from the Emergency Kit. It is portability,
+/// **not** a backup — see `tock backup create` (ADR-018) for that.
+///
+/// # Errors
+/// Propagates storage, crypto, credential, HTTP, and file-write failures.
+fn export(cli: &crate::Cli, out: Option<&Path>, server_flag: Option<&str>) -> CmdResult {
+    let vault = open_local_vault(cli)?;
+    let vault_id = vault.header().vault_id;
+    let server = export_server(&vault, server_flag)?;
+    let transport = crate::commands::sync_cmd::authed_transport(&server, vault_id)?;
+
+    let rt = tokio_runtime()?;
+    let archive = rt.block_on(async {
+        transport
+            .export_archive()
+            .await
+            .map_err(|e| explain_auth(&e))
+    })?;
+
+    let default_name = format!(
+        "tock-vault-{}-{}.json",
+        archive.vault_id.trim(),
+        current_unix()
+    );
+    let path = out.map_or_else(|| PathBuf::from(&default_name), Path::to_path_buf);
+    std::fs::write(&path, serde_json::to_vec_pretty(&archive)?)?;
+
+    println!("Exported vault {} from {server}.", archive.vault_id);
+    println!("  events : {}", archive.events.len());
+    println!(
+        "  header : {}",
+        if archive.header.is_some() {
+            "included"
+        } else {
+            "absent"
+        }
+    );
+    println!("  file   : {}", path.display());
+    println!(
+        "\nThis archive is CIPHERTEXT ONLY. Decrypting it needs your password and the\n\
+         Secret Key from your Emergency Kit — store them separately from this file.\n\
+         For a restorable client-side backup use `tock backup create` instead."
+    );
+    Ok(())
+}
+
+/// `tock account import` — upload a ciphertext archive back to this vault's
+/// server (ADR-019 §3).
+///
+/// The second half of a cross-server migration. Note the ordering that actually
+/// works: `export` (authenticated to the old server) → `adopt --migrate`
+/// (registers on the new server and claims **V** there) → `import` → `sync`.
+/// Importing before adopting cannot work, because import needs a live session on
+/// the destination server.
+///
+/// The archive's own `header` field is **not** uploaded: the client is
+/// authoritative for the vault header, so the *current* local header is sent
+/// instead. Uploading an archived header would silently downgrade the server
+/// copy after a password rotation and strand every other device.
+///
+/// There is deliberately **no `--server` override**. Unlike `export` (a pure
+/// read), import is a *write* that makes the destination server claim this
+/// `vault_id`: the server runs `ensure_vault` + `claim_vault_for_account`, which
+/// takes ownership of an unowned vault. Allowing an ad-hoc target would upload
+/// **V**'s full history to a server the vault is not bound to while leaving the
+/// local binding pointing elsewhere — precisely the split-brain the
+/// authoritative-server invariant forbids (ADR-016 §4). Changing servers is
+/// `adopt --migrate`'s job alone, and it rebinds *before* import runs, so the
+/// documented migration sequence never needs an override.
+///
+/// # Errors
+/// Propagates storage, crypto, credential, HTTP, and file-read failures; refuses
+/// an archive belonging to a different vault.
+fn import(cli: &crate::Cli, file: &Path) -> CmdResult {
+    let vault = open_local_vault(cli)?;
+    let header = vault.header().clone();
+    let vault_id = header.vault_id;
+    let server = bound_server(&vault)?;
+
+    let raw =
+        std::fs::read(file).map_err(|e| format!("cannot read archive {}: {e}", file.display()))?;
+    let mut archive: crate::http_transport::VaultArchive = serde_json::from_slice(&raw)
+        .map_err(|e| format!("{} is not a tock vault archive: {e}", file.display()))?;
+
+    let local_hex = hex_encode(vault_id.as_bytes());
+    if !archive.vault_id.eq_ignore_ascii_case(&local_hex) {
+        return Err(format!(
+            "archive belongs to vault {} but this device holds vault {local_hex}; \
+             refusing to import another vault's history",
+            archive.vault_id
+        )
+        .into());
+    }
+    archive.vault_id = local_hex;
+    // The local header is authoritative (see the doc comment above).
+    archive.header = Some(crate::http_transport::VaultArchive::encode_header(
+        &header.to_bytes(),
+    ));
+
+    let transport = crate::commands::sync_cmd::authed_transport(&server, vault_id)?;
+    let rt = tokio_runtime()?;
+    let ack = rt.block_on(async {
+        transport
+            .import_archive(&archive)
+            .await
+            .map_err(|e| explain_auth(&e))
+    })?;
+
+    println!(
+        "Imported {} event(s) into {server} ({} already present, server lamport {}).",
+        ack.accepted, ack.duplicates, ack.server_lamport
+    );
+    println!("Run `tock sync` to reconcile this device with the server.");
+    Ok(())
+}
+
+/// Lowercase-hex encoding, matching the wire format the server uses for ids.
+fn hex_encode(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        let _ = write!(&mut s, "{b:02x}");
+    }
+    s
 }
 
 fn status() -> CmdResult {

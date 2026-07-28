@@ -97,6 +97,109 @@ impl HttpTransport {
         ensure_success(resp).await?;
         Ok(())
     }
+
+    /// Download this vault's full ciphertext archive — the non-secret header
+    /// plus the entire event log (`GET /v1/vaults/:id/export`, ADR-019 §2).
+    ///
+    /// The archive is opaque to the client: payloads stay base64-encoded wire
+    /// frames and are never decoded here, so `export` → `import` is a verbatim
+    /// round-trip. Requires auth; the server additionally proves vault
+    /// ownership before reading anything.
+    ///
+    /// # Errors
+    /// [`Error::Transport`] on a non-success response or a malformed body.
+    pub async fn export_archive(&self) -> Result<VaultArchive, Error> {
+        let resp = self
+            .auth(self.client.get(self.url("export")))
+            .send()
+            .await
+            .map_err(|e| Error::Transport(e.to_string()))?;
+        let resp = ensure_success(resp).await?;
+        resp.json()
+            .await
+            .map_err(|e| Error::Transport(e.to_string()))
+    }
+
+    /// Upload a ciphertext archive back into this vault
+    /// (`POST /v1/vaults/:id/import`, ADR-019 §3).
+    ///
+    /// Idempotent: the server ignores event ids it already holds. It claims an
+    /// unowned vault for the caller and refuses one owned by a different
+    /// account. Requires auth.
+    ///
+    /// # Errors
+    /// [`Error::Transport`] on a non-success response or a malformed body.
+    pub async fn import_archive(&self, archive: &VaultArchive) -> Result<ImportAck, Error> {
+        let resp = self
+            .auth(self.client.post(self.url("import")))
+            .json(archive)
+            .send()
+            .await
+            .map_err(|e| Error::Transport(e.to_string()))?;
+        let resp = ensure_success(resp).await?;
+        let parsed: PushResponse = resp
+            .json()
+            .await
+            .map_err(|e| Error::Transport(e.to_string()))?;
+        Ok(ImportAck {
+            accepted: parsed.accepted,
+            duplicates: parsed.duplicates,
+            server_lamport: parsed.server_lamport,
+        })
+    }
+}
+
+// ── Ciphertext archive (client-side mirror of the server shapes) ─────
+
+/// A single event inside an export/import archive.
+///
+/// `payload` stays a base64-encoded wire frame end to end — the CLI never
+/// decodes it, so archives round-trip byte-for-byte.
+#[derive(Clone, serde::Serialize, Deserialize)]
+pub struct ArchiveEvent {
+    /// Hex-encoded 16-byte event id.
+    pub event_id: String,
+    /// Hex-encoded 16-byte device id.
+    pub device_id: String,
+    /// Lamport timestamp.
+    pub lamport: i64,
+    /// Base64-encoded opaque payload (full wire-format event frame).
+    pub payload: String,
+}
+
+/// A full point-in-time ciphertext archive of one vault: the non-secret vault
+/// header plus the entire event log.
+///
+/// This mirrors `tock_server::routes::VaultArchive` field for field. It is
+/// re-declared here rather than imported because the Apache-2.0 CLI must never
+/// link the AGPL-3.0 server (ADR-006).
+#[derive(Clone, serde::Serialize, Deserialize)]
+pub struct VaultArchive {
+    /// Hex-encoded 16-byte vault id.
+    pub vault_id: String,
+    /// Base64-encoded non-secret vault header, if the archive carries one.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub header: Option<String>,
+    /// The entire event log, in server insertion order.
+    pub events: Vec<ArchiveEvent>,
+}
+
+impl VaultArchive {
+    /// Base64-encode `header` for the archive's `header` field.
+    #[must_use]
+    pub fn encode_header(header: &[u8]) -> String {
+        base64_encode(header)
+    }
+}
+
+/// What the server accepted from an [`HttpTransport::import_archive`] call.
+pub struct ImportAck {
+    /// Events newly stored.
+    pub accepted: usize,
+    /// Events the server already had (ignored).
+    pub duplicates: usize,
+    /// The server's Lamport high-water mark after the import.
+    pub server_lamport: i64,
 }
 
 // ── Server JSON shapes (mirror of `tock_server::routes`) ─────────────
@@ -352,7 +455,7 @@ fn base64_decode(s: &str) -> Result<Vec<u8>, ()> {
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
-    use super::{base64_decode, base64_encode, hex_encode};
+    use super::{ArchiveEvent, VaultArchive, base64_decode, base64_encode, hex_encode};
 
     #[test]
     fn hex_roundtrip_known() {
@@ -366,5 +469,42 @@ mod tests {
             let decoded = base64_decode(&encoded).expect("decode");
             assert_eq!(decoded, sample);
         }
+    }
+
+    #[test]
+    fn archive_serde_roundtrips_verbatim() {
+        let archive = VaultArchive {
+            vault_id: "0123456789abcdef0123456789abcdef".to_string(),
+            header: Some(VaultArchive::encode_header(&[1, 2, 3, 4])),
+            events: vec![ArchiveEvent {
+                event_id: "ffeeddccbbaa99887766554433221100".to_string(),
+                device_id: "00112233445566778899aabbccddeeff".to_string(),
+                lamport: 7,
+                payload: base64_encode(b"opaque ciphertext"),
+            }],
+        };
+        let json = serde_json::to_string(&archive).expect("serialize");
+        let back: VaultArchive = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.vault_id, archive.vault_id);
+        assert_eq!(
+            base64_decode(back.header.as_deref().expect("header")).expect("decode header"),
+            vec![1, 2, 3, 4]
+        );
+        assert_eq!(back.events.len(), 1);
+        assert_eq!(back.events[0].lamport, 7);
+        assert_eq!(back.events[0].payload, archive.events[0].payload);
+    }
+
+    #[test]
+    fn archive_without_header_omits_the_field() {
+        let archive = VaultArchive {
+            vault_id: "0123456789abcdef0123456789abcdef".to_string(),
+            header: None,
+            events: Vec::new(),
+        };
+        let json = serde_json::to_string(&archive).expect("serialize");
+        assert!(!json.contains("header"), "header must be omitted: {json}");
+        let back: VaultArchive = serde_json::from_str(&json).expect("deserialize");
+        assert!(back.header.is_none());
     }
 }

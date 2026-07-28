@@ -170,6 +170,11 @@ tock sync                    # push/pull encrypted events to your instance
 See [`docs/dogfooding.md`](dogfooding.md) for a full two-device round-trip
 walkthrough (including how conflicts surface).
 
+Already have a local-only vault, or an account on another instance? Use
+`tock account adopt` to bring it here, and see the
+[migration guide](migration.md) for moving an existing account between servers
+(and for leaving one entirely with `tock account disconnect`).
+
 ## 5. Connect the iOS / macOS apps (1.x)
 
 > **The native Apple apps (iOS, iPadOS, macOS, watchOS) are not part of the 1.0
@@ -306,7 +311,12 @@ protect against the server losing its DB.
 - **Over HTTP (self-service):** an authenticated owner calls
   `GET /v1/vaults/:vault_id/export`. Authorization runs the same double check as
   every sync route — the session's bearer **and** vault ownership — so account A can
-  never export account B's ciphertext.
+  never export account B's ciphertext. From the CLI that is one command:
+
+  ```sh
+  tock account export --out vault.json
+  ```
+
 - **Offline (operator, whole instance):** produce per-user archives directly from
   the database with no running server, never decrypting:
 
@@ -322,6 +332,11 @@ protect against the server losing its DB.
   `unowned-<vaulthex>.json`) containing only stored ciphertext. This complements —
   it does not replace — the whole-volume `tar` above.
 
+Decrypting an archive still needs the owner's password **and** the Secret Key from
+their Emergency Kit; the archive alone is inert ciphertext. See the
+[migration guide](migration.md#download-my-data) for the user-facing
+"download my data" story.
+
 #### Restore / import (round-trip)
 
 Import is the reverse of export: it loads an exported archive back into a vault via
@@ -331,6 +346,18 @@ sync routes and is idempotent — re-importing an archive re-adds nothing (dupli
 event ids are ignored). Importing into a fresh, unowned vault claims it for the
 caller; importing into a vault owned by a different account is refused. As with
 everything server-side, import moves ciphertext only and never decrypts.
+
+> **Moving an account between servers.** Import is only half the story — the client
+> must also re-bind to the new server, and the order matters (`export` →
+> `adopt --migrate` → `import` → `sync`). The full walkthrough, including why
+> `adopt --migrate` alone does **not** carry your history across, is in the
+> [migration guide](migration.md#move-my-account-to-another-server).
+
+The client wrapper is:
+
+```sh
+tock account import vault.json
+```
 
 > **Server backup ≠ client (vault) backup.** The volume snapshot above protects the
 > *server's* relayed ciphertext. It is **not** a backup of a client's local vault,
@@ -365,7 +392,9 @@ tock backup restore my-vault-YYYY-MM-DD.tockbak --mode clone
 The archive is decryptable **only** with your password and Secret Key; an archive
 made without the Secret Key cannot be recovered, by design. The `--mode` choice is
 required and explicit — never inferred. `tock export` is portability, **not** a
-backup: its output is unencrypted.
+backup: its output is unencrypted. See the
+[migration guide](migration.md#which-artifact-for-which-job) for a table of which
+artifact solves which problem.
 
 ### Upgrades
 
