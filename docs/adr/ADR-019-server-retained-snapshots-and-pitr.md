@@ -148,6 +148,14 @@ typing one command to round-trip through a server) are **deferred to
 [#202](https://github.com/kafkade/tock/issues/202)**. #201's acceptance criteria
 are met at the endpoint + admin-CLI + round-trip-test level.
 
+**Update (#202, delivered):** those wrappers now ship as `tock account export
+[--out FILE]` and `tock account import FILE`, together with the cross-server
+migration guide in [docs/migration.md](../migration.md); `import` targets the
+vault's bound server only (no `--server` override) so it cannot make a second
+server claim the same `vault_id`, and it uploads the vault's *current* local
+header rather than the archived one so replaying an old archive after a password
+rotation cannot strand other devices.
+
 ## Consequences
 
 **Positive:**

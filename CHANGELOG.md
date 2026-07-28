@@ -11,6 +11,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`tock account export` and `tock account import`** (#202): one-command
+  client-side round-trip through a sync server, closing the wrapper deferral
+  recorded in [ADR-019](docs/adr/ADR-019-server-retained-snapshots-and-pitr.md)
+  §6. `tock account export [--out FILE]` downloads your vault's ciphertext
+  archive (non-secret header + full event log) from the server it is bound to and
+  reminds you that decrypting it still needs your password and the Secret Key from
+  your Emergency Kit. `tock account import FILE` uploads an archive back,
+  reporting accepted/duplicate counts; it is idempotent, and it refuses an archive
+  belonging to a different vault so foreign events can never be injected into your
+  bucket. Import always targets the server the vault is **bound** to — there is no
+  `--server` override, because pointing an import at an arbitrary server would make
+  that server claim your vault and split your history across two of them; changing
+  servers stays `adopt --migrate`'s job. Both authenticate with the existing SRP
+  session (bearer + channel binding) and move ciphertext only — the client never
+  decodes an event payload. On import the vault's **current local header** is
+  uploaded rather than the archived one, so replaying an old archive after a
+  password rotation cannot strand your other devices.
+
+- **`tock account adopt --migrate` now warns when history is left behind**
+  (#202): a migration moves the vault's *binding*, but adoption's initial push
+  only carries changes the device had not yet synced — so a fully-synced vault
+  arrives at the new server with its header and an **empty event log**, and a new
+  device signing in there would see an empty vault. `--migrate` now prints a
+  `Binding moved:` summary saying so and pointing at the remaining
+  `tock account import` + `tock sync` steps.
+
+- **Server-migration & "download my data" guide** (#202): new
+  [docs/migration.md](docs/migration.md) walks the end-to-end move between servers
+  (`account export` → `adopt --migrate` → `account import` → `sync`), preserving
+  the client-minted crypto identity **A**/**V**. It documents *why* that ordering
+  is the one that works — `import` needs a live session on the destination server,
+  `export` must precede `--migrate` (which revokes the old server's credentials
+  first), and `adopt --migrate` alone pushes only pending local deltas, so a
+  fully-synced vault would otherwise arrive with an empty event log. It also
+  covers the authoritative-server invariant and how `--migrate` / `disconnect`
+  interact ([ADR-016](docs/adr/ADR-016-three-id-identity-and-adoption.md) §4), the
+  ciphertext-export + Emergency-Kit "download my data" path, the unencrypted
+  `tock export` escape hatch and its warning, and the no-lock-in argument behind
+  [ADR-007](docs/adr/ADR-007-monetization-open-core.md). The whole sequence is
+  proven end to end against two live servers in
+  `crates/tock-cli/tests/e2e_migration.rs`.
+
 - **Server ciphertext export + import (round-trip) and scheduled retained
   snapshots** (#201): three **distinct** server-side data capabilities, all of
   which move ciphertext only and never decrypt.
@@ -32,8 +74,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `--snapshot-interval-secs` / `TOCK_SNAPSHOT_INTERVAL_SECS` (default daily,
     `0` disables), `--snapshot-dir` / `TOCK_SNAPSHOT_DIR`, and `--snapshot-keep`
     / `TOCK_SNAPSHOT_KEEP` (default 7); `tock-server admin snapshot` forces one
-    offline. Strict WAL point-in-time recovery is intentionally deferred, as is
-    the client-side `tock account export`/`import` wrapper (tracked in #202). See
+    offline. Strict WAL point-in-time recovery is intentionally deferred. See
     [docs/self-hosting.md](docs/self-hosting.md) and
     [ADR-019](docs/adr/ADR-019-server-retained-snapshots-and-pitr.md).
 
