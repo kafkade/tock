@@ -170,6 +170,11 @@ tock sync                    # push/pull encrypted events to your instance
 See [`docs/dogfooding.md`](dogfooding.md) for a full two-device round-trip
 walkthrough (including how conflicts surface).
 
+Already have a local-only vault, or an account on another instance? Use
+`tock account adopt` to bring it here, and see the
+[migration guide](migration.md) for moving an existing account between servers
+(and for leaving one entirely with `tock account disconnect`).
+
 ## 5. Connect the iOS / macOS apps (1.x)
 
 > **The native Apple apps (iOS, iPadOS, macOS, watchOS) are not part of the 1.0
@@ -236,9 +241,49 @@ the page, sign in again to use them.
 
 ### Backup & restore
 
-This is the **server-side** backup: the data volume holds the **only copy** of the
-encrypted event store the server relays — back it up. With the default named volume
-`tock-data`:
+The server relays **ciphertext only** — it never holds keys and never decrypts.
+Around that there are **three distinct** server-side data capabilities; keep them
+straight because they solve different problems:
+
+| Capability | What it is | Who runs it | Survives server DB loss? |
+| --- | --- | --- | --- |
+| **Server-retained snapshots** | Independently retained, timestamped copies of the server DB | Operator (automatic + manual) | **Yes** — that's the point |
+| **Per-user ciphertext export** | A portable archive (header + event log) of *one* account's vault | Account owner (or admin, offline) | No — it's portability, not a backup |
+| **Restore / import** | Loading an exported archive back into a vault | Account owner | N/A — it's the reverse of export |
+
+None of these ever decrypt; all three move ciphertext only. Export ≠ import ≠
+server-retained snapshot — a download endpoint is portability, a retained snapshot
+is what protects you when the DB is lost **before** anyone downloads.
+
+#### Server-retained snapshots (survive DB loss)
+
+The data volume holds the **only copy** of the encrypted event store the server
+relays — so it must be backed up independently. Two mechanisms, use both:
+
+**Scheduled snapshots (built in).** The server runs a background task that
+periodically writes a consistent, ciphertext-only copy of the whole database
+(`VACUUM INTO` a timestamped `tock-server-<UTC>.db` file) into a retention
+directory, then prunes to the newest *N*. This means data survives even if the
+live DB is lost before a user downloads an export. Configure it on the server
+binary (flags or environment; snapshots are **on by default**, daily):
+
+| Flag | Environment | Default | Meaning |
+| --- | --- | --- | --- |
+| `--snapshot-interval-secs` | `TOCK_SNAPSHOT_INTERVAL_SECS` | `86400` (daily) | Seconds between snapshots; `0` disables |
+| `--snapshot-dir` | `TOCK_SNAPSHOT_DIR` | `<data_dir>/snapshots` | Where snapshot files are written |
+| `--snapshot-keep` | `TOCK_SNAPSHOT_KEEP` | `7` | Newest *N* snapshots kept; older ones pruned |
+
+Restore is a file copy: stop the server, replace the live DB with a snapshot file,
+restart. Snapshots are ciphertext only — keep your Emergency Kit separately.
+
+> **Scope note.** This ships scheduled *snapshot* retention (keep newest *N*).
+> Strict write-ahead-log point-in-time recovery (continuous WAL archiving + replay
+> to an arbitrary instant) is **deferred** — for a personal-scale ciphertext relay
+> whose clients hold the authoritative copy and can re-push, per-interval snapshots
+> are the right depth/cost trade-off for 1.0.
+
+**Manual volume snapshot.** For an out-of-band copy (or before an upgrade), stop
+the server and `tar` the volume. With the default named volume `tock-data`:
 
 ```sh
 # Backup: stop for a consistent snapshot, tar the volume, restart.
@@ -255,16 +300,101 @@ docker run --rm -v tock-data:/data -v "$PWD":/backup alpine \
 The backup is ciphertext only; keep your Emergency Kit separately — without it
 the data cannot be decrypted.
 
+#### Per-user ciphertext export (portability)
+
+Export produces a portable, **ciphertext-only** archive of a single account's
+vault — its non-secret header plus the full event log — without ever decrypting.
+It's how a user takes their data elsewhere (and the first half of cross-server
+migration). It is **not** a server backup: it covers one vault and does nothing to
+protect against the server losing its DB.
+
+- **Over HTTP (self-service):** an authenticated owner calls
+  `GET /v1/vaults/:vault_id/export`. Authorization runs the same double check as
+  every sync route — the session's bearer **and** vault ownership — so account A can
+  never export account B's ciphertext. From the CLI that is one command:
+
+  ```sh
+  tock account export --out vault.json
+  ```
+
+- **Offline (operator, whole instance):** produce per-user archives directly from
+  the database with no running server, never decrypting:
+
+  ```sh
+  # Every vault on the instance:
+  tock-server admin export --all --out ./export
+
+  # Only one account's vaults:
+  tock-server admin export --account <account-id> --out ./export
+  ```
+
+  Each archive is written as `<account>-<vaulthex>.json` (or
+  `unowned-<vaulthex>.json`) containing only stored ciphertext. This complements —
+  it does not replace — the whole-volume `tar` above.
+
+Decrypting an archive still needs the owner's password **and** the Secret Key from
+their Emergency Kit; the archive alone is inert ciphertext. See the
+[migration guide](migration.md#download-my-data) for the user-facing
+"download my data" story.
+
+#### Restore / import (round-trip)
+
+Import is the reverse of export: it loads an exported archive back into a vault via
+`POST /v1/vaults/:vault_id/import`, making export a **real, reversible round-trip**
+and enabling cross-server migration. It uses the same double authorization as the
+sync routes and is idempotent — re-importing an archive re-adds nothing (duplicate
+event ids are ignored). Importing into a fresh, unowned vault claims it for the
+caller; importing into a vault owned by a different account is refused. As with
+everything server-side, import moves ciphertext only and never decrypts.
+
+> **Moving an account between servers.** Import is only half the story — the client
+> must also re-bind to the new server, and the order matters (`export` →
+> `adopt --migrate` → `import` → `sync`). The full walkthrough, including why
+> `adopt --migrate` alone does **not** carry your history across, is in the
+> [migration guide](migration.md#move-my-account-to-another-server).
+
+The client wrapper is:
+
+```sh
+tock account import vault.json
+```
+
 > **Server backup ≠ client (vault) backup.** The volume snapshot above protects the
 > *server's* relayed ciphertext. It is **not** a backup of a client's local vault,
 > whose materialized tables hold plaintext at rest
 > ([ADR-014](adr/ADR-014-at-rest-encryption-app-layer-aead.md)) — so copying a
 > client's SQLite file is a *plaintext* archive, not a safe backup. Client-side
 > backup/restore has its own outer-encrypted format and restore modes, specified in
-> [ADR-018](adr/ADR-018-backup-restore-format-and-modes.md) (implementation tracked
-> in [#200](https://github.com/kafkade/tock/issues/200)). As with the server backup,
-> restore needs only your password **and** Secret Key, and the Emergency Kit must be
-> stored separately from the backup file.
+> [ADR-018](adr/ADR-018-backup-restore-format-and-modes.md). As with the server
+> backup, restore needs only your password **and** Secret Key, and the Emergency Kit
+> must be stored separately from the backup file.
+
+#### Client-side vault backup
+
+Use the built-in encrypted backup for a client vault — never copy the raw
+`.tockvault` file (it contains plaintext at rest):
+
+```sh
+# Create an outer-encrypted snapshot (AES-256-GCM under a key derived from
+# your Vault Key). Needs your password and Secret Key.
+tock backup create --out my-vault-$(date +%F).tockbak
+
+# Restore after losing the device (keeps the original device identity and
+# sync state):
+tock backup restore my-vault-YYYY-MM-DD.tockbak --mode disaster-recovery
+
+# Restore onto a *second, still-active* device (mints a fresh device identity,
+# resets the sync cursor, and clears the server binding so it reconciles
+# remote history before pushing):
+tock backup restore my-vault-YYYY-MM-DD.tockbak --mode clone
+```
+
+The archive is decryptable **only** with your password and Secret Key; an archive
+made without the Secret Key cannot be recovered, by design. The `--mode` choice is
+required and explicit — never inferred. `tock export` is portability, **not** a
+backup: its output is unencrypted. See the
+[migration guide](migration.md#which-artifact-for-which-job) for a table of which
+artifact solves which problem.
 
 ### Upgrades
 

@@ -24,6 +24,8 @@
 //! - `GET /v1/vaults/:vault_id/onboarding/:device_id` — retrieve pairing blob (authenticated)
 //! - `PUT /v1/vaults/:vault_id/header` — store the non-secret vault header (authenticated)
 //! - `GET /v1/vaults/:vault_id/header` — retrieve the vault header for new-device login (authenticated)
+//! - `GET /v1/vaults/:vault_id/export` — export the vault's ciphertext (header + full log), IDOR-safe (authenticated)
+//! - `POST /v1/vaults/:vault_id/import` — import a ciphertext archive back into a vault (authenticated)
 //! - `GET /v1/account/header` — retrieve the account's vault header by session (authenticated)
 //! - `POST /v1/accounts/register` — self-hosted account registration (SRP)
 //! - `POST /v1/auth/srp/start` — begin an SRP login (A → B)
@@ -47,6 +49,7 @@ mod error;
 mod identifier;
 mod metrics;
 mod quota;
+mod retention;
 mod routes;
 mod selfservice;
 mod state;
@@ -62,7 +65,8 @@ use tower_http::trace::TraceLayer;
 
 pub use accounts::RegistrationPolicy;
 pub use billing::ServerMode;
-pub use cli::{AdminCommand, run_admin};
+pub use cli::{AdminCommand, ExportScope, run_admin};
+pub use retention::RetentionConfig;
 pub use state::AppState;
 
 use db::ServerDb;
@@ -169,6 +173,10 @@ pub fn build_router(state: AppState) -> Router {
             "/v1/vaults/{vault_id}/header",
             put(routes::put_vault_header).get(routes::get_vault_header),
         )
+        // Ciphertext export/import: IDOR-safe per-user portability + restore
+        // round-trip (issue #201). Both run the double-auth pattern.
+        .route("/v1/vaults/{vault_id}/export", get(routes::export_vault))
+        .route("/v1/vaults/{vault_id}/import", post(routes::import_vault))
         // Account-scoped header fetch: a fresh device knows its account but
         // not its vault id yet (issue #129 new-device login).
         .route("/v1/account/header", get(routes::get_account_vault_header))
@@ -230,6 +238,17 @@ pub fn build_router(state: AppState) -> Router {
     }
 
     app.layer(TraceLayer::new_for_http()).with_state(state)
+}
+
+/// Spawn the background server-retained snapshot task for the given state and
+/// [`RetentionConfig`] on the current Tokio runtime.
+///
+/// This is server-side backup (issue #201), distinct from the client-driven
+/// export/import portability routes. When retention is disabled (zero interval)
+/// this only logs and returns. Called from the binary's `main`, not from
+/// [`serve`], so integration tests that drive [`serve`] never write snapshots.
+pub fn spawn_retention(state: &AppState, config: RetentionConfig) {
+    retention::spawn(state.db.clone(), config);
 }
 
 /// Serve the router on an already-bound [`tokio::net::TcpListener`].

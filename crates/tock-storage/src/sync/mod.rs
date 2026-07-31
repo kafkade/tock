@@ -49,6 +49,11 @@ const KEY_BINDING_STATE: &str = "binding_state";
 const KEY_SERVER_PRINCIPAL: &str = "server_principal";
 /// `sync_state` key for the account email bound at adopt (ADR-016 §9).
 const KEY_ACCOUNT_EMAIL: &str = "account_email";
+/// `sync_state` key for the one-shot "reconcile before push" flag set at a
+/// clone restore (ADR-018 §3B step 3). While set, the next `sync` MUST pull
+/// and ingest remote history *before* it pushes any local changes, so a stale
+/// clone can never shove old state ahead of newer remote history.
+const KEY_PENDING_RECONCILE: &str = "pending_reconcile";
 
 /// A vault has no server binding: **A** and **V** exist, but there is no
 /// server URL, principal **B**, or credentials. This is the default after
@@ -165,6 +170,34 @@ pub fn account_email(vault: &OpenVault) -> Result<Option<String>, Error> {
 /// [`Error::Sqlite`] on persistence failure.
 pub fn set_account_email(vault: &OpenVault, email: &str) -> Result<(), Error> {
     state::set_state_str(vault.connection(), KEY_ACCOUNT_EMAIL, email)
+}
+
+/// Whether a one-shot reconcile-before-push is pending. Set at a clone
+/// restore (ADR-018 §3B) so the next sync pulls remote history before it
+/// pushes; cleared once that reconcile has run.
+///
+/// # Errors
+/// [`Error::Sqlite`] on query failure.
+pub fn pending_reconcile(vault: &OpenVault) -> Result<bool, Error> {
+    Ok(state::get_state_str(vault.connection(), KEY_PENDING_RECONCILE)?.as_deref() == Some("1"))
+}
+
+/// Mark that the next sync MUST reconcile (pull + ingest) before pushing
+/// (ADR-018 §3B step 3). Idempotent.
+///
+/// # Errors
+/// [`Error::Sqlite`] on persistence failure.
+pub fn set_pending_reconcile(vault: &OpenVault) -> Result<(), Error> {
+    state::set_state_str(vault.connection(), KEY_PENDING_RECONCILE, "1")
+}
+
+/// Clear the one-shot reconcile-before-push flag, once the reconcile pull
+/// has completed. Idempotent.
+///
+/// # Errors
+/// [`Error::Sqlite`] on persistence failure.
+pub fn clear_pending_reconcile(vault: &OpenVault) -> Result<(), Error> {
+    state::delete_state(vault.connection(), KEY_PENDING_RECONCILE)
 }
 
 /// Clear the server binding, returning the vault to `LocalOnly`.

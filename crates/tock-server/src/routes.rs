@@ -433,3 +433,143 @@ pub async fn get_account_vault_header(
         |data| Ok(Json(serde_json::json!({ "header": base64_encode(&data) }))),
     )
 }
+
+// ── Ciphertext export / import (issue #201) ──────────────────────────
+
+/// A single event inside an export/import archive.
+///
+/// Same opaque encoding as [`PullEventItem`]; the server never decrypts.
+#[derive(Serialize, Deserialize)]
+pub struct ArchiveEvent {
+    /// Hex-encoded 16-byte event id.
+    pub event_id: String,
+    /// Hex-encoded 16-byte device id.
+    pub device_id: String,
+    /// Lamport timestamp.
+    pub lamport: i64,
+    /// Base64-encoded opaque payload (full wire-format event frame).
+    pub payload: String,
+}
+
+/// A full point-in-time ciphertext archive of one vault: the non-secret vault
+/// header plus the entire event log. This is the body returned by `export` and
+/// accepted by `import` — a real, reversible round-trip (issue #201).
+#[derive(Serialize, Deserialize)]
+pub struct VaultArchive {
+    /// Hex-encoded 16-byte vault id.
+    pub vault_id: String,
+    /// Base64-encoded non-secret vault header, if the vault has one stored.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub header: Option<String>,
+    /// The entire event log, in server insertion order.
+    pub events: Vec<ArchiveEvent>,
+}
+
+/// `GET /v1/vaults/:vault_id/export`
+///
+/// Stream the account's encrypted vault header + full event log as a portable
+/// ciphertext archive, **never decrypting** (issue #201, closes the R7 export
+/// IDOR). Authorization runs BOTH [`authorize_sync`] AND
+/// [`crate::db::ServerDb::require_vault_access`] in the same operation, plus the
+/// SRP channel-binding check — so a session for account A can never pull account
+/// B's ciphertext.
+pub async fn export_vault(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(vault_id): Path<String>,
+) -> Result<Json<VaultArchive>, Error> {
+    let vault_bytes = parse_hex_16(&vault_id)?;
+    let auth = authorize_sync(&state, &headers).await?;
+    verify_channel_binding(&auth, &headers)?;
+    let account_id = auth.account_id;
+
+    let db = state.db.clone();
+    let archive = tokio::task::spawn_blocking(move || {
+        // Ownership check BEFORE any read — the IDOR-safe pattern.
+        db.require_vault_access(&vault_bytes, &account_id)?;
+        let header = db
+            .get_vault_header(&vault_bytes)?
+            .map(|h| base64_encode(&h));
+        let events = db
+            .all_events(&vault_bytes)?
+            .into_iter()
+            .map(|e| ArchiveEvent {
+                event_id: hex_encode(&e.id),
+                device_id: hex_encode(&e.device_id),
+                lamport: e.lamport,
+                payload: base64_encode(&e.payload),
+            })
+            .collect();
+        Ok::<_, Error>(VaultArchive {
+            vault_id: hex_encode(&vault_bytes),
+            header,
+            events,
+        })
+    })
+    .await
+    .map_err(|e| Error::Internal(e.to_string()))??;
+
+    Ok(Json(archive))
+}
+
+/// `POST /v1/vaults/:vault_id/import`
+///
+/// Restore a ciphertext archive (from `export`) back into a vault, making export
+/// a real round-trip and enabling cross-server migration (#202). Same double
+/// auth as the sync routes ([`authorize_sync`] + channel binding). Ownership
+/// uses the push-path [`crate::db::ServerDb::claim_vault_for_account`]: it claims
+/// an **unowned** vault for the caller (so importing into a fresh vault on a new
+/// server works) but returns `403` for a vault owned by a different account —
+/// IDOR-safe. Idempotent: duplicate event ids are ignored by
+/// [`crate::db::ServerDb::push_event`].
+pub async fn import_vault(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(vault_id): Path<String>,
+    Json(body): Json<VaultArchive>,
+) -> Result<Json<PushResponse>, Error> {
+    let vault_bytes = parse_hex_16(&vault_id)?;
+    let auth = authorize_sync(&state, &headers).await?;
+    verify_channel_binding(&auth, &headers)?;
+    let account_id = auth.account_id;
+
+    // Decode the optional header outside the blocking task so a malformed
+    // archive fails fast with a 400.
+    let header = match body.header.as_deref() {
+        Some(h) => Some(base64_decode(h)?),
+        None => None,
+    };
+
+    let db = state.db.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        db.ensure_vault(&vault_bytes)?;
+        db.claim_vault_for_account(&vault_bytes, &account_id)?;
+        if let Some(header) = header
+            && !header.is_empty()
+        {
+            db.put_vault_header(&vault_bytes, &header)?;
+        }
+        let mut accepted = 0_usize;
+        let mut duplicates = 0_usize;
+        for item in &body.events {
+            let eid = parse_hex_16(&item.event_id)?;
+            let did = parse_hex_16(&item.device_id)?;
+            let payload = base64_decode(&item.payload)?;
+            if db.push_event(&eid, &vault_bytes, &did, item.lamport, &payload)? {
+                accepted += 1;
+            } else {
+                duplicates += 1;
+            }
+        }
+        let server_lamport = db.max_lamport(&vault_bytes)?;
+        Ok::<_, Error>(PushResponse {
+            accepted,
+            duplicates,
+            server_lamport,
+        })
+    })
+    .await
+    .map_err(|e| Error::Internal(e.to_string()))??;
+
+    Ok(Json(result))
+}

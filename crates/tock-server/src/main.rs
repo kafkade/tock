@@ -24,6 +24,8 @@
 //! - `GET /v1/vaults/:vault_id/events/pull` — pull events by cursor
 //! - `PUT /v1/vaults/:vault_id/onboarding/:device_id` — store pairing blob
 //! - `GET /v1/vaults/:vault_id/onboarding/:device_id` — retrieve pairing blob
+//! - `GET /v1/vaults/:vault_id/export` — export the vault's ciphertext (IDOR-safe)
+//! - `POST /v1/vaults/:vault_id/import` — restore a ciphertext archive
 //! - `POST /v1/accounts/register` — self-hosted account registration (SRP)
 //! - `GET|POST /v1/admin/users` — list users / mint invite (admin)
 //! - `DELETE /v1/admin/users/:id`, `POST …/disable`, `…/enable` — manage users
@@ -37,6 +39,9 @@
 //! - `tock-server admin create-admin --username <u>`
 //! - `tock-server admin list-users`
 //! - `tock-server admin reset-registration --policy <open|invite-only|disabled>`
+//! - `tock-server admin export [--all | --account <id>] [--out <dir>]` — write
+//!   per-user ciphertext archives (never decrypting)
+//! - `tock-server admin snapshot [--out <dir>]` — take a one-off retained snapshot
 //!
 //! ## Environment bootstrap
 //!
@@ -44,13 +49,16 @@
 //!   startup.
 //! - `TOCK_ADMIN_USERNAME=<u>` — on a fresh instance, mint an admin invite for
 //!   `<u>` and log the setup token (skipped once an admin exists).
+//! - `TOCK_SNAPSHOT_INTERVAL_SECS`, `TOCK_SNAPSHOT_DIR`, `TOCK_SNAPSHOT_KEEP` —
+//!   configure scheduled server-retained snapshots (issue #201). Set the
+//!   interval to `0` to disable.
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
-use tock_server::{AdminCommand, RegistrationPolicy, ServerMode};
+use tock_server::{AdminCommand, ExportScope, RegistrationPolicy, RetentionConfig, ServerMode};
 
 /// tock-server — encrypted blob store for tock sync (AGPL-3.0-only).
 #[derive(Parser, Debug)]
@@ -67,6 +75,25 @@ struct Args {
     /// Server mode: `self-hosted` (default) or `hosted`.
     #[arg(long, default_value = "self-hosted", env = "TOCK_MODE")]
     mode: String,
+
+    /// Interval in seconds between server-retained snapshots. `0` disables
+    /// scheduled snapshots. Snapshots are ciphertext-only, timestamped copies of
+    /// the whole database (issue #201). Defaults to daily.
+    #[arg(
+        long,
+        default_value_t = 86_400,
+        env = "TOCK_SNAPSHOT_INTERVAL_SECS",
+        global = true
+    )]
+    snapshot_interval_secs: u64,
+
+    /// Directory for server-retained snapshots (default: `<data_dir>/snapshots`).
+    #[arg(long, env = "TOCK_SNAPSHOT_DIR", global = true)]
+    snapshot_dir: Option<PathBuf>,
+
+    /// Number of most-recent retained snapshots to keep; older ones are pruned.
+    #[arg(long, default_value_t = 7, env = "TOCK_SNAPSHOT_KEEP", global = true)]
+    snapshot_keep: usize,
 
     /// Optional subcommand. With none, the server starts and serves requests.
     #[command(subcommand)]
@@ -101,6 +128,24 @@ enum AdminAction {
         #[arg(long)]
         policy: String,
     },
+    /// Export per-user ciphertext archives (never decrypting).
+    Export {
+        /// Export every vault on the instance.
+        #[arg(long, conflicts_with = "account")]
+        all: bool,
+        /// Export only the vaults owned by this account id.
+        #[arg(long, conflicts_with = "all")]
+        account: Option<String>,
+        /// Directory the archives are written to.
+        #[arg(long, default_value = "./export")]
+        out: PathBuf,
+    },
+    /// Take a one-off retained snapshot of the whole database now.
+    Snapshot {
+        /// Directory the snapshot is written to.
+        #[arg(long, default_value = "./snapshots")]
+        out: PathBuf,
+    },
 }
 
 fn run_admin_command(data_dir: &std::path::Path, action: AdminAction) -> ! {
@@ -116,6 +161,21 @@ fn run_admin_command(data_dir: &std::path::Path, action: AdminAction) -> ! {
             };
             AdminCommand::ResetRegistration { policy: parsed }
         }
+        AdminAction::Export { all, account, out } => {
+            let scope = match (all, account) {
+                (_, Some(account)) => ExportScope::Account(account),
+                (true, None) => ExportScope::All,
+                (false, None) => {
+                    eprintln!("error: specify --all or --account <id>");
+                    std::process::exit(1);
+                }
+            };
+            AdminCommand::Export {
+                scope,
+                out_dir: out,
+            }
+        }
+        AdminAction::Snapshot { out } => AdminCommand::Snapshot { out_dir: out },
     };
     match tock_server::run_admin(data_dir, cmd) {
         Ok(()) => std::process::exit(0),
@@ -171,6 +231,16 @@ fn main() {
         }
     };
 
+    let snapshot_dir = args
+        .snapshot_dir
+        .clone()
+        .unwrap_or_else(|| args.data_dir.join("snapshots"));
+    let retention = RetentionConfig::new(
+        args.snapshot_interval_secs,
+        snapshot_dir,
+        args.snapshot_keep,
+    );
+
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -180,6 +250,9 @@ fn main() {
         });
 
     rt.block_on(async {
+        // Scheduled server-retained snapshots (issue #201). Spawned here (not in
+        // `serve`) so integration tests never write snapshots.
+        tock_server::spawn_retention(&app_state, retention);
         let listener = match tokio::net::TcpListener::bind(args.bind).await {
             Ok(l) => l,
             Err(e) => {
