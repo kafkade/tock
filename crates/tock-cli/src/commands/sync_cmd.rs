@@ -132,6 +132,16 @@ pub fn run_sync(vault: &OpenVault, args: &SyncArgs) -> CmdResult {
 
     let server = resolve_server(vault, args.server.as_deref())?;
 
+    // (ADR-018 §3B step 3) A clone restore leaves a one-shot
+    // `pending_reconcile` flag. Honor it FIRST — before collecting or pushing
+    // anything — so a stale clone pulls + ingests remote history before it can
+    // push local diffs synthesized from the restored snapshot. `run_sync`
+    // otherwise pushes before it pulls, which would shove old state ahead of
+    // newer remote history under the clone's fresh identity.
+    if !args.dry_run && sync::pending_reconcile(vault)? {
+        reconcile_before_push(vault, &server)?;
+    }
+
     // Outbound events are genuine local-state deltas; recording them in
     // the log is correct regardless of whether we reach the server.
     let outbound = sync::collect_local_changes(vault)?;
@@ -198,6 +208,54 @@ struct SyncOutcome {
     pushed: usize,
     pulled: usize,
     conflicts: usize,
+}
+
+/// (ADR-018 §3B step 3) Reconcile remote history BEFORE any push.
+///
+/// Runs as its own authenticated round: register this (freshly minted) device,
+/// then pull + ingest every remote event from the current cursor, advancing it
+/// as we go. Only after that succeeds do we clear the one-shot
+/// `pending_reconcile` flag — so an interrupted reconcile re-runs next time
+/// rather than letting a stale clone push first.
+fn reconcile_before_push(vault: &OpenVault, server: &str) -> CmdResult {
+    let device = vault.local_device();
+    let device_id = DeviceId::from_bytes(device.device_id);
+    let vk = device.signing_key.verifying_key().to_bytes();
+    let label = sync::device_label(vault)?;
+    let vault_id = vault.header().vault_id;
+
+    let transport = authed_transport(server, vault_id)?;
+    let runtime = tokio_runtime()?;
+
+    let (pulled, conflicts) = runtime.block_on(async {
+        transport
+            .register_device(device_id, &vk, label.as_deref())
+            .await?;
+        let mut cursor = SyncCursor::at(sync::pull_cursor(vault)?);
+        let mut pulled = 0_usize;
+        let mut conflicts = 0_usize;
+        loop {
+            let batch = transport.pull(cursor, PULL_PAGE).await?;
+            if !batch.events.is_empty() {
+                let summary = sync::ingest_events(vault, &batch.events)?;
+                pulled += summary.applied;
+                conflicts += summary.conflicts;
+            }
+            cursor = batch.next_cursor;
+            sync::set_pull_cursor(vault, cursor.position)?;
+            if !batch.more {
+                break;
+            }
+        }
+        Ok::<_, Box<dyn std::error::Error>>((pulled, conflicts))
+    })?;
+
+    sync::clear_pending_reconcile(vault)?;
+    println!("Reconciled remote history before pushing: pulled {pulled}, conflicts {conflicts}.");
+    if conflicts > 0 {
+        println!("Review conflicts with `tock sync conflicts`.");
+    }
+    Ok(())
 }
 
 /// Push every event the server doesn't already have, returning the count
@@ -513,7 +571,10 @@ fn tokio_runtime() -> Result<tokio::runtime::Runtime, Box<dyn std::error::Error>
 /// Build an [`HttpTransport`], attaching SRP session credentials from the OS
 /// keyring when an account is signed in (issue #129). Pre-account device
 /// pairing still works against unauthenticated servers.
-fn authed_transport(
+///
+/// # Errors
+/// Fails if the underlying HTTP client cannot be constructed.
+pub fn authed_transport(
     server: &str,
     vault_id: uuid::Uuid,
 ) -> Result<HttpTransport, Box<dyn std::error::Error>> {

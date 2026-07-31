@@ -11,6 +11,120 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`tock account export` and `tock account import`** (#202): one-command
+  client-side round-trip through a sync server, closing the wrapper deferral
+  recorded in [ADR-019](docs/adr/ADR-019-server-retained-snapshots-and-pitr.md)
+  §6. `tock account export [--out FILE]` downloads your vault's ciphertext
+  archive (non-secret header + full event log) from the server it is bound to and
+  reminds you that decrypting it still needs your password and the Secret Key from
+  your Emergency Kit. `tock account import FILE` uploads an archive back,
+  reporting accepted/duplicate counts; it is idempotent, and it refuses an archive
+  belonging to a different vault so foreign events can never be injected into your
+  bucket. Import always targets the server the vault is **bound** to — there is no
+  `--server` override, because pointing an import at an arbitrary server would make
+  that server claim your vault and split your history across two of them; changing
+  servers stays `adopt --migrate`'s job. Both authenticate with the existing SRP
+  session (bearer + channel binding) and move ciphertext only — the client never
+  decodes an event payload. On import the vault's **current local header** is
+  uploaded rather than the archived one, so replaying an old archive after a
+  password rotation cannot strand your other devices.
+
+- **`tock account adopt --migrate` now warns when history is left behind**
+  (#202): a migration moves the vault's *binding*, but adoption's initial push
+  only carries changes the device had not yet synced — so a fully-synced vault
+  arrives at the new server with its header and an **empty event log**, and a new
+  device signing in there would see an empty vault. `--migrate` now prints a
+  `Binding moved:` summary saying so and pointing at the remaining
+  `tock account import` + `tock sync` steps.
+
+- **Server-migration & "download my data" guide** (#202): new
+  [docs/migration.md](docs/migration.md) walks the end-to-end move between servers
+  (`account export` → `adopt --migrate` → `account import` → `sync`), preserving
+  the client-minted crypto identity **A**/**V**. It documents *why* that ordering
+  is the one that works — `import` needs a live session on the destination server,
+  `export` must precede `--migrate` (which revokes the old server's credentials
+  first), and `adopt --migrate` alone pushes only pending local deltas, so a
+  fully-synced vault would otherwise arrive with an empty event log. It also
+  covers the authoritative-server invariant and how `--migrate` / `disconnect`
+  interact ([ADR-016](docs/adr/ADR-016-three-id-identity-and-adoption.md) §4), the
+  ciphertext-export + Emergency-Kit "download my data" path, the unencrypted
+  `tock export` escape hatch and its warning, and the no-lock-in argument behind
+  [ADR-007](docs/adr/ADR-007-monetization-open-core.md). The whole sequence is
+  proven end to end against two live servers in
+  `crates/tock-cli/tests/e2e_migration.rs`.
+
+- **Server ciphertext export + import (round-trip) and scheduled retained
+  snapshots** (#201): three **distinct** server-side data capabilities, all of
+  which move ciphertext only and never decrypt.
+  - *Export (portability).* `GET /v1/vaults/:vault_id/export` streams an
+    account's non-secret vault header plus its full event log as a portable
+    archive. An offline operator equivalent, `tock-server admin export
+    [--all | --account <id>]`, writes per-user ciphertext archives straight from
+    the database with no running server — complementing (not replacing) the
+    whole-volume `tar`.
+  - *Import (restore / round-trip).* `POST /v1/vaults/:vault_id/import` loads an
+    exported archive back into a vault, making export a real, reversible
+    round-trip and enabling cross-server migration (#202). It is idempotent
+    (duplicate event ids are ignored), claims a fresh unowned vault for the
+    caller, and refuses a vault owned by another account.
+  - *Server-retained snapshots (survive DB loss).* A background task periodically
+    writes a consistent, ciphertext-only `VACUUM INTO` copy of the whole database
+    to a retention directory and prunes to the newest *N* — so data survives even
+    if the live DB is lost before anyone downloads an export. Configurable via
+    `--snapshot-interval-secs` / `TOCK_SNAPSHOT_INTERVAL_SECS` (default daily,
+    `0` disables), `--snapshot-dir` / `TOCK_SNAPSHOT_DIR`, and `--snapshot-keep`
+    / `TOCK_SNAPSHOT_KEEP` (default 7); `tock-server admin snapshot` forces one
+    offline. Strict WAL point-in-time recovery is intentionally deferred. See
+    [docs/self-hosting.md](docs/self-hosting.md) and
+    [ADR-019](docs/adr/ADR-019-server-retained-snapshots-and-pitr.md).
+
+- **`tock backup create` and `tock backup restore`** (#200): create an
+  outer-encrypted, transactionally-consistent full snapshot of your vault and
+  restore it later — the first true backup path for Tock. `tock backup create
+  [--out FILE]` takes a `VACUUM INTO` snapshot, hashes it, and seals it with
+  AES-256-GCM under a domain-separated backup key derived from your Vault Key,
+  binding an authenticated manifest (format tag/version, account id, vault id,
+  event high-water mark, snapshot hash, salt, nonce) as the AEAD AAD. `tock
+  backup restore FILE --mode <disaster-recovery|clone>` re-derives the key from
+  your password and Secret Key, verifies the manifest, and swaps the database
+  in place. The mode is **explicit, never inferred**: `disaster-recovery` keeps
+  the original device identity, Lamport clock, sync cursor, and server binding
+  so you resume as the same writer; `clone` mints a fresh device identity,
+  resets the sync cursor, and clears the server binding so a second device
+  reconciles remote history before its first push. See
+  [ADR-018](docs/adr/ADR-018-backup-restore-format-and-modes.md).
+
+### Security
+
+- **Vault export is IDOR-safe** (#201): the new ciphertext export route
+  authorizes with the same **double check** as every sync route — the session's
+  bearer (`authorize_sync`) **and** vault ownership (`require_vault_access`),
+  plus the SRP channel-binding tag — evaluated *before* any read. Guarding an
+  export by "the vault's session" alone would be an insecure direct object
+  reference (R7): it would let account A pull account B's ciphertext. The import
+  route is guarded the same way, but by **claim-semantics** (`ensure_vault` +
+  `claim_vault_for_account`) rather than the issue's literal `require_vault_access`
+  wording — a deliberate choice so a restore/migration can import into a *fresh,
+  unowned* vault while still returning `403` for a vault owned by another account
+  (proven by the `import_authorization_is_idor_safe` test importing into an
+  already-owned vault). This matches the existing push/put_header/put_onboarding
+  ownership pattern; see
+  [ADR-019](docs/adr/ADR-019-server-retained-snapshots-and-pitr.md). The server
+  still never decrypts — export and import move ciphertext only.
+
+- **Backups are outer-encrypted; export is not a backup** (#200): because
+  materialized domain tables (task titles/notes, habit text, checklist item
+  titles) are plaintext at rest (see
+  [ADR-014](docs/adr/ADR-014-at-rest-encryption-app-layer-aead.md)), a naive file
+  copy would leak them. `tock backup` seals the whole snapshot under
+  `HKDF-SHA256(VK)` so the archive reveals nothing without your password **and**
+  Secret Key — an archive made without the Secret Key is undecryptable by
+  design. The authenticated manifest (bound as AEAD AAD, with the event
+  high-water mark and snapshot hash) rejects tampered, truncated, or
+  rolled-back archives, as well as cross-vault and cross-account restores.
+  Separately, `tock export json`/`md` now prints a loud stderr warning that its
+  output is **unencrypted portability data, not a backup**.
+
 - **`tock account adopt` and `tock account disconnect`** (#197): connect an
   existing local-only vault to a sync server — and disconnect it again —
   without ever re-creating or re-encrypting it. `tock account adopt --server

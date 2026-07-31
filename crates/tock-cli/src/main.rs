@@ -158,6 +158,9 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         Commands::Config(args) => {
             return run_config_cmd(&args.command, &cfg, cfg_path.as_deref());
         }
+        Commands::Backup(args) => {
+            return run_backup_cmd(cli, &args.cmd);
+        }
         _ => {}
     }
 
@@ -319,6 +322,9 @@ fn dispatch_command(
         Commands::Config(_) => unreachable!("config handled before vault open"),
         Commands::Sync(_) | Commands::Device(_) => {
             unreachable!("sync/device handled before connection borrow")
+        }
+        Commands::Backup(_) => {
+            unreachable!("backup handled before vault open")
         }
         Commands::Undo | Commands::Redo => {
             unreachable!("undo/redo handled before connection borrow")
@@ -721,6 +727,66 @@ fn run_onboard_cmd(
     }
 }
 
+/// Handle `tock backup` subcommands.
+///
+/// Runs before the normal open-or-init path in [`run`]: `create` opens the
+/// existing vault itself, while `restore`'s target vault may not exist yet
+/// (disaster recovery), so it must not trigger `first_run_init`.
+fn run_backup_cmd(
+    cli: &Cli,
+    cmd: &commands::backup::BackupCmd,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use commands::backup::BackupCmd;
+
+    match cmd {
+        BackupCmd::Create { out } => {
+            if !cli.vault.exists() {
+                return Err("vault does not exist; nothing to back up".into());
+            }
+            let secret_key = resolve_secret_key_for_open(cli)?;
+            let password = resolve_open_password(cli)?;
+            let vault = tock_storage::open(&cli.vault, &password, &secret_key)?;
+            commands::backup::run_create(&vault, out.as_deref())
+        }
+        BackupCmd::Restore { file, mode, force } => {
+            let (account_id, secret_key) = resolve_secret_key_with_account(cli)?;
+            let password = resolve_open_password(cli)?;
+            commands::backup::run_restore(
+                &cli.vault,
+                file,
+                &password,
+                &secret_key,
+                account_id,
+                (*mode).into(),
+                *force,
+            )
+        }
+    }
+}
+
+/// Resolve the Secret Key **and its account id** for a restore. Mirrors
+/// [`resolve_secret_key_for_open`] but keeps the account id, which restore
+/// needs to reject cross-account archives.
+fn resolve_secret_key_with_account(
+    cli: &Cli,
+) -> Result<([u8; 16], tock_crypto::SecretKey), Box<dyn std::error::Error>> {
+    if let Some(raw) = cli.secret_key.as_deref() {
+        return tock_crypto::SecretKey::parse(raw).map_err(|_| {
+            "invalid account Secret Key: check the Emergency-Kit string and try again".into()
+        });
+    }
+    if let Some(raw) = load_cached_secret_key()
+        && let Ok(parsed) = tock_crypto::SecretKey::parse(&raw)
+    {
+        return Ok(parsed);
+    }
+    Err(
+        "missing account Secret Key: pass --secret-key or set TOCK_SECRET_KEY \
+         (the `A4-…` string from your Emergency Kit)"
+            .into(),
+    )
+}
+
 /// Handle import formats that require `&mut Connection` (for transactions).
 /// Returns `true` if the import was handled, `false` if the format needs
 /// the normal (immutable) code path.
@@ -971,17 +1037,32 @@ fn run_export_cmd(
     filter: &[String],
 ) -> Result<(), Box<dyn std::error::Error>> {
     if format.eq_ignore_ascii_case("json") {
+        export_plaintext_warning();
         let json = tock_export::json::export_tasks(conn)?;
         match out {
             Some(path) => std::fs::write(path, &json)?,
             None => println!("{json}"),
         }
     } else if format.eq_ignore_ascii_case("md") || format.eq_ignore_ascii_case("markdown") {
+        export_plaintext_warning();
         run_export_md(conn, out, builtin, template_path, filter)?;
     } else {
         eprintln!("{}", tr!("export-unsupported-format", format = format));
     }
     Ok(())
+}
+
+/// (AC #5, ADR-018 §5) Loud, explicit stderr warning that `tock export`
+/// output is UNENCRYPTED portability data — not a backup. For an encrypted
+/// backup, users must run `tock backup create`.
+fn export_plaintext_warning() {
+    eprintln!(
+        "WARNING: `tock export` writes UNENCRYPTED plaintext for portability — \
+         it is NOT a backup.\n\
+         \x20        Anyone who reads the output sees your task titles, notes, and \
+         habit text.\n\
+         \x20        For an encrypted, restorable backup use: tock backup create"
+    );
 }
 
 /// Handle `tock export md` — render Markdown via Tera templates.
