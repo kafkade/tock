@@ -16,7 +16,7 @@
 //! [`reject`]: Error::ContributorySharedSecret
 
 use subtle::ConstantTimeEq;
-use x25519_dalek::{EphemeralSecret as XEphemeral, PublicKey as XPublic, StaticSecret as XStatic};
+use x25519_dalek::{PublicKey as XPublic, StaticSecret as XStatic};
 use zeroize::Zeroize;
 
 use crate::Error;
@@ -96,7 +96,7 @@ impl core::fmt::Debug for StaticSecret {
 
 /// Single-use X25519 secret. Consumed by [`EphemeralSecret::diffie_hellman`]
 /// so the same secret cannot be used in two agreements.
-pub struct EphemeralSecret(XEphemeral);
+pub struct EphemeralSecret(XStatic);
 
 impl EphemeralSecret {
     /// Generate a fresh `EphemeralSecret` from the OS RNG.
@@ -104,9 +104,16 @@ impl EphemeralSecret {
     /// # Errors
     /// Returns [`Error::Rng`] if the OS RNG fails.
     pub fn try_generate() -> Result<Self, Error> {
-        // x25519-dalek 2.x requires `RngCore + CryptoRng`. OsRng with
-        // the `getrandom` feature satisfies both.
-        Ok(Self(XEphemeral::random_from_rng(rand_core::OsRng)))
+        // x25519-dalek 3.x only builds its own `EphemeralSecret` from an
+        // infallible `rand_core::CryptoRng`, which would panic on OS RNG
+        // failure. We keep the fallible `fill_random` path instead and wrap
+        // the byte-constructible `StaticSecret`; single use is enforced by
+        // `diffie_hellman` consuming `self`, and the key is zeroized on drop.
+        let mut seed = [0_u8; 32];
+        fill_random(&mut seed)?;
+        let inner = XStatic::from(seed);
+        seed.zeroize();
+        Ok(Self(inner))
     }
 
     /// Derive the corresponding public key.
