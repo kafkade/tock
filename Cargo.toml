@@ -58,7 +58,7 @@ tock-server = { path = "crates/tock-server", version = "0.5.0" }
 # Crypto primitives (used by tock-crypto). All audited RustCrypto crates.
 # See docs/adr/ADR-002-end-to-end-encryption.md.
 aes-gcm = "0.11"
-argon2 = "0.5"
+argon2 = "0.6"
 hkdf = "0.13"
 sha2 = "0.11"
 x25519-dalek = { version = "3", default-features = false, features = ["static_secrets", "zeroize"] }
